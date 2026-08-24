@@ -1,0 +1,126 @@
+:root,
+.theme-dark {
+  --bg: #0a0e1a;
+  --bg-panel: #131722;
+  --bg-toolbar: linear-gradient(135deg, #0f1423 0%, #1a1f2e 50%, #131722 100%);
+  --bg-app: radial-gradient(1200px 600px at 20% -10%, rgba(41, 98, 255, 0.08), transparent 60%),
+    radial-gradient(900px 500px at 90% 0%, rgba(106, 92, 255, 0.06), transparent 60%),
+    linear-gradient(180deg, #0a0e1a 0%, #0e1116 100%);
+  --border: #232836;
+  --border-strong: #2a2e39;
+  --text: #e6e8ee;
+  --text-muted: #8b8fa3;
+  --accent: #2962ff;
+  --accent-hover: #1e4bd8;
+  --accent-gradient: linear-gradient(135deg, #2962ff 0%, #6a5cff 50%, #8b5cf6 100%);
+  --accent-gradient-hover: linear-gradient(135deg, #1e4bd8 0%, #5a4ae6 50%, #7c3aed 100%);
+  --live: #26a69a;
+  --offline: #ef5350;
+  --reconnecting: #ff9800;
+  --connecting: #868993;
+  --card-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  --toolbar-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 4px 20px rgba(0, 0, 0, 0.3);
+  --btn-bg: rgba(255, 255, 255, 0.06);
+  --btn-hover: rgba(255, 255, 255, 0.1);
+  --chart-bg: #131722;
+  --chart-grid: #1e222d;
+  --bg-watchlist: linear-gradient(180deg, #171e38 0%, #131a30 35%, #1b1836 70%, #12172b 100%);
+}
+
+.theme-light,
+[data-theme="light"] {
+  --bg: #f6f8fc;
+  --bg-panel: #ffffff;
+  --bg-toolbar: linear-gradient(135deg, #ffffff 0%, #f0f4ff 50%, #eef2ff 100%);
+  --bg-app: radial-gradient(1200px 600px at 20% -10%, rgba(41, 98, 255, 0.07), transparent 60%),
+    radial-gradient(900px 500px at 90% 0%, rgba(139, 92, 246, 0.05), transparent 60%),
+    linear-gradient(180deg, #f6f8fc 0%, #eef2ff 100%);
+  --border: #e2e8f0;
+  --border-strong: #d1d9e8;
+  --text: #0f172a;
+  --text-muted: #64748b;
+  --accent: #2962ff;
+  --accent-hover: #1e4bd8;
+  --accent-gradient: linear-gradient(135deg, #2962ff 0%, #6a5cff 50%, #8b5cf6 100%);
+  --accent-gradient-hover: linear-gradient(135deg, #1e4bd8 0%, #5a4ae6 50%, #7c3aed 100%);
+  --live: #0d9488;
+  --offline: #dc2626;
+  --reconnecting: #ea580c;
+  --connecting: #64748b;
+  --card-shadow: 0 8px 24px rgba(15, 23, 42, 0.06), 0 1px 0 rgba(255, 255, 255, 0.8) inset;
+  --toolbar-shadow: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 4px 20px rgba(15, 23, 42, 0.06);
+  --btn-bg: rgba(15, 23, 42, 0.06);
+  --btn-hover: rgba(15, 23, 42, 0.1);
+  --chart-bg: #ffffff;
+  --chart-grid: #f1f5f9;
+  --bg-watchlist: linear-gradient(180deg, #eef2ff 0%, #f7f8ff 35%, #fdf4fa 70%, #eef4ff 100%);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg-app);
+  background-attachment: fixed;
+  color: var(--text);
+  overflow: hidden;
+  transition:
+    background 600ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 500ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-app);
+  transition: background 600ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Smooth theme transition for all themed surfaces */
+.toolbar,
+.chart-pane,
+.tf-group,
+.dropdown-menu,
+.select,
+.fav-bar,
+.overlay {
+  transition:
+    background 500ms cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 500ms ease,
+    color 400ms ease,
+    border-color 400ms ease,
+    box-shadow 500ms ease;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Utility for gradient text */
+.gradient-text {
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}

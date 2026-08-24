@@ -1,0 +1,40 @@
+{
+  "name": "traderkomak",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TraderKomak — real-time OANDA forex charting foundation",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build:shared": "npm run build -w @traderkomak/shared",
+    "build:server": "npm run build -w @traderkomak/market-server",
+    "build:web": "npm run build -w @traderkomak/web",
+    "build": "npm run build:shared && npm run build:server && npm run build:web",
+    "dev:server": "npm run build:shared && npm run dev -w @traderkomak/market-server",
+    "dev:web": "npm run dev -w @traderkomak/web",
+    "start:server": "npm run start -w @traderkomak/market-server",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "typecheck": "npm run typecheck -w @traderkomak/shared && npm run typecheck -w @traderkomak/market-server && npm run typecheck -w @traderkomak/web"
+  },
+  "devDependencies": {
+    "@netlify/functions": "^3.1.8",
+    "@typescript-eslint/parser": "^8.44.1",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "eslint": "^9.37.0",
+    "eslint-plugin-vue": "^9.33.0",
+    "globals": "^15.15.0",
+    "typescript": "~5.8.3",
+    "typescript-eslint": "^8.44.1",
+    "vite": "^6.3.6",
+    "vitest": "^3.2.4",
+    "vue-eslint-parser": "^9.4.3"
+  }
+}

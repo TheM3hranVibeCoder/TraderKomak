@@ -1,0 +1,23 @@
+# Netlify deploys the Vue frontend. The repo root is the build base so that
+# npm workspaces install correctly and the shared package can be built first.
+[build]
+  command = "npm run build:shared && npm run build:web"
+  publish = "apps/web/dist"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# Short-lived HTTP proxy for historical candles (Netlify function).
+# NEVER host the OANDA pricing stream here — it is a persistent connection.
+[[redirects]]
+  from = "/api/candles"
+  to = "/.netlify/functions/candles"
+  status = 200
+  force = true
+
+# SPA fallback
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

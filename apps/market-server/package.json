@@ -1,0 +1,26 @@
+{
+  "name": "@traderkomak/market-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TraderKomak persistent market-data service: OANDA stream, candle aggregation, WebSocket hub",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.1.0",
+    "@fastify/websocket": "^11.1.0",
+    "@traderkomak/shared": "*",
+    "fastify": "^5.3.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/ws": "^8.18.0",
+    "tsx": "^4.19.4",
+    "typescript": "~5.8.3"
+  }
+}
