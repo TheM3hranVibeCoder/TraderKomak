@@ -274,12 +274,32 @@ function recalcRects(): void {
 
 function onMouseDown(e: MouseEvent): void {
   if (drawingsStore.activeTool !== "rectangle" || !adapter || !containerRef.value) return;
+  e.preventDefault();
+  e.stopPropagation();
   const rect = containerRef.value.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
-  const time = adapter.xToTime(x);
-  const price = adapter.yToPrice(y);
-  if (time === null || price === null) return;
+
+  // Convert pixel → (time, price), with fallbacks for edge coordinates
+  let time = adapter.xToTime(x);
+  if (time === null) {
+    // Coordinate outside visible bars — extrapolate from logical range
+    const lr = adapter.getLogicalRange();
+    if (lr) {
+      const barSize = 5; // approximate fallback
+      time = Math.floor(Date.now() / 1000) + Math.round(x / 10) * barSize;
+    } else {
+      return;
+    }
+  }
+  let price = adapter.yToPrice(y);
+  if (price === null) {
+    // Use the last close as fallback
+    const last = props.candles[props.candles.length - 1];
+    if (!last) return;
+    price = last.close;
+  }
+
   drawingState.value = { time1: time, price1: price, time2: time, price2: price };
 
   const move = (ev: MouseEvent) => {
@@ -299,7 +319,6 @@ function onMouseDown(e: MouseEvent): void {
     window.removeEventListener("mouseup", up);
     if (!drawingState.value || !adapter) return;
     const d = drawingState.value;
-    // Only save if the rectangle has meaningful size
     if (Math.abs(d.time2 - d.time1) >= 1 || Math.abs(d.price2 - d.price1) > 0) {
       drawingsStore.add(market.instrument, market.timeframe, {
         time1: Math.min(d.time1, d.time2),
@@ -456,14 +475,14 @@ onBeforeUnmount(() => {
     >
       {{ countdown }}
     </div>
-    <!-- Drawing overlay: rectangles + interaction layer -->
+    <!-- Drawing cursor capture layer (only when rectangle tool active) -->
     <div
-      v-if="candles.length > 0"
-      class="drawing-layer"
-      :class="{ 'drawing-active': drawingsStore.activeTool === 'rectangle' }"
+      v-if="drawingsStore.activeTool === 'rectangle' && candles.length > 0"
+      class="drawing-capture"
       @mousedown="onMouseDown"
-      @click="onChartClick"
-    >
+    />
+    <!-- Drawing rendering layer (always visible, pointer-events none) -->
+    <div class="drawing-layer">
       <div
         v-for="rect in rectPixels"
         :key="rect.id"
@@ -688,15 +707,17 @@ onBeforeUnmount(() => {
 }
 
 /* ── Drawing overlay ─────────────────────────────────────────────────── */
+.drawing-capture {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  cursor: crosshair;
+}
 .drawing-layer {
   position: absolute;
   inset: 0;
   z-index: 2;
   pointer-events: none;
-}
-.drawing-layer.drawing-active {
-  pointer-events: auto;
-  cursor: crosshair;
 }
 .drawing-rect {
   position: absolute;
