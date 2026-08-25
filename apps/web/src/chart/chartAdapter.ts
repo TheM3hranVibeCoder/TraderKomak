@@ -172,7 +172,10 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
           to: prevRange.to + delta,
         });
       } else {
-        // Fresh mount / symbol switch: show recent bars with right margin.
+        // Fresh mount / symbol / timeframe switch: reset price auto-scale
+        // (vertical drags disable it and would freeze the OLD symbol's
+        // price range) and show recent bars with right margin.
+        chart.priceScale("right").applyOptions({ autoScale: true });
         const visible = Math.min(150, lastData.length);
         chart.timeScale().setVisibleLogicalRange({
           from: lastData.length - visible,
@@ -221,6 +224,8 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       series.applyOptions({
         priceFormat: { type: "price", precision: prec, minMove },
       });
+      // New symbol → always re-fit the price axis to ITS range
+      chart.priceScale("right").applyOptions({ autoScale: true });
     },
     getLogicalRange(): { from: number; to: number } | null {
       return chart.timeScale().getVisibleLogicalRange() as { from: number; to: number } | null;
