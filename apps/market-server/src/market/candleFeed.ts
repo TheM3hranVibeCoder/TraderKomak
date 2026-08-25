@@ -68,6 +68,9 @@ interface Session {
   pendingTicks: MarketTick[];
   primingSettled: boolean;
   persistent: boolean;
+  /** Fires at each bucket boundary so candles roll over on time —
+   *  even when the tick stream is silent. */
+  rollover: NodeJS.Timeout | null;
 }
 
 export class CandleFeed extends EventEmitter {
@@ -99,6 +102,7 @@ export class CandleFeed extends EventEmitter {
     if (!session) return;
     session.subscribers--;
     if (session.subscribers <= 0 && !session.persistent) {
+      if (session.rollover) clearTimeout(session.rollover);
       this.sessions.delete(key);
       this.log.info({ instrument, timeframe }, "aggregation session released");
     }
@@ -171,7 +175,12 @@ export class CandleFeed extends EventEmitter {
       pendingTicks: [],
       primingSettled: false,
       persistent: false,
+      rollover: null,
     };
+
+    // Roll candles over exactly at each bucket boundary — independent of
+    // tick arrival — so the live chart never shows a delayed/missing bar.
+    this.scheduleRollover(session);
 
     if (NATIVE_HISTORY_GRANULARITY[timeframe] !== null && this.rest) {
       void this.prime(session).catch((err: unknown) => {
@@ -396,6 +405,59 @@ export class CandleFeed extends EventEmitter {
   private markPersistent(key: string): void {
     const session = this.sessions.get(key);
     if (session) session.persistent = true;
+  }
+
+  /**
+   * Schedules the next bucket-boundary rollover (+50ms epsilon so the
+   * boundary has definitively passed). Re-arms itself forever while the
+   * session lives; cleared on session release.
+   */
+  private scheduleRollover(session: Session): void {
+    if (session.rollover) clearTimeout(session.rollover);
+    const tfMs = TIMEFRAME_SECONDS[session.timeframe] * 1000;
+    const now = Date.now();
+    const nextBoundary = Math.floor(now / tfMs) * tfMs + tfMs;
+    const timer = setTimeout(
+      () => this.onRollover(session),
+      Math.max(50, nextBoundary - now + 50)
+    );
+    timer.unref?.();
+    session.rollover = timer;
+  }
+
+  /**
+   * Boundary crossed. If ticks already rolled the aggregator forward we have
+   * nothing to do; otherwise the stream was silent — force-close the previous
+   * candle and open a flat continuation candle seeded with its close so the
+   * live chart stays gapless. Reconciliation corrects values right after.
+   */
+  private onRollover(session: Session): void {
+    try {
+      const tfSec = TIMEFRAME_SECONDS[session.timeframe];
+      const bucketSec = Math.floor(Date.now() / (tfSec * 1000)) * tfSec;
+      const active = session.aggregator.active;
+
+      if (active && active.time < bucketSec) {
+        // Previous bucket never got a boundary-crossing tick → close it now
+        this.emitCandle(session, active, true);
+        this.pushBuffer(session, active);
+
+        // Open the new bucket as a flat continuation of the previous close
+        const seed: Candle = {
+          time: bucketSec,
+          open: active.close,
+          high: active.close,
+          low: active.close,
+          close: active.close,
+        };
+        session.aggregator.seed(seed);
+        this.pushBuffer(session, seed);
+        this.emitCandle(session, seed, false);
+      }
+    } catch {
+      /* never let the rollover chain die */
+    }
+    this.scheduleRollover(session);
   }
 }
 
