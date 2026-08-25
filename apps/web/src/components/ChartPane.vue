@@ -120,6 +120,8 @@ let visibleCb: ((range: { from: number; to: number } | null) => void) | null = n
 let lazyThrottled = false;
 let interactionEl: HTMLElement | null = null;
 let interactCb: (() => void) | null = null;
+let contextmenuEl: HTMLElement | null = null;
+let contextmenuCb: ((e: MouseEvent) => void) | null = null;
 const countdown = ref("");
 const marketClosed = ref(false);
 
@@ -403,13 +405,30 @@ onMounted(async () => {
   // Vertical drags & pinch-zoom change the PRICE scale without firing the
   // time-range callback — track pointer/wheel directly for instant reposition.
   const el = containerRef.value;
-  const onInteract = () => updateBadgePosition();
+  const onInteract = () => {
+    updateBadgePosition();
+    recalcRects();
+  };
   el.addEventListener("pointermove", onInteract, { passive: true });
   el.addEventListener("pointerdown", onInteract, { passive: true });
   el.addEventListener("wheel", onInteract, { passive: true });
   el.addEventListener("touchmove", onInteract, { passive: true });
+
+  // Right-click deselects any selected rectangle
+  const onContextMenu = (e: MouseEvent) => {
+    e.preventDefault();
+    if (drawingsStore.selectedId) {
+      drawingsStore.selectedId = null;
+      selectedRect.value = null;
+      editPanelPos.value = null;
+      recalcRects();
+    }
+  };
+  el.addEventListener("contextmenu", onContextMenu);
   interactionEl = el;
   interactCb = onInteract;
+  contextmenuEl = el;
+  contextmenuCb = onContextMenu;
 
   // Countdown text + position tick (position also updates on pan/zoom above)
   updateCountdown();
@@ -431,6 +450,9 @@ onBeforeUnmount(() => {
     interactionEl.removeEventListener("pointerdown", interactCb);
     interactionEl.removeEventListener("wheel", interactCb);
     interactionEl.removeEventListener("touchmove", interactCb);
+  }
+  if (contextmenuEl && contextmenuCb) {
+    contextmenuEl.removeEventListener("contextmenu", contextmenuCb);
   }
   ro?.disconnect();
   adapter?.destroy();
