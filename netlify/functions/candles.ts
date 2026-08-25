@@ -15,20 +15,32 @@
 import type { Handler } from "@netlify/functions";
 
 const ALLOWED_INSTRUMENTS = new Set([
-  "EUR_USD",
-  "GBP_USD",
-  "USD_JPY",
-  "USD_CHF",
-  "AUD_USD",
-  "USD_CAD",
-  "NZD_USD",
-  "EUR_GBP",
+  // OANDA
+  "EUR_USD", "GBP_USD", "USD_JPY", "USD_CHF", "AUD_USD", "USD_CAD",
+  "NZD_USD", "EUR_GBP", "XAU_USD", "XAG_USD", "GBP_JPY", "EUR_JPY",
+  "AUD_JPY", "BCO_USD", "SPX500_USD", "NAS100_USD", "BTC_USD", "ETH_USD",
+  // Binance (canonical = concatenated)
+  "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT",
 ]);
 
 const ALLOWED_TIMEFRAMES = new Set(["1s", "5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "1d"]);
 
+const BINANCE_SET = new Set(["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT"]);
+
+/**
+ * Mirrors packages/shared normalizeInstrument: Binance symbols stay
+ * concatenated (btcusdt / BTC_USDT → BTCUSDT); others use OANDA form.
+ */
 function normalizeInstrument(raw: string): string {
-  return raw.trim().toUpperCase().replace(/[/\-.]/g, "_");
+  const s = raw.trim().toUpperCase().replace(/[/\-.]/g, "_").replace(/\s+/g, "");
+  if (BINANCE_SET.has(s)) return s;
+  if (s.includes("_")) {
+    const flat = s.replace(/_/g, "");
+    if (BINANCE_SET.has(flat)) return flat;
+    return s;
+  }
+  if (s.length === 6) return `${s.slice(0, 3)}_${s.slice(3)}`;
+  return s;
 }
 
 export const handler: Handler = async (event) => {
