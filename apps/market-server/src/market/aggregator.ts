@@ -102,6 +102,36 @@ export class CandleAggregator {
 }
 
 /**
+ * Chains one candle to the previous close: open := prevClose, with
+ * high/low clamped so they still contain the open. high/low/close keep
+ * their real values — this is a display-continuity normalization that
+ * mirrors how broker platform charts render (no visual seams between
+ * consecutive candles).
+ */
+export function chainFrom(prevClose: number, candle: Candle): Candle {
+  const open = prevClose;
+  return {
+    ...candle,
+    open,
+    high: Math.max(candle.high, open),
+    low: Math.min(candle.low, open),
+  };
+}
+
+/**
+ * Chains a whole series so every open equals the previous close.
+ * Pure — returns new objects, input untouched.
+ */
+export function chainContinuity(candles: Candle[]): Candle[] {
+  if (candles.length === 0) return candles;
+  const out: Candle[] = [{ ...candles[0]! }];
+  for (let i = 1; i < candles.length; i++) {
+    out.push(chainFrom(out[i - 1]!.close, candles[i]!));
+  }
+  return out;
+}
+
+/**
  * Forward-fills small gaps in a candle series with flat carry-forward
  * candles (o=h=l=c=prev.close) — mirrors how broker platform charts render
  * buckets where the tick feed was momentarily empty. Gaps larger than

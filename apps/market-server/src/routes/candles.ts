@@ -22,7 +22,7 @@ import {
   nativeCandlesNeeded,
   type Timeframe,
 } from "@traderkomak/shared";
-import { aggregateCandles, fillGaps } from "../market/aggregator.js";
+import { aggregateCandles, chainContinuity, fillGaps } from "../market/aggregator.js";
 import type { CandleFeed, HistorySource } from "../market/candleFeed.js";
 import type { OandaRestError, RestErrorCode } from "../oanda/restClient.js";
 
@@ -137,6 +137,10 @@ async function resolveHistory(
   // carries the price forward instead. Do the same for small gaps so
   // history matches the chart users compare against.
   candles = fillGaps(candles, seconds);
+
+  // Display-continuity: open[n] := close[n-1] so consecutive candles touch
+  // (high/low/close remain the real market values).
+  candles = chainContinuity(candles);
 
   return candles.slice(-count);
 }

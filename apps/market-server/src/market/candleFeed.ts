@@ -24,7 +24,7 @@ import {
   type MarketTick,
   type Timeframe,
 } from "@traderkomak/shared";
-import { CandleAggregator, aggregateCandles, fillGaps } from "./aggregator.js";
+import { CandleAggregator, aggregateCandles, chainFrom, fillGaps } from "./aggregator.js";
 import type { Log } from "../logger.js";
 
 /**
@@ -291,20 +291,43 @@ export class CandleFeed extends EventEmitter {
     const result = session.aggregator.apply(tick);
     if (!result) return;
 
+    // Display-continuity: each candle opens at the previous close so the
+    // live chart has no seams (high/low/close stay the real tick values).
     if (result.closed) {
       // After a very long gap the "closed" candle predates the silence —
       // don't emit/persist it; the fresh bucket is what matters.
       const tfSec = TIMEFRAME_SECONDS[session.timeframe];
       const tickBucket = Math.floor(tick.timestamp / (tfSec * 1000));
       const stale = tickBucket - result.closed.time > 60;
-      if (!stale) {
-        this.pushBuffer(session, result.closed);
-        this.emitCandle(session, result.closed, true);
-        // Replace our stream-subset version with OANDA's authoritative candle
-        // for that bucket (and backfill any skipped buckets) so closed bars
-        // always match the history feed — no close/open seams or gaps.
-        this.reconcileClosed(session, result.closed);
+
+      if (stale) {
+        // Buffer was purged — start the new bucket fresh from this tick
+        this.pushBuffer(session, result.candle);
+        this.emitCandle(session, result.candle, false);
+        return;
       }
+
+      const closedC = chainFrom(
+        session.buffer.at(-1)?.close ?? result.closed.open,
+        result.closed
+      );
+      this.pushBuffer(session, closedC);
+      this.emitCandle(session, closedC, true);
+      // Replace our stream-subset version with OANDA's authoritative candle
+      // for that bucket (and backfill any skipped buckets) so closed bars
+      // always match the history feed — no close/open seams or gaps.
+      this.reconcileClosed(session, closedC);
+
+      const activeC = chainFrom(closedC.close, result.candle);
+      this.pushBuffer(session, activeC);
+      this.emitCandle(session, activeC, false);
+      return;
+    }
+    // Same-bucket tick update: preserve the chained open (aggregator's raw
+    // open would revert it), clamping high/low to contain it.
+    const last = session.buffer.at(-1);
+    if (last && last.time === result.candle.time && last.open !== result.candle.open) {
+      result.candle = chainFrom(last.open, result.candle);
     }
     this.pushBuffer(session, result.candle);
     this.emitCandle(session, result.candle, false);
@@ -361,20 +384,25 @@ export class CandleFeed extends EventEmitter {
         }
 
         // OANDA sometimes has NO candle for the bucket (zero ticks even in
-        // their full feed). Their platform chart carries the previous close
-        // forward — do the same when the bucket is contiguous with ours.
+        // their full feed). Carry the previous close forward — same as the
+        // platform chart — when the bucket directly follows ours.
         const bufPre = session.buffer;
-        const prevBuf = bufPre.length >= 2 ? bufPre[bufPre.length - 2] : bufPre.at(-1);
-        if ((!auth || auth.time !== closed.time) && prevBuf) {
-          const contiguous =
-            closed.time - prevBuf.time === tfSec || prevBuf.time === closed.time;
-          if (contiguous && Number.isFinite(prevBuf.close)) {
+        let prevBefore = bufPre.length ? bufPre[bufPre.length - 1]! : undefined;
+        for (let i = bufPre.length - 1; i >= 0; i--) {
+          if (bufPre[i]!.time < closed.time) {
+            prevBefore = bufPre[i]!;
+            break;
+          }
+        }
+        if ((!auth || auth.time !== closed.time) && prevBefore) {
+          const contiguous = closed.time - prevBefore.time === tfSec;
+          if (contiguous && Number.isFinite(prevBefore.close)) {
             auth = {
               time: closed.time,
-              open: prevBuf.close,
-              high: prevBuf.close,
-              low: prevBuf.close,
-              close: prevBuf.close,
+              open: prevBefore.close,
+              high: prevBefore.close,
+              low: prevBefore.close,
+              close: prevBefore.close,
             };
           }
         }
@@ -386,8 +414,8 @@ export class CandleFeed extends EventEmitter {
         await this.backfillGap(session, auth);
 
         const buf = session.buffer;
-        // The closed candle sits BEFORE the new active candle — find it by
-        // bucket time rather than assuming position.
+        // Locate the closed candle by bucket time (backfills may have
+        // shifted positions).
         let idx = -1;
         for (let i = buf.length - 1; i >= 0; i--) {
           if (buf[i]!.time === auth.time) {
@@ -396,17 +424,36 @@ export class CandleFeed extends EventEmitter {
           }
         }
         if (idx === -1) return;
+
+        // Chain the authoritative candle to whatever precedes it
+        const prevClose = idx > 0 ? buf[idx - 1]!.close : auth.open;
+        const chained = chainFrom(prevClose, auth);
+
         const existing = buf[idx]!;
         if (
-          existing.open === auth.open &&
-          existing.high === auth.high &&
-          existing.low === auth.low &&
-          existing.close === auth.close
+          existing.open === chained.open &&
+          existing.high === chained.high &&
+          existing.low === chained.low &&
+          existing.close === chained.close
         ) {
           return; // already identical — nothing to correct
         }
-        buf[idx] = { ...auth };
-        this.emitCandle(session, auth, true);
+        buf[idx] = chained;
+        this.emitCandle(session, chained, true);
+
+        // Keep the live candle glued to the corrected close
+        const next = buf[idx + 1];
+        if (next && next.time > chained.time) {
+          const nextChained = chainFrom(chained.close, next);
+          if (
+            nextChained.open !== next.open ||
+            nextChained.high !== next.high ||
+            nextChained.low !== next.low
+          ) {
+            buf[idx + 1] = nextChained;
+            this.emitCandle(session, nextChained, false);
+          }
+        }
       } catch (err) {
         // Provider pushed back on volume — cool down so the next attempts
         // (and user history requests) succeed instead of compounding.
@@ -426,13 +473,29 @@ export class CandleFeed extends EventEmitter {
   }
 
   /** Fills skipped buckets between the previous closed bar and `justClosed`. */
+  /**
+   * Fills skipped buckets between the last candle strictly before
+   * `justClosed` and `justClosed` itself. Inserts are chained
+   * (open = previous close) so they render seamlessly.
+   */
   private async backfillGap(session: Session, justClosed: Candle): Promise<void> {
     const rest = this.rest;
     if (!rest) return;
     const buf = session.buffer;
-    if (buf.length < 2) return;
     const tfSec = TIMEFRAME_SECONDS[session.timeframe];
-    const prev = buf[buf.length - 2]!;
+
+    // Last candle strictly BEFORE the closed bucket (the closed candle
+    // itself is already in the buffer — buf[len-2] would be it).
+    let pIdx = -1;
+    for (let i = buf.length - 1; i >= 0; i--) {
+      if (buf[i]!.time < justClosed.time) {
+        pIdx = i;
+        break;
+      }
+    }
+    if (pIdx < 0) return;
+    const prev = buf[pIdx]!;
+
     const missing = Math.floor((justClosed.time - prev.time) / tfSec) - 1;
     if (missing <= 0) return; // contiguous
     if (missing > 200) return; // downtime storm — skip, history covers it
@@ -456,8 +519,16 @@ export class CandleFeed extends EventEmitter {
     const inserts = fill.filter((c) => c.time > prev.time && c.time < justClosed.time);
     if (inserts.length === 0) return;
 
-    buf.splice(buf.length - 1, 0, ...inserts.map((c) => ({ ...c })));
-    for (const c of inserts) {
+    // Chain the inserts from the previous close so no seams
+    let lastClose = prev.close;
+    const chained = inserts.map((c) => {
+      const cc = chainFrom(lastClose, c);
+      lastClose = cc.close;
+      return cc;
+    });
+
+    buf.splice(pIdx + 1, 0, ...chained);
+    for (const c of chained) {
       this.emitCandle(session, c, true);
     }
   }
