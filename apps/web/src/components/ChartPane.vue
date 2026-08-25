@@ -75,7 +75,24 @@ watch(
       return;
     }
     if (prevLast.time === nextLast.time) {
-      adapter.updateCandle(nextLast);
+      // Reconciliation can correct the JUST-CLOSED bar (position len-2).
+      // series.update() only touches the last bar, so an older-bar change
+      // must go through setData (which preserves the viewport).
+      const pp = prev[prev.length - 2];
+      const np = next[next.length - 2];
+      const olderChanged =
+        pp &&
+        np &&
+        (np.time !== pp.time ||
+          np.open !== pp.open ||
+          np.high !== pp.high ||
+          np.low !== pp.low ||
+          np.close !== pp.close);
+      if (olderChanged) {
+        adapter.setData(next);
+      } else {
+        adapter.updateCandle(nextLast);
+      }
     } else {
       adapter.setData(next);
     }

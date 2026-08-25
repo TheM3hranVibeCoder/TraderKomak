@@ -312,7 +312,9 @@ export class CandleFeed extends EventEmitter {
 
         if (!auth || auth.time !== closed.time) return;
 
-        this.backfillGap(session, auth);
+        // Fill skipped buckets FIRST so clients receive fills → corrected
+        // close in natural order.
+        await this.backfillGap(session, auth);
 
         const buf = session.buffer;
         // The closed candle sits BEFORE the new active candle — find it by
