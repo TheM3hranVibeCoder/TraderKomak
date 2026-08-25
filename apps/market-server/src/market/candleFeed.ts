@@ -58,6 +58,15 @@ const PRIME_COUNT = 2;
 /** Safety cap for ticks queued while a session is still priming. */
 const MAX_PENDING_TICKS = 10_000;
 
+/**
+ * How long a tick silence is treated as a "lull" vs a market closure.
+ * Within this window we keep synthesizing flat continuation candles
+ * (the practice pricing stream is much thinner than the tick database
+ * OANDA builds candles from — lulls of 10–60s are normal). Beyond it
+ * (weekends, outages) synthesis stops so we never spam dead-market bars.
+ */
+const SYNTH_WINDOW_MS = 5 * 60_000;
+
 interface Session {
   instrument: string;
   timeframe: Timeframe;
@@ -158,10 +167,10 @@ export class CandleFeed extends EventEmitter {
       const tfSec = TIMEFRAME_SECONDS[session.timeframe];
       const silentMs = session.lastTickAt > 0 ? tick.timestamp - session.lastTickAt : 0;
 
-      // Long silence (market close / stream outage): the buffer may hold
-      // synthetic flat candles from that period — drop them so history and
-      // snapshots stay authoritative.
-      if (silentMs > tfSec * 1000 * 30) {
+      // Silence beyond the synthesis window = market closed / outage.
+      // The buffer may hold synthetic candles from before — drop them so
+      // history and snapshots stay authoritative.
+      if (silentMs > SYNTH_WINDOW_MS) {
         if (session.buffer.length > 0) {
           this.log.info(
             { instrument: session.instrument, timeframe: session.timeframe, silentMs },
@@ -282,11 +291,11 @@ export class CandleFeed extends EventEmitter {
     if (!result) return;
 
     if (result.closed) {
-      // After a long gap the "closed" candle is stale (from before the
-      // silence) — don't emit/persist it; the fresh bucket is what matters.
+      // After a very long gap the "closed" candle predates the silence —
+      // don't emit/persist it; the fresh bucket is what matters.
       const tfSec = TIMEFRAME_SECONDS[session.timeframe];
       const tickBucket = Math.floor(tick.timestamp / (tfSec * 1000));
-      const stale = tickBucket - result.closed.time > 5;
+      const stale = tickBucket - result.closed.time > 60;
       if (!stale) {
         this.pushBuffer(session, result.closed);
         this.emitCandle(session, result.closed, true);
@@ -467,11 +476,10 @@ export class CandleFeed extends EventEmitter {
       const bucketSec = Math.floor(Date.now() / (tfSec * 1000)) * tfSec;
       const active = session.aggregator.active;
 
-      // Only synthesize while the stream is actually alive. A silent stream
-      // (closed market / outage) must NOT spawn flat candles — that's how
-      // weekend pollution happened. Real ticks resume the chain naturally.
+      // Only synthesize within the lull window. Beyond it (weekend /
+      // outage) we stay silent — real ticks resume the chain naturally.
       const silentMs = session.lastTickAt > 0 ? Date.now() - session.lastTickAt : Infinity;
-      if (silentMs > tfSec * 1000 * 2) {
+      if (silentMs > SYNTH_WINDOW_MS) {
         return; // gated — just re-arm
       }
 
