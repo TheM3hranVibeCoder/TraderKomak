@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount, nextTick } from "vue";
+import { ref, watch, onMounted, onBeforeUnmount, nextTick, computed } from "vue";
 import { createChartAdapter, type ChartAdapter } from "@/chart/chartAdapter";
 import { useThemeStore } from "@/stores/theme";
 import { useMarketStore } from "@/stores/market";
+import { useDrawingsStore, type DrawingRect } from "@/stores/drawings";
 import type { Candle } from "@traderkomak/shared";
 import { currencyFlagUrl, commodityIcon } from "@/utils/flags";
 import { TIMEFRAME_SECONDS, instrumentPrecision, providerOf } from "@traderkomak/shared";
@@ -15,6 +16,7 @@ const props = defineProps<{
 }>();
 
 const market = useMarketStore();
+const drawingsStore = useDrawingsStore();
 
 const themeStore = useThemeStore();
 const containerRef = ref<HTMLElement | null>(null);
@@ -201,12 +203,160 @@ function updateCountdown() {
   }
 }
 
-watch(
-  () => market.timeframe,
-  () => {
-    updateCountdown();
+/* ── Rectangle drawing ─────────────────────────────────────────────── */
+
+interface RectPixel {
+  id: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  color: string;
+  opacity: number;
+  selected: boolean;
+}
+
+const rectPixels = ref<RectPixel[]>([]);
+const drawingState = ref<{ time1: number; price1: number; time2: number; price2: number } | null>(null);
+const drawingPreview = ref<RectPixel | null>(null);
+const selectedRect = ref<DrawingRect | null>(null);
+const editPanelPos = ref<{ x: number; y: number } | null>(null);
+const renderTick = ref(0);
+
+function recalcRects(): void {
+  if (!adapter) {
+    rectPixels.value = [];
+    return;
   }
-);
+  const rects = drawingsStore.getFor(market.instrument, market.timeframe);
+  const out: RectPixel[] = [];
+
+  for (const rect of rects) {
+    const x1 = adapter.timeToX(rect.time1);
+    const y1 = adapter.getPriceY(rect.price1);
+    const x2 = adapter.timeToX(rect.time2);
+    const y2 = adapter.getPriceY(rect.price2);
+    if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+    out.push({
+      id: rect.id,
+      left: Math.min(x1, x2),
+      top: Math.min(y1, y2),
+      width: Math.abs(x2 - x1),
+      height: Math.abs(y2 - y1),
+      color: rect.color,
+      opacity: rect.opacity,
+      selected: drawingsStore.selectedId === rect.id,
+    });
+  }
+
+  // Drawing preview
+  if (drawingState.value && adapter) {
+    const x1 = adapter.timeToX(drawingState.value.time1);
+    const y1 = adapter.getPriceY(drawingState.value.price1);
+    const x2 = adapter.timeToX(drawingState.value.time2);
+    const y2 = adapter.getPriceY(drawingState.value.price2);
+    if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
+      out.push({
+        id: "__preview",
+        left: Math.min(x1, x2),
+        top: Math.min(y1, y2),
+        width: Math.abs(x2 - x1),
+        height: Math.abs(y2 - y1),
+        color: "#2962ff",
+        opacity: 0.15,
+        selected: false,
+      });
+    }
+  }
+
+  rectPixels.value = out;
+}
+
+function onMouseDown(e: MouseEvent): void {
+  if (drawingsStore.activeTool !== "rectangle" || !adapter || !containerRef.value) return;
+  const rect = containerRef.value.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const time = adapter.xToTime(x);
+  const price = adapter.yToPrice(y);
+  if (time === null || price === null) return;
+  drawingState.value = { time1: time, price1: price, time2: time, price2: price };
+
+  const move = (ev: MouseEvent) => {
+    if (!drawingState.value || !adapter || !containerRef.value) return;
+    const r = containerRef.value.getBoundingClientRect();
+    const mx = ev.clientX - r.left;
+    const my = ev.clientY - r.top;
+    const t = adapter.xToTime(mx);
+    const p = adapter.yToPrice(my);
+    if (t !== null) drawingState.value.time2 = t;
+    if (p !== null) drawingState.value.price2 = p;
+    recalcRects();
+  };
+
+  const up = () => {
+    window.removeEventListener("mousemove", move);
+    window.removeEventListener("mouseup", up);
+    if (!drawingState.value || !adapter) return;
+    const d = drawingState.value;
+    // Only save if the rectangle has meaningful size
+    if (Math.abs(d.time2 - d.time1) >= 1 || Math.abs(d.price2 - d.price1) > 0) {
+      drawingsStore.add(market.instrument, market.timeframe, {
+        time1: Math.min(d.time1, d.time2),
+        price1: Math.min(d.price1, d.price2),
+        time2: Math.max(d.time1, d.time2),
+        price2: Math.max(d.price1, d.price2),
+      });
+    }
+    drawingState.value = null;
+    recalcRects();
+  };
+
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+}
+
+function onRectClick(id: string, e: MouseEvent): void {
+  if (drawingsStore.activeTool !== "cursor") return;
+  e.stopPropagation();
+  drawingsStore.selectedId = id;
+  selectedRect.value = drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === id) ?? null;
+  const pixel = rectPixels.value.find((r) => r.id === id);
+  if (pixel && containerRef.value) {
+    editPanelPos.value = {
+      x: pixel.left + pixel.width + 8,
+      y: pixel.top,
+    };
+  }
+  recalcRects();
+}
+
+function onChartClick(): void {
+  if (drawingsStore.activeTool === "cursor" && drawingsStore.selectedId) {
+    drawingsStore.selectedId = null;
+    selectedRect.value = null;
+    editPanelPos.value = null;
+    recalcRects();
+  }
+}
+
+function deleteSelected(): void {
+  if (!selectedRect.value) return;
+  drawingsStore.remove(market.instrument, market.timeframe, selectedRect.value.id);
+  selectedRect.value = null;
+  editPanelPos.value = null;
+  recalcRects();
+}
+
+function setColorSelected(color: string): void {
+  if (!selectedRect.value) return;
+  drawingsStore.updateColor(market.instrument, market.timeframe, selectedRect.value.id, color);
+  recalcRects();
+}
+
+// Re-render rectangles when visible range changes (pan/zoom)
+// This is hooked into the existing visibleCb
+const _origVisibleCb = visibleCb;
 
 onMounted(async () => {
   await nextTick();
@@ -217,8 +367,9 @@ onMounted(async () => {
   adapter.setData(props.candles);
 
   visibleCb = (range) => {
-    // Track the price marker on every pan/zoom so the badge stays glued to it
+    // Track the price marker + redraw rectangles on every pan/zoom
     updateBadgePosition();
+    recalcRects();
     if (!range) return;
     if (lazyThrottled) return;
     if (range.from > 15) return;
@@ -305,6 +456,52 @@ onBeforeUnmount(() => {
     >
       {{ countdown }}
     </div>
+    <!-- Drawing overlay: rectangles + interaction layer -->
+    <div
+      v-if="candles.length > 0"
+      class="drawing-layer"
+      :class="{ 'drawing-active': drawingsStore.activeTool === 'rectangle' }"
+      @mousedown="onMouseDown"
+      @click="onChartClick"
+    >
+      <div
+        v-for="rect in rectPixels"
+        :key="rect.id"
+        class="drawing-rect"
+        :class="{ selected: rect.selected }"
+        :style="{
+          left: rect.left + 'px',
+          top: rect.top + 'px',
+          width: rect.width + 'px',
+          height: rect.height + 'px',
+          backgroundColor: rect.color,
+          opacity: rect.opacity,
+          borderColor: rect.color,
+        }"
+        @click.stop="onRectClick(rect.id, $event)"
+      />
+    </div>
+
+    <!-- Edit panel for selected rectangle -->
+    <div
+      v-if="selectedRect && editPanelPos"
+      class="rect-edit-panel"
+      :style="{ left: editPanelPos.x + 'px', top: editPanelPos.y + 'px' }"
+      @click.stop
+    >
+      <div class="edit-colors">
+        <button
+          v-for="c in drawingsStore.PRESET_COLORS"
+          :key="c"
+          class="color-swatch"
+          :class="{ active: selectedRect.color === c }"
+          :style="{ backgroundColor: c }"
+          @click="setColorSelected(c)"
+        />
+      </div>
+      <button class="edit-delete" @click="deleteSelected" title="Delete rectangle">🗑</button>
+    </div>
+
     <div ref="containerRef" class="chart-container" />
   </div>
 </template>
@@ -488,5 +685,83 @@ onBeforeUnmount(() => {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* ── Drawing overlay ─────────────────────────────────────────────────── */
+.drawing-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.drawing-layer.drawing-active {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+.drawing-rect {
+  position: absolute;
+  border: 1.5px solid;
+  border-radius: 2px;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: box-shadow 150ms;
+}
+.drawing-rect:hover {
+  box-shadow: 0 0 0 1px rgba(41, 98, 255, 0.4);
+}
+.drawing-rect.selected {
+  border-width: 2px;
+  box-shadow: 0 0 0 2px rgba(41, 98, 255, 0.5);
+}
+
+/* ── Rectangle edit panel ────────────────────────────────────────────── */
+.rect-edit-panel {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  pointer-events: auto;
+}
+.edit-colors {
+  display: flex;
+  gap: 4px;
+}
+.color-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: all 120ms;
+}
+.color-swatch:hover {
+  transform: scale(1.15);
+}
+.color-swatch.active {
+  border-color: var(--text);
+  transform: scale(1.1);
+}
+.edit-delete {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  border-radius: 4px;
+  transition: all 120ms;
+}
+.edit-delete:hover {
+  background: rgba(239, 83, 80, 0.12);
+  color: #ef5350;
 }
 </style>

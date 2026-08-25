@@ -6,6 +6,7 @@ import { useWatchlistStore } from "@/stores/watchlist";
 import TopToolbar from "@/components/TopToolbar.vue";
 import ChartPane from "@/components/ChartPane.vue";
 import WatchlistPanel from "@/components/WatchlistPanel.vue";
+import DrawingToolbar from "@/components/DrawingToolbar.vue";
 import type { Timeframe } from "@traderkomak/shared";
 
 const market = useMarketStore();
@@ -39,6 +40,7 @@ function onTimeframeChange(next: Timeframe): void {
       @update:timeframe="onTimeframeChange"
     />
     <div class="main">
+      <DrawingToolbar />
       <ChartPane :candles="market.candles" :is-loading="market.isLoading" :error="market.error" :instrument="market.instrument" />
       <WatchlistPanel />
       <!-- Right column hamburger for watchlist -->

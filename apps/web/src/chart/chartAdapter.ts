@@ -31,6 +31,12 @@ export interface ChartAdapter {
   getPriceY(price: number): number | null;
   /** Height of an axis price label, derived from the chart's font size. */
   getPriceLabelHeight(): number;
+  /** Converts a UNIX timestamp (seconds) to an x-pixel on the chart. */
+  timeToX(time: number): number | null;
+  /** Converts an x-pixel on the chart back to a UNIX timestamp (seconds). */
+  xToTime(x: number): number | null;
+  /** Converts a y-pixel on the chart back to a price. */
+  yToPrice(y: number): number | null;
   subscribeVisibleRange(cb: (range: { from: number; to: number } | null) => void): void;
   unsubscribeVisibleRange(cb: (range: { from: number; to: number } | null) => void): void;
 }
@@ -247,6 +253,31 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       const opts = chart.options() as { layout?: { fontSize?: number } };
       const fs = opts.layout?.fontSize ?? 12;
       return Math.max(16, Math.round(fs * 1.55));
+    },
+    timeToX(time: number): number | null {
+      try {
+        const x = chart.timeScale().timeToCoordinate(time as never);
+        return typeof x === "number" && Number.isFinite(x) ? x : null;
+      } catch {
+        return null;
+      }
+    },
+    xToTime(x: number): number | null {
+      try {
+        const t = chart.timeScale().coordinateToTime(x as never);
+        if (t === null || t === undefined) return null;
+        return typeof t === "number" ? t : null;
+      } catch {
+        return null;
+      }
+    },
+    yToPrice(y: number): number | null {
+      try {
+        const p = series.coordinateToPrice(y as never);
+        return typeof p === "number" && Number.isFinite(p) ? p : null;
+      } catch {
+        return null;
+      }
     },
     subscribeVisibleRange(cb: (range: { from: number; to: number } | null) => void): void {
       rangeCbs.add(cb);
