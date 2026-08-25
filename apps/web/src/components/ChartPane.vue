@@ -413,6 +413,8 @@ onMounted(async () => {
   el.addEventListener("pointerdown", onInteract, { passive: true });
   el.addEventListener("wheel", onInteract, { passive: true });
   el.addEventListener("touchmove", onInteract, { passive: true });
+  interactionEl = el;
+  interactCb = onInteract;
 
   // Right-click anywhere on the chart pane deselects any selected rectangle
   const pane = containerRef.value?.closest(".chart-pane") as HTMLElement | null;
