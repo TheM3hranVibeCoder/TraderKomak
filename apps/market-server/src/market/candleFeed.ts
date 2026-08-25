@@ -19,6 +19,7 @@ import {
   bucketStart,
   isInstrument,
   isTimeframe,
+  nativeCandlesNeeded,
   type Candle,
   type MarketTick,
   type Timeframe,
@@ -253,9 +254,120 @@ export class CandleFeed extends EventEmitter {
     if (result.closed) {
       this.pushBuffer(session, result.closed);
       this.emitCandle(session, result.closed, true);
+      // Replace our stream-subset version with OANDA's authoritative candle
+      // for that bucket (and backfill any skipped buckets) so closed bars
+      // always match the history feed — no close/open seams or gaps.
+      this.reconcileClosed(session, result.closed);
     }
     this.pushBuffer(session, result.candle);
     this.emitCandle(session, result.candle, false);
+  }
+
+  /** One reconcile in-flight per session — latest closed candle wins. */
+  private readonly reconciling = new Set<string>();
+
+  /**
+   * Fetches the authoritative candle for a just-closed bucket from the
+   * provider and swaps it into the buffer + re-broadcasts. Also backfills
+   * buckets that were skipped entirely (no ticks received).
+   */
+  private reconcileClosed(session: Session, closed: Candle): void {
+    if (!this.rest) return;
+    const key = sessionKey(session.instrument, session.timeframe);
+    if (this.reconciling.has(key)) return;
+    this.reconciling.add(key);
+
+    void (async () => {
+      try {
+        const rest = this.rest!;
+        const tfSec = TIMEFRAME_SECONDS[session.timeframe];
+        // `to` = 1s before the NEXT bucket start → selects exactly the
+        // closed bucket (works for native and S5-derived timeframes).
+        const toIso = new Date((closed.time + tfSec - 1) * 1000).toISOString();
+        const native = await rest.getNativeCandles(
+          session.instrument,
+          session.timeframe,
+          nativeCandlesNeeded(session.timeframe, 1),
+          toIso
+        );
+
+        let auth: Candle | undefined;
+        if (
+          NATIVE_HISTORY_GRANULARITY[session.timeframe] === "S5" &&
+          tfSec > TIMEFRAME_SECONDS["5s"]
+        ) {
+          auth = aggregateCandles(native, tfSec).at(-1);
+        } else {
+          auth = native.at(-1);
+        }
+
+        if (!auth || auth.time !== closed.time) return;
+
+        this.backfillGap(session, auth);
+
+        const buf = session.buffer;
+        // The closed candle sits BEFORE the new active candle — find it by
+        // bucket time rather than assuming position.
+        let idx = -1;
+        for (let i = buf.length - 1; i >= 0; i--) {
+          if (buf[i]!.time === auth.time) {
+            idx = i;
+            break;
+          }
+        }
+        if (idx === -1) return;
+        const existing = buf[idx]!;
+        if (
+          existing.open === auth.open &&
+          existing.high === auth.high &&
+          existing.low === auth.low &&
+          existing.close === auth.close
+        ) {
+          return; // already identical — nothing to correct
+        }
+        buf[idx] = { ...auth };
+        this.emitCandle(session, auth, true);
+      } catch {
+        // transient upstream error — the next close reconciles anyway
+      } finally {
+        this.reconciling.delete(key);
+      }
+    })();
+  }
+
+  /** Fills skipped buckets between the previous closed bar and `justClosed`. */
+  private async backfillGap(session: Session, justClosed: Candle): Promise<void> {
+    const rest = this.rest;
+    if (!rest) return;
+    const buf = session.buffer;
+    if (buf.length < 2) return;
+    const tfSec = TIMEFRAME_SECONDS[session.timeframe];
+    const prev = buf[buf.length - 2]!;
+    const missing = Math.floor((justClosed.time - prev.time) / tfSec) - 1;
+    if (missing <= 0) return; // contiguous
+    if (missing > 200) return; // downtime storm — skip, history covers it
+
+    const toIso = new Date((justClosed.time - 1) * 1000).toISOString();
+    const native = await rest.getNativeCandles(
+      session.instrument,
+      session.timeframe,
+      nativeCandlesNeeded(session.timeframe, missing),
+      toIso
+    );
+    let fill: Candle[] = native;
+    if (
+      NATIVE_HISTORY_GRANULARITY[session.timeframe] === "S5" &&
+      tfSec > TIMEFRAME_SECONDS["5s"]
+    ) {
+      fill = aggregateCandles(native, tfSec);
+    }
+    const inserts = fill.filter((c) => c.time > prev.time && c.time < justClosed.time);
+    if (inserts.length === 0) return;
+
+    buf.splice(buf.length - 1, 0, ...inserts.map((c) => ({ ...c })));
+    for (const c of inserts) {
+      this.emitCandle(session, c, true);
+    }
   }
 
   private emitCandle(session: Session, candle: Candle, closed: boolean): void {
