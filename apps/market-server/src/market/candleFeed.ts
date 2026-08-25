@@ -71,6 +71,8 @@ interface Session {
   /** Fires at each bucket boundary so candles roll over on time —
    *  even when the tick stream is silent. */
   rollover: NodeJS.Timeout | null;
+  /** Timestamp of the last real tick — gates synthetic rollovers. */
+  lastTickAt: number;
 }
 
 export class CandleFeed extends EventEmitter {
@@ -152,6 +154,24 @@ export class CandleFeed extends EventEmitter {
   handleTick(tick: MarketTick): void {
     for (const session of this.sessions.values()) {
       if (session.instrument !== tick.instrument) continue;
+
+      const tfSec = TIMEFRAME_SECONDS[session.timeframe];
+      const silentMs = session.lastTickAt > 0 ? tick.timestamp - session.lastTickAt : 0;
+
+      // Long silence (market close / stream outage): the buffer may hold
+      // synthetic flat candles from that period — drop them so history and
+      // snapshots stay authoritative.
+      if (silentMs > tfSec * 1000 * 30) {
+        if (session.buffer.length > 0) {
+          this.log.info(
+            { instrument: session.instrument, timeframe: session.timeframe, silentMs },
+            "long tick gap — purging stale buffer"
+          );
+          session.buffer.length = 0;
+        }
+      }
+      session.lastTickAt = tick.timestamp;
+
       this.applyToSession(session, tick);
     }
   }
@@ -176,6 +196,7 @@ export class CandleFeed extends EventEmitter {
       primingSettled: false,
       persistent: false,
       rollover: null,
+      lastTickAt: 0,
     };
 
     // Roll candles over exactly at each bucket boundary — independent of
@@ -261,12 +282,19 @@ export class CandleFeed extends EventEmitter {
     if (!result) return;
 
     if (result.closed) {
-      this.pushBuffer(session, result.closed);
-      this.emitCandle(session, result.closed, true);
-      // Replace our stream-subset version with OANDA's authoritative candle
-      // for that bucket (and backfill any skipped buckets) so closed bars
-      // always match the history feed — no close/open seams or gaps.
-      this.reconcileClosed(session, result.closed);
+      // After a long gap the "closed" candle is stale (from before the
+      // silence) — don't emit/persist it; the fresh bucket is what matters.
+      const tfSec = TIMEFRAME_SECONDS[session.timeframe];
+      const tickBucket = Math.floor(tick.timestamp / (tfSec * 1000));
+      const stale = tickBucket - result.closed.time > 5;
+      if (!stale) {
+        this.pushBuffer(session, result.closed);
+        this.emitCandle(session, result.closed, true);
+        // Replace our stream-subset version with OANDA's authoritative candle
+        // for that bucket (and backfill any skipped buckets) so closed bars
+        // always match the history feed — no close/open seams or gaps.
+        this.reconcileClosed(session, result.closed);
+      }
     }
     this.pushBuffer(session, result.candle);
     this.emitCandle(session, result.candle, false);
@@ -438,6 +466,14 @@ export class CandleFeed extends EventEmitter {
       const tfSec = TIMEFRAME_SECONDS[session.timeframe];
       const bucketSec = Math.floor(Date.now() / (tfSec * 1000)) * tfSec;
       const active = session.aggregator.active;
+
+      // Only synthesize while the stream is actually alive. A silent stream
+      // (closed market / outage) must NOT spawn flat candles — that's how
+      // weekend pollution happened. Real ticks resume the chain naturally.
+      const silentMs = session.lastTickAt > 0 ? Date.now() - session.lastTickAt : Infinity;
+      if (silentMs > tfSec * 1000 * 2) {
+        return; // gated — just re-arm
+      }
 
       if (active && active.time < bucketSec) {
         // Previous bucket never got a boundary-crossing tick → close it now
