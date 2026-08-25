@@ -24,7 +24,7 @@ import {
   type MarketTick,
   type Timeframe,
 } from "@traderkomak/shared";
-import { CandleAggregator, aggregateCandles } from "./aggregator.js";
+import { CandleAggregator, aggregateCandles, fillGaps } from "./aggregator.js";
 import type { Log } from "../logger.js";
 
 /**
@@ -347,6 +347,25 @@ export class CandleFeed extends EventEmitter {
           auth = native.at(-1);
         }
 
+        // OANDA sometimes has NO candle for the bucket (zero ticks even in
+        // their full feed). Their platform chart carries the previous close
+        // forward — do the same when the bucket is contiguous with ours.
+        const bufPre = session.buffer;
+        const prevBuf = bufPre.length >= 2 ? bufPre[bufPre.length - 2] : bufPre.at(-1);
+        if ((!auth || auth.time !== closed.time) && prevBuf) {
+          const contiguous =
+            closed.time - prevBuf.time === tfSec || prevBuf.time === closed.time;
+          if (contiguous && Number.isFinite(prevBuf.close)) {
+            auth = {
+              time: closed.time,
+              open: prevBuf.close,
+              high: prevBuf.close,
+              low: prevBuf.close,
+              close: prevBuf.close,
+            };
+          }
+        }
+
         if (!auth || auth.time !== closed.time) return;
 
         // Fill skipped buckets FIRST so clients receive fills → corrected
@@ -409,6 +428,8 @@ export class CandleFeed extends EventEmitter {
     ) {
       fill = aggregateCandles(native, tfSec);
     }
+    // OANDA omits zero-tick buckets — forward-fill them like their chart
+    fill = fillGaps(fill, tfSec);
     const inserts = fill.filter((c) => c.time > prev.time && c.time < justClosed.time);
     if (inserts.length === 0) return;
 

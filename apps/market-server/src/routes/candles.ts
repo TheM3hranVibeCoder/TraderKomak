@@ -22,7 +22,7 @@ import {
   nativeCandlesNeeded,
   type Timeframe,
 } from "@traderkomak/shared";
-import { aggregateCandles } from "../market/aggregator.js";
+import { aggregateCandles, fillGaps } from "../market/aggregator.js";
 import type { CandleFeed, HistorySource } from "../market/candleFeed.js";
 import type { OandaRestError, RestErrorCode } from "../oanda/restClient.js";
 
@@ -132,6 +132,11 @@ async function resolveHistory(
   ) {
     candles = aggregateCandles(candles, seconds);
   }
+
+  // OANDA's REST omits buckets with zero ticks; their platform chart
+  // carries the price forward instead. Do the same for small gaps so
+  // history matches the chart users compare against.
+  candles = fillGaps(candles, seconds);
 
   return candles.slice(-count);
 }

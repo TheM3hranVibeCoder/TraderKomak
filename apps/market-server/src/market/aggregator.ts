@@ -102,6 +102,40 @@ export class CandleAggregator {
 }
 
 /**
+ * Forward-fills small gaps in a candle series with flat carry-forward
+ * candles (o=h=l=c=prev.close) — mirrors how broker platform charts render
+ * buckets where the tick feed was momentarily empty. Gaps larger than
+ * `maxFillSeconds` (weekends, sessions breaks) are left as real gaps.
+ */
+export function fillGaps(
+  candles: Candle[],
+  tfSec: number,
+  maxFillSeconds = 300
+): Candle[] {
+  if (candles.length === 0) return candles;
+  const out: Candle[] = [{ ...candles[0]! }];
+  for (let i = 1; i < candles.length; i++) {
+    const prev = out[out.length - 1]!;
+    const cur = candles[i]!;
+    const gapBuckets = Math.floor((cur.time - prev.time) / tfSec) - 1;
+    if (gapBuckets > 0 && gapBuckets * tfSec <= maxFillSeconds) {
+      for (let b = 1; b <= gapBuckets; b++) {
+        const t = prev.time + b * tfSec;
+        out.push({
+          time: t,
+          open: prev.close,
+          high: prev.close,
+          low: prev.close,
+          close: prev.close,
+        });
+      }
+    }
+    out.push({ ...cur });
+  }
+  return out;
+}
+
+/**
  * Batch aggregation of complete candles into a larger timeframe.
  * Used to derive 10s/30s history from native S5 data with exactly the
  * same bucket rules as the live engine.
