@@ -103,6 +103,7 @@ export class CandleFeed extends EventEmitter {
       return;
     }
     const session = this.createSession(instrument, timeframe);
+    session.subscribers = 1; // createSession starts at 0 — count this one
     this.sessions.set(key, session);
     this.log.info({ instrument, timeframe }, "aggregation session created");
   }
@@ -311,6 +312,11 @@ export class CandleFeed extends EventEmitter {
 
   /** One reconcile in-flight per session — latest closed candle wins. */
   private readonly reconciling = new Set<string>();
+  /** Global reconcile pacing — protects the provider rate budget from the
+   *  per-second closes of high-frequency (1s) sessions. */
+  private lastReconcileAt = 0;
+  /** Back-off window after a provider rate-limit rejection. */
+  private reconcileCooldownUntil = 0;
 
   /**
    * Fetches the authoritative candle for a just-closed bucket from the
@@ -319,9 +325,16 @@ export class CandleFeed extends EventEmitter {
    */
   private reconcileClosed(session: Session, closed: Candle): void {
     if (!this.rest) return;
+    if (session.subscribers <= 0) return; // nobody watching — save the budget
+
+    const now = Date.now();
+    if (now < this.reconcileCooldownUntil) return; // rate-limited — wait
+    if (now - this.lastReconcileAt < 2000) return; // global pacing: ≤1 per 2s
+
     const key = sessionKey(session.instrument, session.timeframe);
     if (this.reconciling.has(key)) return;
     this.reconciling.add(key);
+    this.lastReconcileAt = now;
 
     void (async () => {
       try {
@@ -394,8 +407,18 @@ export class CandleFeed extends EventEmitter {
         }
         buf[idx] = { ...auth };
         this.emitCandle(session, auth, true);
-      } catch {
-        // transient upstream error — the next close reconciles anyway
+      } catch (err) {
+        // Provider pushed back on volume — cool down so the next attempts
+        // (and user history requests) succeed instead of compounding.
+        const code = (err as { code?: string } | null)?.code;
+        if (code === "RATE_LIMITED") {
+          this.reconcileCooldownUntil = Date.now() + 15_000;
+          this.log.warn(
+            { instrument: session.instrument, timeframe: session.timeframe },
+            "reconcile rate-limited — cooling down 15s"
+          );
+        }
+        // other transient errors: the next close retries anyway
       } finally {
         this.reconciling.delete(key);
       }
