@@ -414,7 +414,8 @@ onMounted(async () => {
   el.addEventListener("wheel", onInteract, { passive: true });
   el.addEventListener("touchmove", onInteract, { passive: true });
 
-  // Right-click deselects any selected rectangle
+  // Right-click anywhere on the chart pane deselects any selected rectangle
+  const pane = containerRef.value?.closest(".chart-pane") as HTMLElement | null;
   const onContextMenu = (e: MouseEvent) => {
     e.preventDefault();
     if (drawingsStore.selectedId) {
@@ -424,10 +425,9 @@ onMounted(async () => {
       recalcRects();
     }
   };
-  el.addEventListener("contextmenu", onContextMenu);
-  interactionEl = el;
-  interactCb = onInteract;
-  contextmenuEl = el;
+  const ctxTarget = pane ?? containerRef.value!;
+  ctxTarget.addEventListener("contextmenu", onContextMenu);
+  contextmenuEl = ctxTarget;
   contextmenuCb = onContextMenu;
 
   // Countdown text + position tick (position also updates on pan/zoom above)
