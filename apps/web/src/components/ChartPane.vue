@@ -122,6 +122,8 @@ let interactionEl: HTMLElement | null = null;
 let interactCb: (() => void) | null = null;
 let contextmenuEl: HTMLElement | null = null;
 let contextmenuCb: ((e: MouseEvent) => void) | null = null;
+let rightMouseEl: HTMLElement | null = null;
+let rightMouseCb: ((e: MouseEvent) => void) | null = null;
 const countdown = ref("");
 const marketClosed = ref(false);
 
@@ -278,25 +280,39 @@ function onMouseDown(e: MouseEvent): void {
   if (drawingsStore.activeTool !== "rectangle" || !adapter || !containerRef.value) return;
   e.preventDefault();
   e.stopPropagation();
+
+  // Second click → finalize the rectangle
+  if (drawingState.value) {
+    const d = drawingState.value;
+    if (Math.abs(d.time2 - d.time1) >= 1 || Math.abs(d.price2 - d.price1) > 0) {
+      drawingsStore.add(market.instrument, market.timeframe, {
+        time1: Math.min(d.time1, d.time2),
+        price1: Math.min(d.price1, d.price2),
+        time2: Math.max(d.time1, d.time2),
+        price2: Math.max(d.price1, d.price2),
+      });
+    }
+    drawingState.value = null;
+    recalcRects();
+    return;
+  }
+
+  // First click → set corner 1, start preview
   const rect = containerRef.value.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
 
-  // Convert pixel → (time, price), with fallbacks for edge coordinates
   let time = adapter.xToTime(x);
   if (time === null) {
-    // Coordinate outside visible bars — extrapolate from logical range
     const lr = adapter.getLogicalRange();
     if (lr) {
-      const barSize = 5; // approximate fallback
-      time = Math.floor(Date.now() / 1000) + Math.round(x / 10) * barSize;
+      time = Math.floor(Date.now() / 1000) + Math.round(x / 10) * 5;
     } else {
       return;
     }
   }
   let price = adapter.yToPrice(y);
   if (price === null) {
-    // Use the last close as fallback
     const last = props.candles[props.candles.length - 1];
     if (!last) return;
     price = last.close;
@@ -304,6 +320,7 @@ function onMouseDown(e: MouseEvent): void {
 
   drawingState.value = { time1: time, price1: price, time2: time, price2: price };
 
+  // Preview follows the mouse until second click
   const move = (ev: MouseEvent) => {
     if (!drawingState.value || !adapter || !containerRef.value) return;
     const r = containerRef.value.getBoundingClientRect();
@@ -316,26 +333,11 @@ function onMouseDown(e: MouseEvent): void {
     recalcRects();
   };
 
-  const up = () => {
-    window.removeEventListener("mousemove", move);
-    window.removeEventListener("mouseup", up);
-    if (!drawingState.value || !adapter) return;
-    const d = drawingState.value;
-    if (Math.abs(d.time2 - d.time1) >= 1 || Math.abs(d.price2 - d.price1) > 0) {
-      drawingsStore.add(market.instrument, market.timeframe, {
-        time1: Math.min(d.time1, d.time2),
-        price1: Math.min(d.price1, d.price2),
-        time2: Math.max(d.time1, d.time2),
-        price2: Math.max(d.price1, d.price2),
-      });
-    }
-    drawingState.value = null;
-    recalcRects();
-  };
-
   window.addEventListener("mousemove", move);
-  window.addEventListener("mouseup", up);
+  onMouseMoveRef = move;
 }
+
+let onMouseMoveRef: ((ev: MouseEvent) => void) | null = null;
 
 function onRectClick(id: string, e: MouseEvent): void {
   if (drawingsStore.activeTool !== "cursor") return;
@@ -416,10 +418,8 @@ onMounted(async () => {
   interactionEl = el;
   interactCb = onInteract;
 
-  // Right-click anywhere on the chart pane deselects any selected rectangle
-  const pane = containerRef.value?.closest(".chart-pane") as HTMLElement | null;
-  const onContextMenu = (e: MouseEvent) => {
-    e.preventDefault();
+  // Right-click anywhere deselects any selected rectangle
+  const onRightClick = (e: MouseEvent) => {
     if (drawingsStore.selectedId) {
       drawingsStore.selectedId = null;
       selectedRect.value = null;
@@ -427,10 +427,22 @@ onMounted(async () => {
       recalcRects();
     }
   };
-  const ctxTarget = pane ?? containerRef.value!;
-  ctxTarget.addEventListener("contextmenu", onContextMenu);
-  contextmenuEl = ctxTarget;
-  contextmenuCb = onContextMenu;
+  document.addEventListener("contextmenu", onRightClick);
+  contextmenuEl = document;
+  contextmenuCb = onRightClick;
+
+  // Also right-click (mousedown button=2) for reliability
+  const onRightMouseDown = (e: MouseEvent) => {
+    if (e.button === 2 && drawingsStore.selectedId) {
+      drawingsStore.selectedId = null;
+      selectedRect.value = null;
+      editPanelPos.value = null;
+      recalcRects();
+    }
+  };
+  document.addEventListener("mousedown", onRightMouseDown);
+  rightMouseEl = document;
+  rightMouseCb = onRightMouseDown;
 
   // Countdown text + position tick (position also updates on pan/zoom above)
   updateCountdown();
@@ -455,6 +467,12 @@ onBeforeUnmount(() => {
   }
   if (contextmenuEl && contextmenuCb) {
     contextmenuEl.removeEventListener("contextmenu", contextmenuCb);
+  }
+  if (rightMouseEl && rightMouseCb) {
+    rightMouseEl.removeEventListener("mousedown", rightMouseCb);
+  }
+  if (onMouseMoveRef) {
+    window.removeEventListener("mousemove", onMouseMoveRef);
   }
   ro?.disconnect();
   adapter?.destroy();
