@@ -120,9 +120,9 @@ let visibleCb: ((range: { from: number; to: number } | null) => void) | null = n
 let lazyThrottled = false;
 let interactionEl: HTMLElement | null = null;
 let interactCb: (() => void) | null = null;
-let contextmenuEl: HTMLElement | null = null;
+let contextmenuEl: Document | HTMLElement | null = null;
 let contextmenuCb: ((e: MouseEvent) => void) | null = null;
-let rightMouseEl: HTMLElement | null = null;
+let rightMouseEl: Document | HTMLElement | null = null;
 let rightMouseCb: ((e: MouseEvent) => void) | null = null;
 const countdown = ref("");
 const marketClosed = ref(false);
