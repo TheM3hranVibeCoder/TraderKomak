@@ -124,6 +124,8 @@ let contextmenuEl: Document | HTMLElement | null = null;
 let contextmenuCb: ((e: MouseEvent) => void) | null = null;
 let rightMouseEl: Document | HTMLElement | null = null;
 let rightMouseCb: ((e: MouseEvent) => void) | null = null;
+// Document.addEventListener requires EventListener, not a specific MouseEvent handler
+type AnyListener = EventListener;
 const countdown = ref("");
 const marketClosed = ref(false);
 
@@ -427,7 +429,7 @@ onMounted(async () => {
       recalcRects();
     }
   };
-  document.addEventListener("contextmenu", onRightClick);
+  document.addEventListener("contextmenu", onRightClick as AnyListener);
   contextmenuEl = document;
   contextmenuCb = onRightClick;
 
@@ -440,7 +442,7 @@ onMounted(async () => {
       recalcRects();
     }
   };
-  document.addEventListener("mousedown", onRightMouseDown);
+  document.addEventListener("mousedown", onRightMouseDown as AnyListener);
   rightMouseEl = document;
   rightMouseCb = onRightMouseDown;
 
@@ -466,10 +468,10 @@ onBeforeUnmount(() => {
     interactionEl.removeEventListener("touchmove", interactCb);
   }
   if (contextmenuEl && contextmenuCb) {
-    contextmenuEl.removeEventListener("contextmenu", contextmenuCb);
+    contextmenuEl.removeEventListener("contextmenu", contextmenuCb as AnyListener);
   }
   if (rightMouseEl && rightMouseCb) {
-    rightMouseEl.removeEventListener("mousedown", rightMouseCb);
+    rightMouseEl.removeEventListener("mousedown", rightMouseCb as AnyListener);
   }
   if (onMouseMoveRef) {
     window.removeEventListener("mousemove", onMouseMoveRef);
