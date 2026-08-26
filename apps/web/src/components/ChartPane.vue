@@ -420,8 +420,11 @@ onMounted(async () => {
   interactionEl = el;
   interactCb = onInteract;
 
-  // Right-click anywhere deselects any selected rectangle
+  // Right-click: switch to cursor tool + deselect any selected rectangle
   const onRightClick = (e: MouseEvent) => {
+    if (drawingsStore.activeTool !== "cursor") {
+      drawingsStore.activeTool = "cursor";
+    }
     if (drawingsStore.selectedId) {
       drawingsStore.selectedId = null;
       selectedRect.value = null;
