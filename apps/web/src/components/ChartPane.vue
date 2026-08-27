@@ -294,11 +294,19 @@ function recalcRects(): void {
 
 function onMouseDown(e: MouseEvent): void {
   if (drawingsStore.activeTool !== "rectangle" || !adapter || !containerRef.value) return;
+  if (e.button !== 0) return;
 
-  // If clicking on an existing rectangle, select it instead of drawing
-  const target = e.target as HTMLElement;
-  if (target.closest(".drawing-rect")) {
-    return;
+  const rect = containerRef.value.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+
+  // Hit test existing rectangles: if clicking inside one, select it instead of drawing
+  for (const r of rectPixels.value) {
+    if (r.id === "__preview") continue;
+    if (x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height) {
+      onRectClick(r.id, e);
+      return;
+    }
   }
 
   e.preventDefault();
