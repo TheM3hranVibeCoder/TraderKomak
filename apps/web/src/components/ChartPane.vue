@@ -296,9 +296,9 @@ function onMouseDown(e: MouseEvent): void {
   if (drawingsStore.activeTool !== "rectangle" || !adapter || !containerRef.value) return;
   if (e.button !== 0) return;
 
-  const rect = containerRef.value.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
+  const crect = containerRef.value.getBoundingClientRect();
+  const x = e.clientX - crect.left;
+  const y = e.clientY - crect.top;
 
   // Hit test existing rectangles: if clicking inside one, select it instead of drawing
   for (const r of rectPixels.value) {
@@ -334,9 +334,6 @@ function onMouseDown(e: MouseEvent): void {
   }
 
   // First click → set corner 1, start preview
-  const rect = containerRef.value.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
 
   let time = adapter.xToTime(x);
   if (time === null) {
