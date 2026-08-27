@@ -294,10 +294,17 @@ function recalcRects(): void {
 
 function onMouseDown(e: MouseEvent): void {
   if (drawingsStore.activeTool !== "rectangle" || !adapter || !containerRef.value) return;
+
+  // If clicking on an existing rectangle, select it instead of drawing
+  const target = e.target as HTMLElement;
+  if (target.closest(".drawing-rect")) {
+    return;
+  }
+
   e.preventDefault();
   e.stopPropagation();
 
-  // Second click → finalize the rectangle
+  // Second click → finalize the rectangle and switch to cursor (single draw per selection)
   if (drawingState.value) {
     const d = drawingState.value;
     if (Math.abs(d.time2 - d.time1) >= 1 || Math.abs(d.price2 - d.price1) > 0) {
@@ -313,6 +320,7 @@ function onMouseDown(e: MouseEvent): void {
       window.removeEventListener("mousemove", onMouseMoveRef);
       onMouseMoveRef = null;
     }
+    drawingsStore.activeTool = "cursor";
     recalcRects();
     return;
   }
@@ -360,8 +368,11 @@ function onMouseDown(e: MouseEvent): void {
 let onMouseMoveRef: ((ev: MouseEvent) => void) | null = null;
 
 function onRectClick(id: string, e: MouseEvent): void {
-  if (drawingsStore.activeTool !== "cursor") return;
   e.stopPropagation();
+  // Auto-switch to cursor when selecting
+  if (drawingsStore.activeTool !== "cursor") {
+    drawingsStore.activeTool = "cursor";
+  }
   drawingsStore.selectedId = id;
   selectedRect.value = drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === id) ?? null;
   const pixel = rectPixels.value.find((r) => r.id === id);
