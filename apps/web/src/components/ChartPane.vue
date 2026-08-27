@@ -397,6 +397,56 @@ function setColorSelected(color: string): void {
   recalcRects();
 }
 
+function onResizeStart(e: MouseEvent, handle: string): void {
+  if (!selectedRect.value || !adapter || !containerRef.value) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const rect = { ...selectedRect.value };
+  const startX = e.clientX;
+  const startY = e.clientY;
+  const containerRect = containerRef.value.getBoundingClientRect();
+
+  const onMove = (ev: MouseEvent) => {
+    if (!adapter || !containerRef.value) return;
+    const r = containerRef.value.getBoundingClientRect();
+    const mx = ev.clientX - r.left;
+    const my = ev.clientY - r.top;
+    const t = adapter.xToTime(mx);
+    const p = adapter.yToPrice(my);
+    if (t === null || p === null) return;
+
+    const newRect: Partial<DrawingRect> = {};
+    if (handle.includes("w")) newRect.time1 = t;
+    if (handle.includes("e")) newRect.time2 = t;
+    if (handle.includes("s")) newRect.price1 = p;
+    if (handle.includes("n")) newRect.price2 = p;
+    // For edge centers, only update one axis
+    if (handle === "n") newRect.price2 = p;
+    if (handle === "s") newRect.price1 = p;
+    if (handle === "w") newRect.time1 = t;
+    if (handle === "e") newRect.time2 = t;
+
+    drawingsStore.updateRect(market.instrument, market.timeframe, rect.id, newRect);
+    // Update selectedRect reference
+    const updated = drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === rect.id);
+    if (updated) selectedRect.value = updated;
+    recalcRects();
+    // Update edit panel position
+    const pixel = rectPixels.value.find((r) => r.id === rect.id);
+    if (pixel && containerRef.value) {
+      editPanelPos.value = { x: pixel.left + pixel.width + 8, y: pixel.top };
+    }
+  };
+
+  const onUp = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+  };
+
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}
+
 // Re-render rectangles when visible range changes (pan/zoom)
 // This is hooked into the existing visibleCb
 const _origVisibleCb = visibleCb;
@@ -585,7 +635,18 @@ onBeforeUnmount(() => {
           borderColor: rect.color,
         }"
         @click.stop="onRectClick(rect.id, $event)"
-      />
+      >
+        <template v-if="rect.selected">
+          <div class="resize-handle nw" @mousedown.stop.prevent="onResizeStart($event, 'nw')"></div>
+          <div class="resize-handle ne" @mousedown.stop.prevent="onResizeStart($event, 'ne')"></div>
+          <div class="resize-handle sw" @mousedown.stop.prevent="onResizeStart($event, 'sw')"></div>
+          <div class="resize-handle se" @mousedown.stop.prevent="onResizeStart($event, 'se')"></div>
+          <div class="resize-handle n" @mousedown.stop.prevent="onResizeStart($event, 'n')"></div>
+          <div class="resize-handle s" @mousedown.stop.prevent="onResizeStart($event, 's')"></div>
+          <div class="resize-handle w" @mousedown.stop.prevent="onResizeStart($event, 'w')"></div>
+          <div class="resize-handle e" @mousedown.stop.prevent="onResizeStart($event, 'e')"></div>
+        </template>
+      </div>
     </div>
 
     <!-- Edit panel for selected rectangle -->
@@ -820,6 +881,59 @@ onBeforeUnmount(() => {
 .drawing-rect.selected {
   border-width: 2px;
   box-shadow: 0 0 0 2px rgba(41, 98, 255, 0.5);
+}
+.resize-handle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: #fff;
+  border: 1px solid #2962ff;
+  border-radius: 2px;
+  pointer-events: auto;
+}
+.resize-handle.nw {
+  left: -4px;
+  top: -4px;
+  cursor: nw-resize;
+}
+.resize-handle.ne {
+  right: -4px;
+  top: -4px;
+  cursor: ne-resize;
+}
+.resize-handle.sw {
+  left: -4px;
+  bottom: -4px;
+  cursor: sw-resize;
+}
+.resize-handle.se {
+  right: -4px;
+  bottom: -4px;
+  cursor: se-resize;
+}
+.resize-handle.n {
+  left: 50%;
+  top: -4px;
+  transform: translateX(-50%);
+  cursor: n-resize;
+}
+.resize-handle.s {
+  left: 50%;
+  bottom: -4px;
+  transform: translateX(-50%);
+  cursor: s-resize;
+}
+.resize-handle.w {
+  left: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: w-resize;
+}
+.resize-handle.e {
+  right: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: e-resize;
 }
 
 /* ── Rectangle edit panel ────────────────────────────────────────────── */

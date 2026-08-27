@@ -84,6 +84,28 @@ export const useDrawingsStore = defineStore("drawings", () => {
     }
   }
 
+  function updateRect(
+    symbol: string,
+    timeframe: string,
+    id: string,
+    rect: Partial<Pick<DrawingRect, "time1" | "price1" | "time2" | "price2">>
+  ) {
+    const k = key(symbol, timeframe);
+    const list = drawings.value[k];
+    if (!list) return;
+    const item = list.find((d) => d.id === id);
+    if (item) {
+      if (rect.time1 !== undefined) item.time1 = rect.time1;
+      if (rect.price1 !== undefined) item.price1 = rect.price1;
+      if (rect.time2 !== undefined) item.time2 = rect.time2;
+      if (rect.price2 !== undefined) item.price2 = rect.price2;
+      // Ensure time1 <= time2 and price1 <= price2
+      if (item.time1 > item.time2) [item.time1, item.time2] = [item.time2, item.time1];
+      if (item.price1 > item.price2) [item.price1, item.price2] = [item.price2, item.price1];
+      persist();
+    }
+  }
+
   function clearAll(symbol: string, timeframe: string) {
     drawings.value[key(symbol, timeframe)] = [];
     selectedId.value = null;
@@ -103,6 +125,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
     add,
     remove,
     updateColor,
+    updateRect,
     clearAll,
   };
 });
