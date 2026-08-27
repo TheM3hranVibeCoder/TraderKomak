@@ -116,6 +116,20 @@ watch(
   }
 );
 
+watch(
+  () => drawingsStore.activeTool,
+  (tool) => {
+    if (tool !== "rectangle" && drawingState.value) {
+      drawingState.value = null;
+      if (onMouseMoveRef) {
+        window.removeEventListener("mousemove", onMouseMoveRef);
+        onMouseMoveRef = null;
+      }
+      recalcRects();
+    }
+  }
+);
+
 let visibleCb: ((range: { from: number; to: number } | null) => void) | null = null;
 let lazyThrottled = false;
 let interactionEl: HTMLElement | null = null;
@@ -295,6 +309,10 @@ function onMouseDown(e: MouseEvent): void {
       });
     }
     drawingState.value = null;
+    if (onMouseMoveRef) {
+      window.removeEventListener("mousemove", onMouseMoveRef);
+      onMouseMoveRef = null;
+    }
     recalcRects();
     return;
   }
@@ -420,8 +438,9 @@ onMounted(async () => {
   interactionEl = el;
   interactCb = onInteract;
 
-  // Right-click: switch to cursor tool + deselect any selected rectangle
+  // Right-click: switch to cursor tool + deselect any selected rectangle + cancel in-progress drawing
   const onRightClick = (e: MouseEvent) => {
+    e.preventDefault();
     if (drawingsStore.activeTool !== "cursor") {
       drawingsStore.activeTool = "cursor";
     }
@@ -431,6 +450,14 @@ onMounted(async () => {
       editPanelPos.value = null;
       recalcRects();
     }
+    if (drawingState.value) {
+      drawingState.value = null;
+      if (onMouseMoveRef) {
+        window.removeEventListener("mousemove", onMouseMoveRef);
+        onMouseMoveRef = null;
+      }
+      recalcRects();
+    }
   };
   document.addEventListener("contextmenu", onRightClick as AnyListener);
   contextmenuEl = document;
@@ -438,10 +465,23 @@ onMounted(async () => {
 
   // Also right-click (mousedown button=2) for reliability
   const onRightMouseDown = (e: MouseEvent) => {
-    if (e.button === 2 && drawingsStore.selectedId) {
+    if (e.button !== 2) return;
+    e.preventDefault();
+    if (drawingsStore.activeTool !== "cursor") {
+      drawingsStore.activeTool = "cursor";
+    }
+    if (drawingsStore.selectedId) {
       drawingsStore.selectedId = null;
       selectedRect.value = null;
       editPanelPos.value = null;
+      recalcRects();
+    }
+    if (drawingState.value) {
+      drawingState.value = null;
+      if (onMouseMoveRef) {
+        window.removeEventListener("mousemove", onMouseMoveRef);
+        onMouseMoveRef = null;
+      }
       recalcRects();
     }
   };
