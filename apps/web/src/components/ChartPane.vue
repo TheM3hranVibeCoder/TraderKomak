@@ -628,14 +628,8 @@ onBeforeUnmount(() => {
     >
       {{ countdown }}
     </div>
-    <!-- Drawing cursor capture layer (only when rectangle tool active) -->
-    <div
-      v-if="drawingsStore.activeTool === 'rectangle' && candles.length > 0"
-      class="drawing-capture"
-      @mousedown="onMouseDown"
-    />
-    <!-- Drawing rendering layer (always visible, pointer-events none) -->
-    <div class="drawing-layer">
+    <!-- Drawing rendering layer (always visible) -->
+    <div class="drawing-layer" @mousedown="onMouseDown">
       <div
         v-for="rect in rectPixels"
         :key="rect.id"
@@ -871,17 +865,14 @@ onBeforeUnmount(() => {
 }
 
 /* ── Drawing overlay ─────────────────────────────────────────────────── */
-.drawing-capture {
-  position: absolute;
-  inset: 0;
-  z-index: 5;
-  cursor: crosshair;
-}
 .drawing-layer {
   position: absolute;
   inset: 0;
   z-index: 2;
-  pointer-events: none;
+  pointer-events: auto;
+}
+.drawing-layer:has(.drawing-rect:hover) {
+  cursor: pointer;
 }
 .drawing-rect {
   position: absolute;
