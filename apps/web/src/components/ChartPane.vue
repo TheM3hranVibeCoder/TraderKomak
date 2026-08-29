@@ -337,9 +337,14 @@ function onMouseDown(e: MouseEvent): void {
 
   let time = adapter.xToTime(x);
   if (time === null) {
+    // Fallback: extrapolate from visible logical range (works even when market closed)
     const lr = adapter.getLogicalRange();
-    if (lr) {
-      time = Math.floor(Date.now() / 1000) + Math.round(x / 10) * 5;
+    if (lr && props.candles.length > 0) {
+      const firstTime = props.candles[0]!.time;
+      const tfSec = TIMEFRAME_SECONDS[market.timeframe as keyof typeof TIMEFRAME_SECONDS] ?? 5;
+      // Logical index 0 = first candle, so time = firstTime + logicalX * tfSec
+      const logicalX = (x / containerRef.value!.clientWidth) * (lr.to - lr.from) + lr.from;
+      time = Math.floor(firstTime + Math.round(logicalX) * tfSec);
     } else {
       return;
     }
@@ -359,7 +364,16 @@ function onMouseDown(e: MouseEvent): void {
     const r = containerRef.value.getBoundingClientRect();
     const mx = ev.clientX - r.left;
     const my = ev.clientY - r.top;
-    const t = adapter.xToTime(mx);
+    let t = adapter.xToTime(mx);
+    if (t === null) {
+      const lr = adapter.getLogicalRange();
+      if (lr && props.candles.length > 0) {
+        const firstTime = props.candles[0]!.time;
+        const tfSec = TIMEFRAME_SECONDS[market.timeframe as keyof typeof TIMEFRAME_SECONDS] ?? 5;
+        const logicalX = (mx / r.width) * (lr.to - lr.from) + lr.from;
+        t = Math.floor(firstTime + Math.round(logicalX) * tfSec);
+      }
+    }
     const p = adapter.yToPrice(my);
     if (t !== null) drawingState.value.time2 = t;
     if (p !== null) drawingState.value.price2 = p;
