@@ -22,6 +22,32 @@ import { MarketWsClient, type WsStatus } from "@/services/wsClient";
 const HISTORY_COUNT = 2000;
 const LAZY_BATCH = 500;
 
+/** Local cache of lazy-loaded history, per symbol+timeframe, so scrolling
+ *  back through old candles doesn't re-download them on every visit. */
+const cacheKey = (inst: string, tf: string) => `tk-candles:${inst}:${tf}`;
+const CANDLE_CACHE_MAX = 4000;
+
+function loadCache(inst: string, tf: string): Candle[] {
+  try {
+    const raw = localStorage.getItem(cacheKey(inst, tf));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as Candle[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((c) => c && typeof c.time === "number" && typeof c.open === "number" && typeof c.close === "number")
+      .sort((a, b) => a.time - b.time);
+  } catch {
+    return [];
+  }
+}
+
+function saveCache(inst: string, tf: string, all: Candle[]): void {
+  try {
+    const sorted = [...all].sort((a, b) => a.time - b.time);
+    localStorage.setItem(cacheKey(inst, tf), JSON.stringify(sorted.slice(-CANDLE_CACHE_MAX)));
+  } catch {}
+}
+
 function loadPersistedInstrument(): string {
   try {
     const v = localStorage.getItem("tk-instrument");
@@ -173,7 +199,14 @@ export const useMarketStore = defineStore("market", () => {
       if (mySeq !== loadSeq) return;
       if (wantInstrument !== instrument.value || wantTimeframe !== timeframe.value) return;
       if (data) {
-        candles.value = data;
+        // Merge locally cached lazy-loaded history (older than the fetch
+        // window) so revisiting a symbol/timeframe shows the full cached
+        // history immediately instead of re-fetching it via lazy loading.
+        const cached =
+          data.length > 0
+            ? loadCache(wantInstrument, wantTimeframe).filter((c) => c.time < data[0]!.time)
+            : [];
+        candles.value = cached.length > 0 ? mergeCandles(data, cached) : data;
         hasMore.value = data.length >= HISTORY_COUNT;
         awaitingHistory.value = false; // history landed → accept live frames
         if (data.length === 0) {
@@ -208,6 +241,8 @@ export const useMarketStore = defineStore("market", () => {
         return false;
       }
       candles.value = [...older.sort((a, b) => a.time - b.time), ...candles.value];
+      // Persist the lazy-loaded history so future visits skip re-fetching it
+      saveCache(wantInstrument, wantTimeframe, [...loadCache(wantInstrument, wantTimeframe), ...older]);
       if (more.length < LAZY_BATCH) hasMore.value = false;
       return true;
     } catch {

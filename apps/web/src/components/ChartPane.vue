@@ -119,14 +119,10 @@ watch(
 watch(
   () => drawingsStore.activeTool,
   (tool) => {
-    if (tool !== "rectangle" && drawingState.value) {
-      drawingState.value = null;
-      if (onMouseMoveRef) {
-        window.removeEventListener("mousemove", onMouseMoveRef);
-        onMouseMoveRef = null;
-      }
-      recalcRects();
-    }
+    rectMenu.value = null;
+    closePalette();
+    // Switching away from the rectangle tool aborts any in-progress drawing
+    if (tool !== "rectangle") cancelDraw();
   }
 );
 
@@ -134,11 +130,12 @@ let visibleCb: ((range: { from: number; to: number } | null) => void) | null = n
 let lazyThrottled = false;
 let interactionEl: HTMLElement | null = null;
 let interactCb: (() => void) | null = null;
-let contextmenuEl: Document | HTMLElement | null = null;
-let contextmenuCb: ((e: MouseEvent) => void) | null = null;
-let rightMouseEl: Document | HTMLElement | null = null;
-let rightMouseCb: ((e: MouseEvent) => void) | null = null;
-// Document.addEventListener requires EventListener, not a specific MouseEvent handler
+let chartMouseDownEl: HTMLElement | null = null;
+let chartMouseDownCb: ((e: MouseEvent) => void) | null = null;
+let paneCtxEl: HTMLElement | null = null;
+let paneCtxCb: ((e: MouseEvent) => void) | null = null;
+let escCb: ((e: KeyboardEvent) => void) | null = null;
+// addEventListener requires EventListener, not a specific MouseEvent handler
 type AnyListener = EventListener;
 const countdown = ref("");
 const marketClosed = ref(false);
@@ -233,6 +230,7 @@ interface RectPixel {
   height: number;
   color: string;
   opacity: number;
+  filled: boolean;
   selected: boolean;
 }
 
@@ -241,6 +239,33 @@ const drawingState = ref<{ time1: number; price1: number; time2: number; price2:
 const drawingPreview = ref<RectPixel | null>(null);
 const selectedRect = ref<DrawingRect | null>(null);
 const editPanelPos = ref<{ x: number; y: number } | null>(null);
+/** TradingView-style right-click menu: { id, x, y } relative to the chart pane. */
+const rectMenu = ref<{ id: string; x: number; y: number } | null>(null);
+/** Which color palette popup is open (edit panel / context menu / none). */
+const paletteOpen = ref<null | "panel" | "menu">(null);
+
+function togglePalette(which: "panel" | "menu"): void {
+  paletteOpen.value = paletteOpen.value === which ? null : which;
+}
+function closePalette(): void {
+  paletteOpen.value = null;
+}
+/** Style of the rectangle currently opened in the context menu. */
+const menuRectColor = computed(() => {
+  const m = rectMenu.value;
+  if (!m) return "#2962ff";
+  return drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === m.id)?.color ?? "#2962ff";
+});
+const menuRectOpacity = computed(() => {
+  const m = rectMenu.value;
+  if (!m) return 0.3;
+  return drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === m.id)?.opacity ?? 0.3;
+});
+const menuRectFilled = computed(() => {
+  const m = rectMenu.value;
+  if (!m) return true;
+  return drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === m.id)?.filled !== false;
+});
 const renderTick = ref(0);
 
 function recalcRects(): void {
@@ -265,6 +290,7 @@ function recalcRects(): void {
       height: Math.abs(y2 - y1),
       color: rect.color,
       opacity: rect.opacity,
+      filled: rect.filled !== false,
       selected: drawingsStore.selectedId === rect.id,
     });
   }
@@ -284,6 +310,7 @@ function recalcRects(): void {
         height: Math.abs(y2 - y1),
         color: "#2962ff",
         opacity: 0.15,
+        filled: true,
         selected: false,
       });
     }
@@ -292,119 +319,190 @@ function recalcRects(): void {
   rectPixels.value = out;
 }
 
-function onMouseDown(e: MouseEvent): void {
-  if (drawingsStore.activeTool !== "rectangle" || !adapter || !containerRef.value) return;
-  if (e.button !== 0) return;
-
+/** Begin a rectangle: corner 1 at the pointer, preview follows the mouse. */
+function beginDraw(e: MouseEvent): void {
+  if (!adapter || !containerRef.value) return;
   const crect = containerRef.value.getBoundingClientRect();
   const x = e.clientX - crect.left;
   const y = e.clientY - crect.top;
 
-  // Hit test existing rectangles: if clicking inside one, select it instead of drawing
-  for (const r of rectPixels.value) {
-    if (r.id === "__preview") continue;
-    if (x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height) {
-      onRectClick(r.id, e);
-      return;
-    }
-  }
-
-  e.preventDefault();
-  e.stopPropagation();
-
-  // Second click → finalize the rectangle and switch to cursor (single draw per selection)
-  if (drawingState.value) {
-    const d = drawingState.value;
-    if (Math.abs(d.time2 - d.time1) >= 1 || Math.abs(d.price2 - d.price1) > 0) {
-      drawingsStore.add(market.instrument, market.timeframe, {
-        time1: Math.min(d.time1, d.time2),
-        price1: Math.min(d.price1, d.price2),
-        time2: Math.max(d.time1, d.time2),
-        price2: Math.max(d.price1, d.price2),
-      });
-    }
-    drawingState.value = null;
-    if (onMouseMoveRef) {
-      window.removeEventListener("mousemove", onMouseMoveRef);
-      onMouseMoveRef = null;
-    }
-    drawingsStore.activeTool = "cursor";
-    recalcRects();
-    return;
-  }
-
-  // First click → set corner 1, start preview
-
-  let time = adapter.xToTime(x);
-  if (time === null) {
-    // Fallback: extrapolate from visible logical range (works even when market closed)
-    const lr = adapter.getLogicalRange();
-    if (lr && props.candles.length > 0) {
-      const firstTime = props.candles[0]!.time;
-      const tfSec = TIMEFRAME_SECONDS[market.timeframe as keyof typeof TIMEFRAME_SECONDS] ?? 5;
-      // Logical index 0 = first candle, so time = firstTime + logicalX * tfSec
-      const logicalX = (x / containerRef.value!.clientWidth) * (lr.to - lr.from) + lr.from;
-      time = Math.floor(firstTime + Math.round(logicalX) * tfSec);
-    } else {
-      return;
-    }
-  }
-  let price = adapter.yToPrice(y);
-  if (price === null) {
-    const last = props.candles[props.candles.length - 1];
-    if (!last) return;
-    price = last.close;
-  }
+  const time = adapter.xToTime(x);
+  const price = adapter.yToPrice(y);
+  if (time === null || price === null) return;
 
   drawingState.value = { time1: time, price1: price, time2: time, price2: price };
+  const startX = e.clientX;
+  const startY = e.clientY;
+  recalcRects();
 
-  // Preview follows the mouse until second click
+  // Preview follows the mouse until the rectangle is finalized
   const move = (ev: MouseEvent) => {
     if (!drawingState.value || !adapter || !containerRef.value) return;
     const r = containerRef.value.getBoundingClientRect();
     const mx = ev.clientX - r.left;
     const my = ev.clientY - r.top;
-    let t = adapter.xToTime(mx);
-    if (t === null) {
-      const lr = adapter.getLogicalRange();
-      if (lr && props.candles.length > 0) {
-        const firstTime = props.candles[0]!.time;
-        const tfSec = TIMEFRAME_SECONDS[market.timeframe as keyof typeof TIMEFRAME_SECONDS] ?? 5;
-        const logicalX = (mx / r.width) * (lr.to - lr.from) + lr.from;
-        t = Math.floor(firstTime + Math.round(logicalX) * tfSec);
-      }
-    }
+    const t = adapter.xToTime(mx);
     const p = adapter.yToPrice(my);
     if (t !== null) drawingState.value.time2 = t;
     if (p !== null) drawingState.value.price2 = p;
     recalcRects();
   };
 
+  function stopMove(): void {
+    window.removeEventListener("mousemove", move);
+    if (onMouseMoveRef === move) onMouseMoveRef = null;
+  }
+
+  const up = (ev: MouseEvent) => {
+    window.removeEventListener("mouseup", up);
+    // Press-drag-release finalizes immediately. Click-move-click keeps the
+    // preview alive; the next left-press (capture handler) finalizes.
+    if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > 4) {
+      stopMove();
+      finalizeDraw();
+    }
+  };
+
   window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
   onMouseMoveRef = move;
+}
+
+/** Store the preview as a real drawing and switch back to the cursor tool. */
+function finalizeDraw(): void {
+  const d = drawingState.value;
+  drawingState.value = null;
+  if (onMouseMoveRef) {
+    window.removeEventListener("mousemove", onMouseMoveRef);
+    onMouseMoveRef = null;
+  }
+  if (d && (Math.abs(d.time2 - d.time1) >= 1 || Math.abs(d.price2 - d.price1) > 0)) {
+    drawingsStore.add(market.instrument, market.timeframe, {
+      time1: Math.min(d.time1, d.time2),
+      price1: Math.min(d.price1, d.price2),
+      time2: Math.max(d.time1, d.time2),
+      price2: Math.max(d.price1, d.price2),
+    });
+  }
+  drawingsStore.activeTool = "cursor";
+  recalcRects();
+}
+
+/** Abort an in-progress drawing (right-click, Escape, tool switch). */
+function cancelDraw(): void {
+  const had = drawingState.value !== null;
+  drawingState.value = null;
+  if (onMouseMoveRef) {
+    window.removeEventListener("mousemove", onMouseMoveRef);
+    onMouseMoveRef = null;
+  }
+  if (had) recalcRects();
 }
 
 let onMouseMoveRef: ((ev: MouseEvent) => void) | null = null;
 
 function onRectClick(id: string, e: MouseEvent): void {
   e.stopPropagation();
+  rectMenu.value = null;
+  closePalette();
   // Auto-switch to cursor when selecting
   if (drawingsStore.activeTool !== "cursor") {
     drawingsStore.activeTool = "cursor";
   }
   drawingsStore.selectedId = id;
   selectedRect.value = drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === id) ?? null;
+  recalcRects();
+  positionEditPanel(id);
+}
+
+/** Places the floating edit panel to the right of the given rectangle. */
+function positionEditPanel(id: string): void {
   const pixel = rectPixels.value.find((r) => r.id === id);
   if (pixel && containerRef.value) {
+    // Keep the panel inside the pane (panel ≈ 250px wide with the slider)
+    const maxX = containerRef.value.clientWidth - 260;
     editPanelPos.value = {
-      x: pixel.left + pixel.width + 8,
+      x: Math.min(pixel.left + pixel.width + 8, Math.max(4, maxX)),
       y: pixel.top,
     };
   }
+}
+
+/** Drag the whole rectangle to move it (TradingView-style body drag). */
+function onRectDragStart(e: MouseEvent, id: string): void {
+  if (e.button !== 0 || drawingsStore.activeTool !== "cursor") return;
+  if (!adapter || !containerRef.value) return;
+  const rect = drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === id);
+  if (!rect) return;
+  e.preventDefault();
+  e.stopPropagation();
+  rectMenu.value = null;
+  closePalette();
+
+  // EDGE GUARD: the resize handles are tiny (8px). A press aimed at a
+  // left/right handle that misses by a few pixels would otherwise land on the
+  // body and DRAG the whole rectangle to the cursor. If the rect is already
+  // selected and the press is within the edge zone, resize instead of move.
+  const rGuard = containerRef.value.getBoundingClientRect();
+  const px = e.clientX - rGuard.left;
+  const py = e.clientY - rGuard.top;
+  const pixel = rectPixels.value.find((r) => r.id === id);
+  if (pixel?.selected) {
+    const near = 9; // handle hit radius (8px handle + 1px slack)
+    const withinY = py >= pixel.top - near && py <= pixel.top + pixel.height + near;
+    if (withinY && Math.abs(px - pixel.left) <= near) {
+      onResizeStart(e, "w");
+      return;
+    }
+    if (withinY && Math.abs(px - (pixel.left + pixel.width)) <= near) {
+      onResizeStart(e, "e");
+      return;
+    }
+  }
+
+  // Select on press so the handles + edit panel appear immediately
+  drawingsStore.selectedId = id;
+  selectedRect.value = rect;
   recalcRects();
+  positionEditPanel(id);
+
+  const r0 = containerRef.value.getBoundingClientRect();
+  const startT = adapter.xToTime(e.clientX - r0.left);
+  const startP = adapter.yToPrice(e.clientY - r0.top);
+  if (startT === null || startP === null) return;
+  const orig = { time1: rect.time1, price1: rect.price1, time2: rect.time2, price2: rect.price2 };
+
+  const onMove = (ev: MouseEvent) => {
+    if (!adapter || !containerRef.value) return;
+    const r = containerRef.value.getBoundingClientRect();
+    const t = adapter.xToTime(ev.clientX - r.left);
+    const p = adapter.yToPrice(ev.clientY - r.top);
+    if (t === null || p === null) return;
+    const dt = t - startT;
+    const dp = p - startP;
+    drawingsStore.updateRect(market.instrument, market.timeframe, id, {
+      time1: orig.time1 + dt,
+      time2: orig.time2 + dt,
+      price1: orig.price1 + dp,
+      price2: orig.price2 + dp,
+    });
+    const updated = drawingsStore.getFor(market.instrument, market.timeframe).find((x) => x.id === id);
+    if (updated) selectedRect.value = updated;
+    recalcRects();
+    positionEditPanel(id);
+  };
+
+  const onUp = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
 }
 
 function onChartClick(): void {
+  if (rectMenu.value) rectMenu.value = null;
+  closePalette();
   if (drawingsStore.activeTool === "cursor" && drawingsStore.selectedId) {
     drawingsStore.selectedId = null;
     selectedRect.value = null;
@@ -418,12 +516,79 @@ function deleteSelected(): void {
   drawingsStore.remove(market.instrument, market.timeframe, selectedRect.value.id);
   selectedRect.value = null;
   editPanelPos.value = null;
+  rectMenu.value = null;
+  closePalette();
+  recalcRects();
+}
+
+/** Context-menu color change: works on the right-clicked rectangle. */
+function setColorInMenu(color: string): void {
+  const menu = rectMenu.value;
+  if (!menu) return;
+  drawingsStore.updateStyle(market.instrument, market.timeframe, menu.id, { color });
+  if (selectedRect.value?.id === menu.id) syncSelected();
+  else recalcRects();
+}
+
+function setOpacityInMenu(opacity: number): void {
+  const menu = rectMenu.value;
+  if (!menu) return;
+  drawingsStore.updateStyle(market.instrument, market.timeframe, menu.id, { opacity });
+  if (selectedRect.value?.id === menu.id) syncSelected();
+  else recalcRects();
+}
+
+/** Context-menu fill toggle (border-only ⇄ filled). */
+function toggleFillInMenu(): void {
+  const menu = rectMenu.value;
+  if (!menu) return;
+  const rect = drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === menu.id);
+  if (!rect) return;
+  drawingsStore.updateStyle(market.instrument, market.timeframe, menu.id, { filled: rect.filled === false });
+  if (selectedRect.value?.id === menu.id) syncSelected();
+  else recalcRects();
+}
+
+/** Context-menu delete. */
+function deleteFromMenu(): void {
+  const menu = rectMenu.value;
+  if (!menu) return;
+  drawingsStore.remove(market.instrument, market.timeframe, menu.id);
+  if (selectedRect.value?.id === menu.id) {
+    selectedRect.value = null;
+    editPanelPos.value = null;
+  }
+  rectMenu.value = null;
+  closePalette();
   recalcRects();
 }
 
 function setColorSelected(color: string): void {
   if (!selectedRect.value) return;
-  drawingsStore.updateColor(market.instrument, market.timeframe, selectedRect.value.id, color);
+  drawingsStore.updateStyle(market.instrument, market.timeframe, selectedRect.value.id, { color });
+  syncSelected();
+}
+
+function setOpacitySelected(opacity: number): void {
+  if (!selectedRect.value) return;
+  drawingsStore.updateStyle(market.instrument, market.timeframe, selectedRect.value.id, { opacity });
+  syncSelected();
+}
+
+/** Toggle background fill; border-only rects render at 100% opacity. */
+function toggleFillSelected(): void {
+  if (!selectedRect.value) return;
+  drawingsStore.updateStyle(market.instrument, market.timeframe, selectedRect.value.id, {
+    filled: selectedRect.value.filled === false,
+  });
+  syncSelected();
+}
+
+/** Re-read the selected rect from the store and refresh the overlay. */
+function syncSelected(): void {
+  if (!selectedRect.value) return;
+  const updated = drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === selectedRect.value!.id);
+  if (updated) selectedRect.value = updated;
   recalcRects();
 }
 
@@ -432,9 +597,21 @@ function onResizeStart(e: MouseEvent, handle: string): void {
   e.preventDefault();
   e.stopPropagation();
   const rect = { ...selectedRect.value };
-  const startX = e.clientX;
-  const startY = e.clientY;
-  const containerRect = containerRef.value.getBoundingClientRect();
+  rectMenu.value = null;
+
+  // Map the dragged SCREEN edge to the stored corner currently sitting on it.
+  // Corners can be un-ordered (after a flip mid-resize), so a fixed mapping
+  // like "e" → time2 would grab the wrong side and make the rect jump.
+  //   right edge = max(time1,time2), left = min; top = max(price1,price2)
+  //   (higher price = higher on screen), bottom = min.
+  const edgeTime =
+    handle.includes("e") ? (rect.time1 > rect.time2 ? "time1" : "time2")
+    : handle.includes("w") ? (rect.time1 > rect.time2 ? "time2" : "time1")
+    : null;
+  const edgePrice =
+    handle.includes("n") ? (rect.price1 > rect.price2 ? "price1" : "price2")
+    : handle.includes("s") ? (rect.price1 > rect.price2 ? "price2" : "price1")
+    : null;
 
   const onMove = (ev: MouseEvent) => {
     if (!adapter || !containerRef.value) return;
@@ -445,27 +622,17 @@ function onResizeStart(e: MouseEvent, handle: string): void {
     const p = adapter.yToPrice(my);
     if (t === null || p === null) return;
 
+    // Only the dragged edge moves; the opposite edge stays anchored.
     const newRect: Partial<DrawingRect> = {};
-    if (handle.includes("w")) newRect.time1 = t;
-    if (handle.includes("e")) newRect.time2 = t;
-    if (handle.includes("s")) newRect.price1 = p;
-    if (handle.includes("n")) newRect.price2 = p;
-    // For edge centers, only update one axis
-    if (handle === "n") newRect.price2 = p;
-    if (handle === "s") newRect.price1 = p;
-    if (handle === "w") newRect.time1 = t;
-    if (handle === "e") newRect.time2 = t;
+    if (edgeTime) newRect[edgeTime] = t;
+    if (edgePrice) newRect[edgePrice] = p;
 
     drawingsStore.updateRect(market.instrument, market.timeframe, rect.id, newRect);
     // Update selectedRect reference
     const updated = drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === rect.id);
     if (updated) selectedRect.value = updated;
     recalcRects();
-    // Update edit panel position
-    const pixel = rectPixels.value.find((r) => r.id === rect.id);
-    if (pixel && containerRef.value) {
-      editPanelPos.value = { x: pixel.left + pixel.width + 8, y: pixel.top };
-    }
+    positionEditPanel(rect.id);
   };
 
   const onUp = () => {
@@ -477,9 +644,7 @@ function onResizeStart(e: MouseEvent, handle: string): void {
   window.addEventListener("mouseup", onUp);
 }
 
-// Re-render rectangles when visible range changes (pan/zoom)
-// This is hooked into the existing visibleCb
-const _origVisibleCb = visibleCb;
+
 
 onMounted(async () => {
   await nextTick();
@@ -488,6 +653,9 @@ onMounted(async () => {
   adapter.setTheme(themeStore.theme === "dark");
   if (props.instrument) adapter.setInstrument(props.instrument);
   adapter.setData(props.candles);
+
+  // Debug/testing hook: lets E2E tests read the chart viewport precisely.
+  (window as unknown as Record<string, unknown>).__tkChartAdapter = adapter;
 
   visibleCb = (range) => {
     // Track the price marker + redraw rectangles on every pan/zoom
@@ -518,56 +686,81 @@ onMounted(async () => {
   interactionEl = el;
   interactCb = onInteract;
 
-  // Right-click: switch to cursor tool + deselect any selected rectangle + cancel in-progress drawing
-  const onRightClick = (e: MouseEvent) => {
+  // Rectangle drawing: intercept left-presses BEFORE Lightweight Charts sees
+  // them (capture phase) so the chart does not pan while the tool is active.
+  // In cursor mode this handler does nothing and the chart behaves normally.
+  const onChartMouseDown = (e: MouseEvent) => {
+    if (drawingsStore.activeTool !== "rectangle" || e.button !== 0) return;
     e.preventDefault();
-    if (drawingsStore.activeTool !== "cursor") {
-      drawingsStore.activeTool = "cursor";
-    }
-    if (drawingsStore.selectedId) {
-      drawingsStore.selectedId = null;
-      selectedRect.value = null;
-      editPanelPos.value = null;
-      recalcRects();
-    }
+    e.stopPropagation();
     if (drawingState.value) {
-      drawingState.value = null;
-      if (onMouseMoveRef) {
-        window.removeEventListener("mousemove", onMouseMoveRef);
-        onMouseMoveRef = null;
-      }
-      recalcRects();
+      finalizeDraw(); // second click of click -> move -> click
+    } else {
+      beginDraw(e);
     }
   };
-  document.addEventListener("contextmenu", onRightClick as AnyListener);
-  contextmenuEl = document;
-  contextmenuCb = onRightClick;
+  el.addEventListener("mousedown", onChartMouseDown as AnyListener, true);
+  chartMouseDownEl = el;
+  chartMouseDownCb = onChartMouseDown;
 
-  // Also right-click (mousedown button=2) for reliability
-  const onRightMouseDown = (e: MouseEvent) => {
-    if (e.button !== 2) return;
+  // Right-click ON THE CHART PANE: cancel in-progress drawing, deselect,
+  // back to cursor. Scoped to the pane so the browser context menu still
+  // works everywhere else in the app.
+  const paneEl = (el.closest(".chart-pane") as HTMLElement | null) ?? el;
+  const onPaneContextMenu = (e: MouseEvent) => {
     e.preventDefault();
-    if (drawingsStore.activeTool !== "cursor") {
-      drawingsStore.activeTool = "cursor";
+    e.stopPropagation();
+    // Right-click ON a rectangle → TradingView-style context menu for it
+    const target = e.target as HTMLElement | null;
+    const rectEl = target?.closest?.(".drawing-rect") as HTMLElement | null;
+    const rectId = rectEl?.getAttribute("data-rect-id") ?? null;
+    if (rectId) {
+      if (drawingsStore.activeTool !== "cursor") drawingsStore.activeTool = "cursor";
+      drawingsStore.selectedId = rectId;
+      selectedRect.value = drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === rectId) ?? null;
+      recalcRects();
+      positionEditPanel(rectId);
+      const paneRect = paneEl.getBoundingClientRect();
+      // Keep the menu inside the pane (menu ≈ 180×44 px)
+      const mx = Math.min(e.clientX - paneRect.left, paneRect.width - 190);
+      const my = Math.min(e.clientY - paneRect.top, paneRect.height - 56);
+      rectMenu.value = { id: rectId, x: Math.max(4, mx), y: Math.max(4, my) };
+      closePalette();
+      return;
     }
+    rectMenu.value = null;
+    closePalette();
+    if (drawingsStore.activeTool !== "cursor") drawingsStore.activeTool = "cursor";
+    cancelDraw();
     if (drawingsStore.selectedId) {
       drawingsStore.selectedId = null;
       selectedRect.value = null;
       editPanelPos.value = null;
       recalcRects();
     }
-    if (drawingState.value) {
-      drawingState.value = null;
-      if (onMouseMoveRef) {
-        window.removeEventListener("mousemove", onMouseMoveRef);
-        onMouseMoveRef = null;
+  };
+  paneEl.addEventListener("contextmenu", onPaneContextMenu as AnyListener);
+  paneCtxEl = paneEl;
+  paneCtxCb = onPaneContextMenu;
+
+  // Escape aborts an in-progress drawing; Delete removes the selected rectangle
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      cancelDraw();
+      rectMenu.value = null;
+      closePalette();
+    } else if (e.key === "Delete" || e.key === "Backspace") {
+      // Never hijack typing inside form fields
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (selectedRect.value) {
+        e.preventDefault();
+        deleteSelected();
       }
-      recalcRects();
     }
   };
-  document.addEventListener("mousedown", onRightMouseDown as AnyListener);
-  rightMouseEl = document;
-  rightMouseCb = onRightMouseDown;
+  window.addEventListener("keydown", onKey as AnyListener);
+  escCb = onKey;
 
   // Countdown text + position tick (position also updates on pan/zoom above)
   updateCountdown();
@@ -577,6 +770,15 @@ onMounted(async () => {
     if (!containerRef.value || !adapter) return;
     const { clientWidth, clientHeight } = containerRef.value;
     adapter.resize(clientWidth, clientHeight);
+    // Re-project rectangles & the badge onto the NEW coordinate mapping right
+    // away — otherwise they keep the old pixel geometry (and appear to slide
+    // around) until the next pan/zoom event lands. The rAF guarantees the
+    // library has finished its own re-layout before we read coordinates.
+    requestAnimationFrame(() => {
+      if (!adapter) return;
+      updateBadgePosition();
+      recalcRects();
+    });
   });
   ro.observe(containerRef.value);
 });
@@ -590,11 +792,14 @@ onBeforeUnmount(() => {
     interactionEl.removeEventListener("wheel", interactCb);
     interactionEl.removeEventListener("touchmove", interactCb);
   }
-  if (contextmenuEl && contextmenuCb) {
-    contextmenuEl.removeEventListener("contextmenu", contextmenuCb as AnyListener);
+  if (chartMouseDownEl && chartMouseDownCb) {
+    chartMouseDownEl.removeEventListener("mousedown", chartMouseDownCb as AnyListener, true);
   }
-  if (rightMouseEl && rightMouseCb) {
-    rightMouseEl.removeEventListener("mousedown", rightMouseCb as AnyListener);
+  if (paneCtxEl && paneCtxCb) {
+    paneCtxEl.removeEventListener("contextmenu", paneCtxCb as AnyListener);
+  }
+  if (escCb) {
+    window.removeEventListener("keydown", escCb as AnyListener);
   }
   if (onMouseMoveRef) {
     window.removeEventListener("mousemove", onMouseMoveRef);
@@ -643,21 +848,23 @@ onBeforeUnmount(() => {
       {{ countdown }}
     </div>
     <!-- Drawing rendering layer (always visible) -->
-    <div class="drawing-layer" @mousedown="onMouseDown">
+    <div class="drawing-layer" :class="{ 'drawing-mode': drawingsStore.activeTool === 'rectangle' }">
       <div
         v-for="rect in rectPixels"
         :key="rect.id"
         class="drawing-rect"
-        :class="{ selected: rect.selected }"
+        :class="{ selected: rect.selected, preview: rect.id === '__preview', 'border-only': rect.filled === false }"
+        :data-rect-id="rect.id === '__preview' ? null : rect.id"
         :style="{
           left: rect.left + 'px',
           top: rect.top + 'px',
           width: rect.width + 'px',
           height: rect.height + 'px',
-          backgroundColor: rect.color,
-          opacity: rect.opacity,
+          backgroundColor: rect.filled ? rect.color : 'transparent',
+          opacity: rect.filled ? rect.opacity : 1,
           borderColor: rect.color,
         }"
+        @mousedown.stop="onRectDragStart($event, rect.id)"
         @click.stop="onRectClick(rect.id, $event)"
       >
         <template v-if="rect.selected">
@@ -682,18 +889,116 @@ onBeforeUnmount(() => {
     >
       <div class="edit-colors">
         <button
-          v-for="c in drawingsStore.PRESET_COLORS"
+          v-for="c in drawingsStore.PRESET_COLORS.slice(0, 6)"
           :key="c"
           class="color-swatch"
           :class="{ active: selectedRect.color === c }"
           :style="{ backgroundColor: c }"
           @click="setColorSelected(c)"
         />
+        <div class="palette-anchor">
+          <button
+            class="color-more"
+            :class="{ active: paletteOpen === 'panel' }"
+            title="More colors"
+            @click.stop="togglePalette('panel')"
+          >＋</button>
+          <div v-if="paletteOpen === 'panel'" class="palette-pop" @click.stop>
+            <button
+              v-for="c in drawingsStore.PRESET_COLORS"
+              :key="c"
+              class="color-swatch"
+              :class="{ active: selectedRect.color === c }"
+              :style="{ backgroundColor: c }"
+              @click="setColorSelected(c); paletteOpen = null"
+            />
+          </div>
+        </div>
       </div>
+      <label class="opacity-row" title="Fill opacity">
+        <span class="opacity-icon">◻</span>
+        <input
+          type="range"
+          class="opacity-slider"
+          min="0"
+          max="100"
+          :value="Math.round((selectedRect.opacity ?? 0.3) * 100)"
+          @input="setOpacitySelected(Number(($event.target as HTMLInputElement).value) / 100)"
+        />
+        <span class="opacity-value">{{ Math.round((selectedRect.opacity ?? 0.3) * 100) }}%</span>
+      </label>
+      <button
+        class="edit-fill"
+        :class="{ off: selectedRect.filled === false }"
+        :title="selectedRect.filled === false ? 'Show background fill' : 'Border only (no fill)'"
+        @click="toggleFillSelected"
+      >{{ selectedRect.filled === false ? "▢" : "▨" }}</button>
       <button class="edit-delete" @click="deleteSelected" title="Delete rectangle">🗑</button>
     </div>
 
-    <div ref="containerRef" class="chart-container" />
+    <!-- TradingView-style right-click menu on a rectangle -->
+    <div
+      v-if="rectMenu"
+      class="rect-edit-panel rect-context-menu"
+      :style="{ left: rectMenu.x + 'px', top: rectMenu.y + 'px' }"
+      @click.stop
+      @contextmenu.prevent.stop
+    >
+      <div class="edit-colors">
+        <button
+          v-for="c in drawingsStore.PRESET_COLORS.slice(0, 6)"
+          :key="c"
+          class="color-swatch"
+          :class="{ active: selectedRect?.id === rectMenu.id && selectedRect.color === c }"
+          :style="{ backgroundColor: c }"
+          @click="setColorInMenu(c)"
+        />
+        <div class="palette-anchor">
+          <button
+            class="color-more"
+            :class="{ active: paletteOpen === 'menu' }"
+            title="More colors"
+            @click.stop="togglePalette('menu')"
+          >＋</button>
+          <div v-if="paletteOpen === 'menu'" class="palette-pop" @click.stop>
+            <button
+              v-for="c in drawingsStore.PRESET_COLORS"
+              :key="c"
+              class="color-swatch"
+              :class="{ active: menuRectColor === c }"
+              :style="{ backgroundColor: c }"
+              @click="setColorInMenu(c); paletteOpen = null"
+            />
+          </div>
+        </div>
+      </div>
+      <label class="opacity-row" title="Fill opacity">
+        <span class="opacity-icon">◻</span>
+        <input
+          type="range"
+          class="opacity-slider"
+          min="0"
+          max="100"
+          :value="Math.round(menuRectOpacity * 100)"
+          @input="setOpacityInMenu(Number(($event.target as HTMLInputElement).value) / 100)"
+        />
+        <span class="opacity-value">{{ Math.round(menuRectOpacity * 100) }}%</span>
+      </label>
+      <button
+        class="edit-fill"
+        :class="{ off: !menuRectFilled }"
+        :title="menuRectFilled ? 'Border only (no fill)' : 'Show background fill'"
+        @click="toggleFillInMenu"
+      >{{ menuRectFilled ? "▨" : "▢" }}</button>
+      <button class="edit-delete" @click="deleteFromMenu" title="Delete rectangle">🗑</button>
+    </div>
+
+    <div
+      ref="containerRef"
+      class="chart-container"
+      :class="{ 'rect-mode': drawingsStore.activeTool === 'rectangle' }"
+      @click="onChartClick"
+    />
   </div>
 </template>
 
@@ -720,7 +1025,7 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 10px;
   left: 14px;
-  z-index: 2;
+  z-index: 6; /* above rectangles so drawings never cover the symbol label */
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -756,7 +1061,7 @@ onBeforeUnmount(() => {
   top: 14px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 3;
+  z-index: 5; /* above the drawing layer (3) */
   background: var(--bg-panel);
   border: 1px solid var(--border);
   color: var(--text);
@@ -856,7 +1161,7 @@ onBeforeUnmount(() => {
 .axis-tag {
   position: absolute;
   right: 0;
-  z-index: 3;
+  z-index: 5; /* above the drawing layer (3) so rects never cover the countdown */
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -882,11 +1187,27 @@ onBeforeUnmount(() => {
 .drawing-layer {
   position: absolute;
   inset: 0;
-  z-index: 2;
-  pointer-events: auto;
+  /* Must be ABOVE the chart canvases: LWC paints its canvas with
+     position:absolute + z-index:2 inside .chart-container, and because
+     .chart-container comes later in the DOM, an equal z-index would put the
+     canvas on top and swallow every click aimed at a rectangle. */
+  z-index: 3;
+  /* Transparent to pointer events so the chart keeps pan / zoom / crosshair /
+     right-click. Only the rectangles themselves capture the pointer. */
+  pointer-events: none;
 }
 .drawing-layer:has(.drawing-rect:hover) {
   cursor: pointer;
+}
+/* While the rectangle tool is active, existing rectangles must not swallow
+   the press, and the live preview is never interactive. */
+.drawing-layer.drawing-mode .drawing-rect,
+.drawing-rect.preview {
+  pointer-events: none;
+}
+.chart-container.rect-mode,
+.chart-container.rect-mode * {
+  cursor: crosshair;
 }
 .drawing-rect {
   position: absolute;
@@ -903,6 +1224,15 @@ onBeforeUnmount(() => {
   border-width: 2px;
   box-shadow: 0 0 0 2px rgba(41, 98, 255, 0.5);
 }
+/* Border-only mode: ~1.5× border thickness. 2.25px would be snapped to 2px
+   by the browser, so 2.5px is used to keep the step visible (3px selected). */
+.drawing-rect.border-only {
+  border-width: 2.5px;
+}
+.drawing-rect.border-only.selected {
+  border-width: 3px;
+  box-shadow: 0 0 0 1px rgba(41, 98, 255, 0.5);
+}
 .resize-handle {
   position: absolute;
   width: 8px;
@@ -911,6 +1241,12 @@ onBeforeUnmount(() => {
   border: 1px solid #2962ff;
   border-radius: 2px;
   pointer-events: auto;
+}
+/* Invisible halo that doubles the grab area of each handle so aiming is easy */
+.resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: -5px;
 }
 .resize-handle.nw {
   left: -4px;
@@ -1006,5 +1342,91 @@ onBeforeUnmount(() => {
 .edit-delete:hover {
   background: rgba(239, 83, 80, 0.12);
   color: #ef5350;
+}
+.rect-context-menu {
+  z-index: 30; /* above the edit panel (20) and rectangles (2) */
+}
+/* "More colors" chip + toggleable palette popup */
+.palette-anchor {
+  position: relative;
+  display: inline-flex;
+}
+.color-more {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  transition: all 120ms;
+}
+.color-more:hover,
+.color-more.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.palette-pop {
+  position: absolute;
+  top: 24px;
+  left: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(4, 18px);
+  gap: 5px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+/* Opacity slider row */
+.opacity-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: default;
+}
+.opacity-icon {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.opacity-slider {
+  width: 64px;
+  height: 3px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.opacity-value {
+  font-size: 10px;
+  color: var(--text-muted);
+  min-width: 26px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* Fill on/off toggle */
+.edit-fill {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  border-radius: 4px;
+  transition: all 120ms;
+}
+.edit-fill:hover {
+  background: var(--btn-bg);
+}
+.edit-fill.off {
+  color: var(--text-muted);
 }
 </style>

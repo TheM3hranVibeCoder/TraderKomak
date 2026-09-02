@@ -33,6 +33,8 @@ export interface ChartAdapter {
   getPriceLabelHeight(): number;
   /** Converts a UNIX timestamp (seconds) to an x-pixel on the chart. */
   timeToX(time: number): number | null;
+  /** Converts a logical bar index to an x-pixel (works in the margins too). */
+  logicalToX(logical: number): number | null;
   /** Converts an x-pixel on the chart back to a UNIX timestamp (seconds). */
   xToTime(x: number): number | null;
   /** Converts a y-pixel on the chart back to a price. */
@@ -153,6 +155,15 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     for (const cb of rangeCbs) cb(r);
   });
 
+  /** Seconds per bar, inferred from the data grid (time-grid charts). */
+  function barSeconds(): number {
+    if (lastData.length >= 2) {
+      const d = lastData[lastData.length - 1]!.time - lastData[lastData.length - 2]!.time;
+      if (d > 0) return d;
+    }
+    return 5;
+  }
+
   return {
     setData(candles: Candle[]): void {
       // Capture the user's viewport BEFORE replacing data so it survives
@@ -161,6 +172,7 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
         | { from: number; to: number }
         | null;
       const prevLen = lastData.length;
+      const prevFirstTime = lastData.length ? lastData[0]!.time : null;
 
       lastData = [...candles].sort((a, b) => a.time - b.time);
       if (lastData.length === 0) {
@@ -170,13 +182,28 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       series.setData(lastData.map(toLW));
 
       if (hadDataOnce && prevRange && prevLen > 0) {
-        // Preserve the exact viewport, shifted by however many bars were
-        // added/removed at either end (closes, appends, lazy preloads…).
-        const delta = lastData.length - prevLen;
-        chart.timeScale().setVisibleLogicalRange({
-          from: prevRange.from + delta,
-          to: prevRange.to + delta,
-        });
+        // Logical indices only shift when bars were added/removed at the
+        // FRONT (lazy-load preloads). Appends at the END (candle closes,
+        // snapshot catch-up) do NOT move existing indices — correcting by
+        // the length delta there dragged the viewport toward the live edge
+        // on every snapshot that landed at a candle close.
+        const newFirstTime = lastData[0]!.time;
+        let indexShift = 0;
+        if (prevFirstTime !== null && newFirstTime !== prevFirstTime) {
+          const barSec =
+            lastData.length >= 2
+              ? lastData[lastData.length - 1]!.time - lastData[lastData.length - 2]!.time
+              : 60;
+          if (barSec > 0) {
+            indexShift = Math.round((prevFirstTime - newFirstTime) / barSec);
+          }
+        }
+        if (indexShift !== 0) {
+          chart.timeScale().setVisibleLogicalRange({
+            from: prevRange.from + indexShift,
+            to: prevRange.to + indexShift,
+          });
+        }
       } else {
         // Fresh mount / symbol / timeframe switch: reset price auto-scale
         // (vertical drags disable it and would freeze the OLD symbol's
@@ -257,6 +284,25 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     timeToX(time: number): number | null {
       try {
         const x = chart.timeScale().timeToCoordinate(time as never);
+        if (typeof x === "number" && Number.isFinite(x)) return x;
+      } catch {
+        /* fall through to logical extrapolation */
+      }
+      // timeToCoordinate returns null for times that are not on a data bar
+      // (left/right margins). Extrapolate via the bar grid so drawings in the
+      // margin still render.
+      if (lastData.length === 0) return null;
+      try {
+        const logical = (time - lastData[0]!.time) / barSeconds();
+        const x = chart.timeScale().logicalToCoordinate(logical as never);
+        return typeof x === "number" && Number.isFinite(x) ? x : null;
+      } catch {
+        return null;
+      }
+    },
+    logicalToX(logical: number): number | null {
+      try {
+        const x = chart.timeScale().logicalToCoordinate(logical as never);
         return typeof x === "number" && Number.isFinite(x) ? x : null;
       } catch {
         return null;
@@ -265,8 +311,17 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     xToTime(x: number): number | null {
       try {
         const t = chart.timeScale().coordinateToTime(x as never);
-        if (t === null || t === undefined) return null;
-        return typeof t === "number" ? t : null;
+        if (typeof t === "number") return t;
+      } catch {
+        /* fall through to logical extrapolation */
+      }
+      // coordinateToTime returns null outside the data range — use the logical
+      // index grid instead so the margins stay drawable.
+      if (lastData.length === 0) return null;
+      try {
+        const logical = chart.timeScale().coordinateToLogical(x as never);
+        if (logical === null || logical === undefined) return null;
+        return Math.round(lastData[0]!.time + Number(logical) * barSeconds());
       } catch {
         return null;
       }

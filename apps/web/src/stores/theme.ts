@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
-import { TIMEFRAME_SECONDS } from "@traderkomak/shared";
+import { TIMEFRAMES, TIMEFRAME_SECONDS } from "@traderkomak/shared";
 
 export type Theme = "dark" | "light";
 
@@ -17,8 +17,9 @@ function getInitialTheme(): Theme {
 
 export const useThemeStore = defineStore("theme", () => {
   const theme = ref<Theme>(getInitialTheme());
+  // Default: every timeframe is favorited (star on) until the user customizes.
   const favTimeframes = ref<string[]>( (() => {
-    let initial: string[] = ["5s", "1m"];
+    let initial: string[] = [...TIMEFRAMES];
     try {
       const raw = localStorage.getItem(FAV_KEY);
       if (raw) {

@@ -3,7 +3,7 @@ import { ref, watch } from "vue";
 import { SEARCHABLE_INSTRUMENTS, displayInstrument, normalizeInstrument } from "@traderkomak/shared";
 
 const STORAGE_KEY = "tk-watchlist";
-const DEFAULT_WATCH = ["EUR_USD", "GBP_USD", "XAU_USD", "USD_JPY"];
+const DEFAULT_WATCH = ["XAU_USD", "XAG_USD", "BTC_USD", "ETH_USD", "EUR_USD", "GBP_USD"];
 
 function loadWatch(): string[] {
   try {
