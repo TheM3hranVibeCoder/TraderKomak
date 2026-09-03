@@ -131,6 +131,13 @@ let dataCb: (() => void) | null = null;
 let lazyThrottled = false;
 let interactionEl: HTMLElement | null = null;
 let interactCb: (() => void) | null = null;
+/** Per-frame overlay re-projection (see recalcFrame). */
+let recalcRaf = 0;
+let recalcDeadline = 0;
+let pointerHeld = false;
+let pointerDownEl: HTMLElement | null = null;
+let pointerDownCb: (() => void) | null = null;
+let pointerUpCb: (() => void) | null = null;
 let chartMouseDownEl: HTMLElement | null = null;
 let chartMouseDownCb: ((e: MouseEvent) => void) | null = null;
 let paneCtxEl: HTMLElement | null = null;
@@ -297,6 +304,27 @@ function recalcRects(): void {
   const rects = drawingsStore.getFor(market.instrument);
   const out: RectPixel[] = [];
 
+  // A rect spanning seconds stays a 1-2px dot on coarse timeframes — enforce
+  // a minimum on-screen size (center-anchored, display-only) so drawings
+  // remain grabbable and visible on every timeframe.
+  const MIN_RECT_W = 8;
+  const MIN_RECT_H = 8;
+  const project = (x1: number, y1: number, x2: number, y2: number) => {
+    let left = Math.min(x1, x2);
+    let top = Math.min(y1, y2);
+    let width = Math.abs(x2 - x1);
+    let height = Math.abs(y2 - y1);
+    if (width < MIN_RECT_W) {
+      left -= (MIN_RECT_W - width) / 2;
+      width = MIN_RECT_W;
+    }
+    if (height < MIN_RECT_H) {
+      top -= (MIN_RECT_H - height) / 2;
+      height = MIN_RECT_H;
+    }
+    return { left, top, width, height };
+  };
+
   for (const rect of rects) {
     const x1 = adapter.timeToX(rect.time1);
     const y1 = adapter.getPriceY(rect.price1);
@@ -305,10 +333,7 @@ function recalcRects(): void {
     if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
     out.push({
       id: rect.id,
-      left: Math.min(x1, x2),
-      top: Math.min(y1, y2),
-      width: Math.abs(x2 - x1),
-      height: Math.abs(y2 - y1),
+      ...project(x1, y1, x2, y2),
       color: rect.color,
       opacity: rect.opacity,
       filled: rect.filled !== false,
@@ -325,10 +350,7 @@ function recalcRects(): void {
     if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
       out.push({
         id: "__preview",
-        left: Math.min(x1, x2),
-        top: Math.min(y1, y2),
-        width: Math.abs(x2 - x1),
-        height: Math.abs(y2 - y1),
+        ...project(x1, y1, x2, y2),
         color: "#2962ff",
         opacity: 0.15,
         filled: true,
@@ -343,6 +365,27 @@ function recalcRects(): void {
   // chart resizes (watchlist toggle, window resize) — the rectangle's pixels
   // changed under it, so the panel would otherwise sit at stale coordinates.
   if (selectedRect.value && editPanelPos.value) positionEditPanel(selectedRect.value.id);
+}
+
+/**
+ * Re-projects overlays on every animation frame while the pointer is held
+ * (pan drag, price-axis scale drag) or for a short settle window after data
+ * changes — the canvas re-renders on rAF, so event-driven re-projection
+ * alone trails the render by a frame and drawings visibly lag the chart
+ * during price-scale refits and timeframe switches.
+ */
+function recalcFrame(): void {
+  recalcRaf = 0;
+  updateBadgePosition();
+  recalcRects();
+  if (pointerHeld || performance.now() < recalcDeadline) {
+    recalcRaf = requestAnimationFrame(recalcFrame);
+  }
+}
+
+function extendRecalcFrames(ms: number): void {
+  recalcDeadline = Math.max(recalcDeadline, performance.now() + ms);
+  if (!recalcRaf) recalcRaf = requestAnimationFrame(recalcFrame);
 }
 
 /** Begin a rectangle: corner 1 at the pointer, preview follows the mouse. */
@@ -728,6 +771,7 @@ onMounted(async () => {
   dataCb = () => {
     updateBadgePosition();
     recalcRects();
+    extendRecalcFrames(120);
   };
   adapter.subscribeDataChanged(dataCb);
 
@@ -737,6 +781,7 @@ onMounted(async () => {
   const onInteract = () => {
     updateBadgePosition();
     recalcRects();
+    extendRecalcFrames(250);
   };
   el.addEventListener("pointermove", onInteract, { passive: true });
   el.addEventListener("pointerdown", onInteract, { passive: true });
@@ -744,6 +789,23 @@ onMounted(async () => {
   el.addEventListener("touchmove", onInteract, { passive: true });
   interactionEl = el;
   interactCb = onInteract;
+
+  // While any button is held over the chart (pan drag, price-axis scale
+  // drag), re-project overlays EVERY frame so they stay glued to the canvas
+  // render instead of trailing it by a frame on coarse timeframes.
+  const onPointerDown = () => {
+    pointerHeld = true;
+    extendRecalcFrames(300);
+  };
+  const onPointerUp = () => {
+    pointerHeld = false;
+    extendRecalcFrames(200);
+  };
+  el.addEventListener("pointerdown", onPointerDown, { passive: true });
+  window.addEventListener("pointerup", onPointerUp, { passive: true });
+  pointerDownEl = el;
+  pointerDownCb = onPointerDown;
+  pointerUpCb = onPointerUp;
 
   // Rectangle drawing: intercept left-presses BEFORE Lightweight Charts sees
   // them (capture phase) so the chart does not pan while the tool is active.
@@ -844,6 +906,7 @@ onMounted(async () => {
       if (!adapter) return;
       updateBadgePosition();
       recalcRects();
+      extendRecalcFrames(300);
     });
   });
   ro.observe(containerRef.value);
@@ -861,6 +924,13 @@ onBeforeUnmount(() => {
   }
   if (chartMouseDownEl && chartMouseDownCb) {
     chartMouseDownEl.removeEventListener("mousedown", chartMouseDownCb as AnyListener, true);
+  }
+  if (recalcRaf) cancelAnimationFrame(recalcRaf);
+  if (pointerDownEl && pointerDownCb) {
+    pointerDownEl.removeEventListener("pointerdown", pointerDownCb);
+  }
+  if (pointerUpCb) {
+    window.removeEventListener("pointerup", pointerUpCb);
   }
   if (paneCtxEl && paneCtxCb) {
     paneCtxEl.removeEventListener("contextmenu", paneCtxCb as AnyListener);
