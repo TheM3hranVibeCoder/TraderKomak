@@ -108,7 +108,9 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
 
   const chart: IChartApi = createChart(container, {
     layout: {
-      background: { type: ColorType.VerticalGradient, topColor: colors.bgTop, bottomColor: colors.bgBottom },
+      // The pane gradient is painted in CSS (behind the canvas) so the
+      // drawing layer can render between the background and the candles.
+      background: { type: ColorType.Solid, color: "transparent" },
       textColor: colors.text,
     },
     grid: {
@@ -342,7 +344,7 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     setTheme(isDark: boolean): void {
       const c = themeColors(isDark);
       chart.applyOptions({
-        layout: { background: { type: ColorType.VerticalGradient, topColor: c.bgTop, bottomColor: c.bgBottom }, textColor: c.text },
+        layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: c.text },
         grid: { vertLines: { visible: false }, horzLines: { visible: false } },
         rightPriceScale: { borderColor: c.border },
         timeScale: { borderColor: c.border },

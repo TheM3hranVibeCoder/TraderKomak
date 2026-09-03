@@ -244,6 +244,9 @@ interface RectPixel {
 }
 
 const rectPixels = ref<RectPixel[]>([]);
+/** rectPixels minus the live preview — the interaction layer hit-tests only
+ *  real (stored) rectangles. */
+const hitRects = computed(() => rectPixels.value.filter((r) => r.id !== "__preview"));
 const drawingState = ref<{ time1: number; price1: number; time2: number; price2: number } | null>(null);
 const drawingPreview = ref<RectPixel | null>(null);
 const selectedRect = ref<DrawingRect | null>(null);
@@ -304,26 +307,12 @@ function recalcRects(): void {
   const rects = drawingsStore.getFor(market.instrument);
   const out: RectPixel[] = [];
 
-  // A rect spanning seconds stays a 1-2px dot on coarse timeframes — enforce
-  // a minimum on-screen size (center-anchored, display-only) so drawings
-  // remain grabbable and visible on every timeframe.
-  const MIN_RECT_W = 8;
-  const MIN_RECT_H = 8;
-  const project = (x1: number, y1: number, x2: number, y2: number) => {
-    let left = Math.min(x1, x2);
-    let top = Math.min(y1, y2);
-    let width = Math.abs(x2 - x1);
-    let height = Math.abs(y2 - y1);
-    if (width < MIN_RECT_W) {
-      left -= (MIN_RECT_W - width) / 2;
-      width = MIN_RECT_W;
-    }
-    if (height < MIN_RECT_H) {
-      top -= (MIN_RECT_H - height) / 2;
-      height = MIN_RECT_H;
-    }
-    return { left, top, width, height };
-  };
+  const project = (x1: number, y1: number, x2: number, y2: number) => ({
+    left: Math.min(x1, x2),
+    top: Math.min(y1, y2),
+    width: Math.max(1, Math.abs(x2 - x1)),
+    height: Math.max(1, Math.abs(y2 - y1)),
+  });
 
   for (const rect of rects) {
     const x1 = adapter.timeToX(rect.time1);
@@ -833,7 +822,7 @@ onMounted(async () => {
     e.stopPropagation();
     // Right-click ON a rectangle → TradingView-style context menu for it
     const target = e.target as HTMLElement | null;
-    const rectEl = target?.closest?.(".drawing-rect") as HTMLElement | null;
+    const rectEl = target?.closest?.(".drawing-hit-rect") as HTMLElement | null;
     const rectId = rectEl?.getAttribute("data-rect-id") ?? null;
     if (rectId) {
       if (drawingsStore.activeTool !== "cursor") drawingsStore.activeTool = "cursor";
@@ -988,14 +977,15 @@ onBeforeUnmount(() => {
     >
       {{ countdown }}
     </div>
-    <!-- Drawing rendering layer (always visible) -->
+    <!-- Visible drawing layer: z-ordered BEHIND the candle painting, so a
+         small rectangle drawn on a low timeframe never covers candle bodies
+         on coarser timeframes (TradingView-style). Non-interactive. -->
     <div class="drawing-layer" :class="{ 'drawing-mode': drawingsStore.activeTool === 'rectangle' }">
       <div
         v-for="rect in rectPixels"
         :key="rect.id"
         class="drawing-rect"
-        :class="{ selected: rect.selected, preview: rect.id === '__preview', 'border-only': rect.filled === false }"
-        :data-rect-id="rect.id === '__preview' ? null : rect.id"
+        :class="{ preview: rect.id === '__preview', 'border-only': rect.filled === false }"
         :style="{
           left: rect.left + 'px',
           top: rect.top + 'px',
@@ -1004,6 +994,26 @@ onBeforeUnmount(() => {
           backgroundColor: rect.filled ? rect.color : 'transparent',
           opacity: rect.filled ? rect.opacity : 1,
           borderColor: rect.color,
+        }"
+      ></div>
+    </div>
+
+    <!-- Interaction layer: invisible duplicates of the same geometry sitting
+         ABOVE the candles, carrying hit-testing, the selection handles and
+         the context-menu target — so a behind-the-candles rectangle stays
+         selectable and resizable. -->
+    <div class="drawing-hit-layer" :class="{ 'drawing-mode': drawingsStore.activeTool === 'rectangle' }">
+      <div
+        v-for="rect in hitRects"
+        :key="rect.id"
+        class="drawing-hit-rect"
+        :class="{ selected: rect.selected }"
+        :data-rect-id="rect.id === '__preview' ? null : rect.id"
+        :style="{
+          left: rect.left + 'px',
+          top: rect.top + 'px',
+          width: rect.width + 'px',
+          height: rect.height + 'px',
         }"
         @mousedown.stop="onRectDragStart($event, rect.id)"
         @click.stop="onRectClick(rect.id, $event)"
@@ -1218,7 +1228,9 @@ onBeforeUnmount(() => {
   position: relative;
   flex: 1;
   min-height: 0;
-  background: var(--chart-bg);
+  /* Gradient painted in CSS (not by the charting canvas) so the drawing
+     layer can sit between this background and the candle canvas */
+  background: var(--chart-bg-gradient);
   display: flex;
   flex-direction: column;
   border-radius: 12px;
@@ -1395,25 +1407,31 @@ onBeforeUnmount(() => {
 }
 
 /* ── Drawing overlay ─────────────────────────────────────────────────── */
+/* Two stacked layers over the chart:
+ *   .drawing-layer     — visible rectangles, z-ordered BEHIND the candle
+ *                        painting (LWC's series canvas sits at z-index 1,
+ *                        crosshair at 2), so a small rectangle drawn on a
+ *                        low timeframe hides behind candle bodies on
+ *                        coarser ones instead of covering them.
+ *   .drawing-hit-layer — invisible duplicates ABOVE the candles carrying
+ *                        all hit-testing (select / drag / resize handles).
+ * The whole visible layer is pointer-transparent; only the hit rects
+ * capture the pointer. */
 .drawing-layer {
   position: absolute;
   inset: 0;
-  /* Must be ABOVE the chart canvases: LWC paints its canvas with
-     position:absolute + z-index:2 inside .chart-container, and because
-     .chart-container comes later in the DOM, an equal z-index would put the
-     canvas on top and swallow every click aimed at a rectangle. */
-  z-index: 3;
-  /* Transparent to pointer events so the chart keeps pan / zoom / crosshair /
-     right-click. Only the rectangles themselves capture the pointer. */
+  z-index: 0;
   pointer-events: none;
 }
-.drawing-layer:has(.drawing-rect:hover) {
-  cursor: pointer;
+.drawing-hit-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
 }
 /* While the rectangle tool is active, existing rectangles must not swallow
    the press, and the live preview is never interactive. */
-.drawing-layer.drawing-mode .drawing-rect,
-.drawing-rect.preview {
+.drawing-hit-layer.drawing-mode .drawing-hit-rect {
   pointer-events: none;
 }
 .chart-container.rect-mode,
@@ -1424,9 +1442,18 @@ onBeforeUnmount(() => {
   position: absolute;
   border: 1.5px solid;
   border-radius: 2px;
+  pointer-events: none;
+  transition: box-shadow 150ms;
+}
+.drawing-hit-rect {
+  position: absolute;
   pointer-events: auto;
   cursor: pointer;
-  transition: box-shadow 150ms;
+}
+.drawing-hit-rect.selected {
+  cursor: move;
+  outline: 1px dashed rgba(41, 98, 255, 0.7);
+  outline-offset: 2px;
 }
 .drawing-rect:hover {
   box-shadow: 0 0 0 1px rgba(41, 98, 255, 0.4);

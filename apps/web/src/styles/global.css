@@ -24,6 +24,8 @@
   --btn-hover: rgba(255, 255, 255, 0.1);
   --chart-bg: #131722;
   --chart-grid: #1e222d;
+  /* Painted in CSS so the drawing layer can sit between it and the candles */
+  --chart-bg-gradient: linear-gradient(180deg, #1e1b4b 0%, #0f172a 100%);
   --bg-watchlist: linear-gradient(180deg, #171e38 0%, #131a30 35%, #1b1836 70%, #12172b 100%);
 }
 
@@ -53,6 +55,7 @@
   --btn-hover: rgba(15, 23, 42, 0.1);
   --chart-bg: #ffffff;
   --chart-grid: #f1f5f9;
+  --chart-bg-gradient: linear-gradient(180deg, #e0e7ff 0%, #fef3f8 100%);
   --bg-watchlist: linear-gradient(180deg, #eef2ff 0%, #f7f8ff 35%, #fdf4fa 70%, #eef4ff 100%);
 }
 
