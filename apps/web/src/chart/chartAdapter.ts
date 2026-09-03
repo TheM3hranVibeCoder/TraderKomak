@@ -350,7 +350,8 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     },
     setInstrument(instrument: string): void {
       const prec = instrumentPrecision(instrument);
-      const minMove = prec === 3 ? 0.001 : prec === 2 ? 0.01 : 0.00001;
+      // Smallest displayable increment always matches the precision
+      const minMove = Math.pow(10, -prec);
       series.applyOptions({
         priceFormat: { type: "price", precision: prec, minMove },
       });

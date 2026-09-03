@@ -66,6 +66,12 @@ const JPY_QUOTE = new Set(["USD_JPY", "EUR_JPY", "GBP_JPY", "AUD_JPY"]);
 const METAL = new Set(["XAU_USD", "XAG_USD"]);
 const CRYPTO_MAJOR = new Set(["BTCUSDT", "ETHUSDT", "BNBUSDT"]);
 const CRYPTO_MINOR = new Set(["SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT"]);
+/** Explicit display precision for OANDA crypto pairs (user-facing request):
+ *  BTC 1 decimal, ETH 2 decimals. */
+const OANDA_CRYPTO_PRECISION: Record<string, number> = {
+  BTC_USD: 1,
+  ETH_USD: 2,
+};
 
 /** Human-friendly display: EUR_USD → "EUR/USD", BTCUSDT → "BTC/USDT". */
 export function displayInstrument(instrument: string): string {
@@ -85,11 +91,14 @@ export function displayInstrument(instrument: string): string {
 
 /**
  * Price-display precision:
- * - JPY quotes: 3 · metals: 2 · crypto majors (BTC/ETH/BNB): 2
+ * - OANDA crypto pairs: BTC 1 · ETH 2 (explicit overrides)
+ * - JPY quotes: 3 · metals: 2 · crypto majors (BTC/ETH/BNB on Binance): 2
  * - smaller caps (SOL/XRP/ADA/DOGE): 4 · everything else: 5
  */
 export function instrumentPrecision(instrument: string): number {
   const norm = normalizeInstrument(instrument);
+  const override = OANDA_CRYPTO_PRECISION[norm];
+  if (override !== undefined) return override;
   if (JPY_QUOTE.has(norm)) return 3;
   if (METAL.has(norm)) return 2;
   if (CRYPTO_MAJOR.has(norm)) return 2;
