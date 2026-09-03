@@ -7,3 +7,6 @@ coverage/
 .env.*
 !.env.example
 *.tsbuildinfo
+
+# Candle history persistence (market-server)
+.data/

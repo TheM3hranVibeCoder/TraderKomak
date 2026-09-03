@@ -127,6 +127,7 @@ watch(
 );
 
 let visibleCb: ((range: { from: number; to: number } | null) => void) | null = null;
+let dataCb: (() => void) | null = null;
 let lazyThrottled = false;
 let interactionEl: HTMLElement | null = null;
 let interactCb: (() => void) | null = null;
@@ -135,6 +136,7 @@ let chartMouseDownCb: ((e: MouseEvent) => void) | null = null;
 let paneCtxEl: HTMLElement | null = null;
 let paneCtxCb: ((e: MouseEvent) => void) | null = null;
 let escCb: ((e: KeyboardEvent) => void) | null = null;
+let windowLostCb: (() => void) | null = null;
 // addEventListener requires EventListener, not a specific MouseEvent handler
 type AnyListener = EventListener;
 const countdown = ref("");
@@ -239,10 +241,29 @@ const drawingState = ref<{ time1: number; price1: number; time2: number; price2:
 const drawingPreview = ref<RectPixel | null>(null);
 const selectedRect = ref<DrawingRect | null>(null);
 const editPanelPos = ref<{ x: number; y: number } | null>(null);
+const editPanelEl = ref<HTMLElement | null>(null);
+const editMenuEl = ref<HTMLElement | null>(null);
 /** TradingView-style right-click menu: { id, x, y } relative to the chart pane. */
 const rectMenu = ref<{ id: string; x: number; y: number } | null>(null);
 /** Which color palette popup is open (edit panel / context menu / none). */
 const paletteOpen = ref<null | "panel" | "menu">(null);
+/* Rendered floating-panel size fallback (the real box is measured once
+   mounted; keep these close to the measured 365×40 so the very first paint
+   of a freshly opened panel lands within a few px of its final spot). */
+const PANEL_W = 366;
+const PANEL_H = 40;
+
+/** Keeps a floating panel fully inside the chart pane, both axes. */
+function clampToPane(x: number, y: number, el: HTMLElement | null): { x: number; y: number } {
+  const pane = containerRef.value;
+  if (!pane) return { x, y };
+  const w = el?.offsetWidth || PANEL_W;
+  const h = el?.offsetHeight || PANEL_H;
+  return {
+    x: Math.min(Math.max(4, x), Math.max(4, pane.clientWidth - w - 6)),
+    y: Math.min(Math.max(4, y), Math.max(4, pane.clientHeight - h - 6)),
+  };
+}
 
 function togglePalette(which: "panel" | "menu"): void {
   paletteOpen.value = paletteOpen.value === which ? null : which;
@@ -254,17 +275,17 @@ function closePalette(): void {
 const menuRectColor = computed(() => {
   const m = rectMenu.value;
   if (!m) return "#2962ff";
-  return drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === m.id)?.color ?? "#2962ff";
+  return drawingsStore.getFor(market.instrument).find((r) => r.id === m.id)?.color ?? "#2962ff";
 });
 const menuRectOpacity = computed(() => {
   const m = rectMenu.value;
   if (!m) return 0.3;
-  return drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === m.id)?.opacity ?? 0.3;
+  return drawingsStore.getFor(market.instrument).find((r) => r.id === m.id)?.opacity ?? 0.3;
 });
 const menuRectFilled = computed(() => {
   const m = rectMenu.value;
   if (!m) return true;
-  return drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === m.id)?.filled !== false;
+  return drawingsStore.getFor(market.instrument).find((r) => r.id === m.id)?.filled !== false;
 });
 const renderTick = ref(0);
 
@@ -273,7 +294,7 @@ function recalcRects(): void {
     rectPixels.value = [];
     return;
   }
-  const rects = drawingsStore.getFor(market.instrument, market.timeframe);
+  const rects = drawingsStore.getFor(market.instrument);
   const out: RectPixel[] = [];
 
   for (const rect of rects) {
@@ -317,6 +338,11 @@ function recalcRects(): void {
   }
 
   rectPixels.value = out;
+
+  // Keep the open edit panel anchored to its rectangle through pan/zoom and
+  // chart resizes (watchlist toggle, window resize) — the rectangle's pixels
+  // changed under it, so the panel would otherwise sit at stale coordinates.
+  if (selectedRect.value && editPanelPos.value) positionEditPanel(selectedRect.value.id);
 }
 
 /** Begin a rectangle: corner 1 at the pointer, preview follows the mouse. */
@@ -377,7 +403,7 @@ function finalizeDraw(): void {
     onMouseMoveRef = null;
   }
   if (d && (Math.abs(d.time2 - d.time1) >= 1 || Math.abs(d.price2 - d.price1) > 0)) {
-    drawingsStore.add(market.instrument, market.timeframe, {
+    drawingsStore.add(market.instrument, {
       time1: Math.min(d.time1, d.time2),
       price1: Math.min(d.price1, d.price2),
       time2: Math.max(d.time1, d.time2),
@@ -410,29 +436,52 @@ function onRectClick(id: string, e: MouseEvent): void {
     drawingsStore.activeTool = "cursor";
   }
   drawingsStore.selectedId = id;
-  selectedRect.value = drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === id) ?? null;
+  selectedRect.value = drawingsStore.getFor(market.instrument).find((r) => r.id === id) ?? null;
   recalcRects();
   positionEditPanel(id);
 }
 
-/** Places the floating edit panel to the right of the given rectangle. */
+/** Places the floating edit panel just ABOVE the rectangle's top-right corner
+ *  (TradingView-style) so the resize handles stay visible and even a tiny
+ *  rect isn't covered; flips below when there's no room above. */
 function positionEditPanel(id: string): void {
   const pixel = rectPixels.value.find((r) => r.id === id);
-  if (pixel && containerRef.value) {
-    // Keep the panel inside the pane (panel ≈ 250px wide with the slider)
-    const maxX = containerRef.value.clientWidth - 260;
-    editPanelPos.value = {
-      x: Math.min(pixel.left + pixel.width + 8, Math.max(4, maxX)),
-      y: pixel.top,
-    };
+  const pane = containerRef.value;
+  if (!pixel || !pane) return;
+  editPanelPos.value = computePanelPos(pixel, pane);
+  // First open: the panel element isn't mounted yet, so the position above
+  // used the fallback size. Re-measure as soon as it mounts (nextTick runs
+  // before the browser paints, so the panel never appears misplaced and
+  // doesn't jump a moment later).
+  if (!editPanelEl.value) {
+    void nextTick(() => {
+      const sel = selectedRect.value;
+      if (!editPanelEl.value || !sel || !containerRef.value) return;
+      const px = rectPixels.value.find((r) => r.id === sel.id);
+      if (px) editPanelPos.value = computePanelPos(px, containerRef.value);
+    });
   }
+}
+
+function computePanelPos(pixel: RectPixel, pane: HTMLElement): { x: number; y: number } {
+  const w = editPanelEl.value?.offsetWidth || PANEL_W;
+  const h = editPanelEl.value?.offsetHeight || PANEL_H;
+  const gap = 8;
+  // Right edges aligned with the rectangle, 8px above its top edge
+  let x = pixel.left + pixel.width - w;
+  let y = pixel.top - h - gap;
+  if (y < 4) y = pixel.top + pixel.height + gap; // flip below the rect
+  // Safety clamp: fully inside the pane on both axes.
+  x = Math.min(Math.max(4, x), Math.max(4, pane.clientWidth - w - 6));
+  y = Math.min(Math.max(4, y), Math.max(4, pane.clientHeight - h - 6));
+  return { x, y };
 }
 
 /** Drag the whole rectangle to move it (TradingView-style body drag). */
 function onRectDragStart(e: MouseEvent, id: string): void {
   if (e.button !== 0 || drawingsStore.activeTool !== "cursor") return;
   if (!adapter || !containerRef.value) return;
-  const rect = drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === id);
+  const rect = drawingsStore.getFor(market.instrument).find((r) => r.id === id);
   if (!rect) return;
   e.preventDefault();
   e.stopPropagation();
@@ -480,13 +529,13 @@ function onRectDragStart(e: MouseEvent, id: string): void {
     if (t === null || p === null) return;
     const dt = t - startT;
     const dp = p - startP;
-    drawingsStore.updateRect(market.instrument, market.timeframe, id, {
+    drawingsStore.updateRect(market.instrument, id, {
       time1: orig.time1 + dt,
       time2: orig.time2 + dt,
       price1: orig.price1 + dp,
       price2: orig.price2 + dp,
     });
-    const updated = drawingsStore.getFor(market.instrument, market.timeframe).find((x) => x.id === id);
+    const updated = drawingsStore.getFor(market.instrument).find((x) => x.id === id);
     if (updated) selectedRect.value = updated;
     recalcRects();
     positionEditPanel(id);
@@ -513,7 +562,7 @@ function onChartClick(): void {
 
 function deleteSelected(): void {
   if (!selectedRect.value) return;
-  drawingsStore.remove(market.instrument, market.timeframe, selectedRect.value.id);
+  drawingsStore.remove(market.instrument, selectedRect.value.id);
   selectedRect.value = null;
   editPanelPos.value = null;
   rectMenu.value = null;
@@ -525,7 +574,7 @@ function deleteSelected(): void {
 function setColorInMenu(color: string): void {
   const menu = rectMenu.value;
   if (!menu) return;
-  drawingsStore.updateStyle(market.instrument, market.timeframe, menu.id, { color });
+  drawingsStore.updateStyle(market.instrument, menu.id, { color });
   if (selectedRect.value?.id === menu.id) syncSelected();
   else recalcRects();
 }
@@ -533,7 +582,7 @@ function setColorInMenu(color: string): void {
 function setOpacityInMenu(opacity: number): void {
   const menu = rectMenu.value;
   if (!menu) return;
-  drawingsStore.updateStyle(market.instrument, market.timeframe, menu.id, { opacity });
+  drawingsStore.updateStyle(market.instrument, menu.id, { opacity });
   if (selectedRect.value?.id === menu.id) syncSelected();
   else recalcRects();
 }
@@ -542,9 +591,9 @@ function setOpacityInMenu(opacity: number): void {
 function toggleFillInMenu(): void {
   const menu = rectMenu.value;
   if (!menu) return;
-  const rect = drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === menu.id);
+  const rect = drawingsStore.getFor(market.instrument).find((r) => r.id === menu.id);
   if (!rect) return;
-  drawingsStore.updateStyle(market.instrument, market.timeframe, menu.id, { filled: rect.filled === false });
+  drawingsStore.updateStyle(market.instrument, menu.id, { filled: rect.filled === false });
   if (selectedRect.value?.id === menu.id) syncSelected();
   else recalcRects();
 }
@@ -553,7 +602,7 @@ function toggleFillInMenu(): void {
 function deleteFromMenu(): void {
   const menu = rectMenu.value;
   if (!menu) return;
-  drawingsStore.remove(market.instrument, market.timeframe, menu.id);
+  drawingsStore.remove(market.instrument, menu.id);
   if (selectedRect.value?.id === menu.id) {
     selectedRect.value = null;
     editPanelPos.value = null;
@@ -565,20 +614,20 @@ function deleteFromMenu(): void {
 
 function setColorSelected(color: string): void {
   if (!selectedRect.value) return;
-  drawingsStore.updateStyle(market.instrument, market.timeframe, selectedRect.value.id, { color });
+  drawingsStore.updateStyle(market.instrument, selectedRect.value.id, { color });
   syncSelected();
 }
 
 function setOpacitySelected(opacity: number): void {
   if (!selectedRect.value) return;
-  drawingsStore.updateStyle(market.instrument, market.timeframe, selectedRect.value.id, { opacity });
+  drawingsStore.updateStyle(market.instrument, selectedRect.value.id, { opacity });
   syncSelected();
 }
 
 /** Toggle background fill; border-only rects render at 100% opacity. */
 function toggleFillSelected(): void {
   if (!selectedRect.value) return;
-  drawingsStore.updateStyle(market.instrument, market.timeframe, selectedRect.value.id, {
+  drawingsStore.updateStyle(market.instrument, selectedRect.value.id, {
     filled: selectedRect.value.filled === false,
   });
   syncSelected();
@@ -587,7 +636,7 @@ function toggleFillSelected(): void {
 /** Re-read the selected rect from the store and refresh the overlay. */
 function syncSelected(): void {
   if (!selectedRect.value) return;
-  const updated = drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === selectedRect.value!.id);
+  const updated = drawingsStore.getFor(market.instrument).find((r) => r.id === selectedRect.value!.id);
   if (updated) selectedRect.value = updated;
   recalcRects();
 }
@@ -627,9 +676,9 @@ function onResizeStart(e: MouseEvent, handle: string): void {
     if (edgeTime) newRect[edgeTime] = t;
     if (edgePrice) newRect[edgePrice] = p;
 
-    drawingsStore.updateRect(market.instrument, market.timeframe, rect.id, newRect);
+    drawingsStore.updateRect(market.instrument, rect.id, newRect);
     // Update selectedRect reference
-    const updated = drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === rect.id);
+    const updated = drawingsStore.getFor(market.instrument).find((r) => r.id === rect.id);
     if (updated) selectedRect.value = updated;
     recalcRects();
     positionEditPanel(rect.id);
@@ -671,6 +720,16 @@ onMounted(async () => {
     });
   };
   adapter.subscribeVisibleRange(visibleCb);
+
+  // Re-project price-anchored overlays whenever the series data changes:
+  // autoScale refits the price scale after load / live ticks / corrections,
+  // which shifts every pixel position — without this, rectangles sit at a
+  // stale height for a moment after refresh before the next interaction.
+  dataCb = () => {
+    updateBadgePosition();
+    recalcRects();
+  };
+  adapter.subscribeDataChanged(dataCb);
 
   // Vertical drags & pinch-zoom change the PRICE scale without firing the
   // time-range callback — track pointer/wheel directly for instant reposition.
@@ -717,14 +776,13 @@ onMounted(async () => {
     if (rectId) {
       if (drawingsStore.activeTool !== "cursor") drawingsStore.activeTool = "cursor";
       drawingsStore.selectedId = rectId;
-      selectedRect.value = drawingsStore.getFor(market.instrument, market.timeframe).find((r) => r.id === rectId) ?? null;
+      selectedRect.value = drawingsStore.getFor(market.instrument).find((r) => r.id === rectId) ?? null;
       recalcRects();
       positionEditPanel(rectId);
       const paneRect = paneEl.getBoundingClientRect();
-      // Keep the menu inside the pane (menu ≈ 180×44 px)
-      const mx = Math.min(e.clientX - paneRect.left, paneRect.width - 190);
-      const my = Math.min(e.clientY - paneRect.top, paneRect.height - 56);
-      rectMenu.value = { id: rectId, x: Math.max(4, mx), y: Math.max(4, my) };
+      // Keep the menu inside the pane (measured once mounted, fallback below)
+      const pos = clampToPane(e.clientX - paneRect.left, e.clientY - paneRect.top, editMenuEl.value);
+      rectMenu.value = { id: rectId, x: pos.x, y: pos.y };
       closePalette();
       return;
     }
@@ -762,6 +820,14 @@ onMounted(async () => {
   window.addEventListener("keydown", onKey as AnyListener);
   escCb = onKey;
 
+  // A mouseup released OUTSIDE the browser window never reaches us — without
+  // this, the half-drawn preview stays alive and the next chart click
+  // finalizes it as a duplicate rectangle.
+  const onWindowLost = () => cancelDraw();
+  window.addEventListener("blur", onWindowLost);
+  window.addEventListener("pointercancel", onWindowLost as AnyListener);
+  windowLostCb = onWindowLost;
+
   // Countdown text + position tick (position also updates on pan/zoom above)
   updateCountdown();
   countdownTimer = setInterval(updateCountdown, 200);
@@ -785,6 +851,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   if (visibleCb && adapter) adapter.unsubscribeVisibleRange(visibleCb);
+  if (dataCb && adapter) adapter.unsubscribeDataChanged(dataCb);
   if (countdownTimer) clearInterval(countdownTimer);
   if (interactionEl && interactCb) {
     interactionEl.removeEventListener("pointermove", interactCb);
@@ -800,6 +867,10 @@ onBeforeUnmount(() => {
   }
   if (escCb) {
     window.removeEventListener("keydown", escCb as AnyListener);
+  }
+  if (windowLostCb) {
+    window.removeEventListener("blur", windowLostCb);
+    window.removeEventListener("pointercancel", windowLostCb as AnyListener);
   }
   if (onMouseMoveRef) {
     window.removeEventListener("mousemove", onMouseMoveRef);
@@ -883,6 +954,7 @@ onBeforeUnmount(() => {
     <!-- Edit panel for selected rectangle -->
     <div
       v-if="selectedRect && editPanelPos"
+      ref="editPanelEl"
       class="rect-edit-panel"
       :style="{ left: editPanelPos.x + 'px', top: editPanelPos.y + 'px' }"
       @click.stop
@@ -915,6 +987,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+      <span class="panel-divider" />
       <label class="opacity-row" title="Fill opacity">
         <span class="opacity-icon">◻</span>
         <input
@@ -927,18 +1000,52 @@ onBeforeUnmount(() => {
         />
         <span class="opacity-value">{{ Math.round((selectedRect.opacity ?? 0.3) * 100) }}%</span>
       </label>
+      <span class="panel-divider" />
+      <span class="panel-divider" />
       <button
-        class="edit-fill"
+        class="edit-btn"
         :class="{ off: selectedRect.filled === false }"
         :title="selectedRect.filled === false ? 'Show background fill' : 'Border only (no fill)'"
         @click="toggleFillSelected"
-      >{{ selectedRect.filled === false ? "▢" : "▨" }}</button>
-      <button class="edit-delete" @click="deleteSelected" title="Delete rectangle">🗑</button>
+      >
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+          <rect
+            x="2.25"
+            y="3.25"
+            width="11.5"
+            height="9.5"
+            rx="2"
+            :fill="selectedRect.filled === false ? 'none' : 'currentColor'"
+            :fill-opacity="selectedRect.filled === false ? 0 : 0.32"
+            stroke="currentColor"
+            stroke-width="1.5"
+          />
+        </svg>
+      </button>
+      <button class="edit-btn danger" @click="deleteSelected" title="Delete rectangle">
+        <svg
+          viewBox="0 0 16 16"
+          width="15"
+          height="15"
+          aria-hidden="true"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.4"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M2.75 4.5h10.5" />
+          <path d="M5.75 4.5V3.4c0-.5.4-.9.9-.9h2.7c.5 0 .9.4.9.9v1.1" />
+          <path d="M4.4 4.5l.5 7.9c.05.64.57 1.1 1.2 1.1h3.8c.63 0 1.15-.46 1.2-1.1l.5-7.9" />
+          <path d="M6.7 7.2v3.9M9.3 7.2v3.9" />
+        </svg>
+      </button>
     </div>
 
     <!-- TradingView-style right-click menu on a rectangle -->
     <div
       v-if="rectMenu"
+      ref="editMenuEl"
       class="rect-edit-panel rect-context-menu"
       :style="{ left: rectMenu.x + 'px', top: rectMenu.y + 'px' }"
       @click.stop
@@ -972,6 +1079,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
+      <span class="panel-divider" />
       <label class="opacity-row" title="Fill opacity">
         <span class="opacity-icon">◻</span>
         <input
@@ -984,13 +1092,46 @@ onBeforeUnmount(() => {
         />
         <span class="opacity-value">{{ Math.round(menuRectOpacity * 100) }}%</span>
       </label>
+      <span class="panel-divider" />
+      <span class="panel-divider" />
       <button
-        class="edit-fill"
+        class="edit-btn"
         :class="{ off: !menuRectFilled }"
         :title="menuRectFilled ? 'Border only (no fill)' : 'Show background fill'"
         @click="toggleFillInMenu"
-      >{{ menuRectFilled ? "▨" : "▢" }}</button>
-      <button class="edit-delete" @click="deleteFromMenu" title="Delete rectangle">🗑</button>
+      >
+        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+          <rect
+            x="2.25"
+            y="3.25"
+            width="11.5"
+            height="9.5"
+            rx="2"
+            :fill="menuRectFilled ? 'currentColor' : 'none'"
+            :fill-opacity="menuRectFilled ? 0.32 : 0"
+            stroke="currentColor"
+            stroke-width="1.5"
+          />
+        </svg>
+      </button>
+      <button class="edit-btn danger" @click="deleteFromMenu" title="Delete rectangle">
+        <svg
+          viewBox="0 0 16 16"
+          width="15"
+          height="15"
+          aria-hidden="true"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.4"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M2.75 4.5h10.5" />
+          <path d="M5.75 4.5V3.4c0-.5.4-.9.9-.9h2.7c.5 0 .9.4.9.9v1.1" />
+          <path d="M4.4 4.5l.5 7.9c.05.64.57 1.1 1.2 1.1h3.8c.63 0 1.15-.46 1.2-1.1l.5-7.9" />
+          <path d="M6.7 7.2v3.9M9.3 7.2v3.9" />
+        </svg>
+      </button>
     </div>
 
     <div
@@ -1326,22 +1467,53 @@ onBeforeUnmount(() => {
   border-color: var(--text);
   transform: scale(1.1);
 }
-.edit-delete {
-  width: 24px;
-  height: 24px;
+/* Icon buttons (fill toggle / delete) and group separators */
+.panel-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.edit-btn {
+  width: 26px;
+  height: 26px;
   display: grid;
   place-items: center;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--btn-bg);
+  color: var(--text);
+  border-radius: 7px;
   cursor: pointer;
-  font-size: 12px;
-  border-radius: 4px;
-  transition: all 120ms;
+  flex-shrink: 0;
+  transition:
+    color 140ms,
+    background 140ms,
+    border-color 140ms,
+    transform 140ms;
 }
-.edit-delete:hover {
-  background: rgba(239, 83, 80, 0.12);
+.edit-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(41, 98, 255, 0.1);
+  transform: translateY(-1px);
+}
+.edit-btn:active {
+  transform: translateY(0);
+}
+/* Border-only state: dashed outline echoes the rect's border-only look */
+.edit-btn.off {
+  color: var(--text-muted);
+  border-style: dashed;
+}
+.edit-btn.off:hover {
+  color: var(--accent);
+  border-style: solid;
+}
+.edit-btn.danger:hover {
   color: #ef5350;
+  border-color: rgba(239, 83, 80, 0.55);
+  background: rgba(239, 83, 80, 0.1);
 }
 .rect-context-menu {
   z-index: 30; /* above the edit panel (20) and rectangles (2) */
@@ -1408,25 +1580,5 @@ onBeforeUnmount(() => {
   min-width: 26px;
   text-align: right;
   font-variant-numeric: tabular-nums;
-}
-/* Fill on/off toggle */
-.edit-fill {
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-  font-size: 13px;
-  border-radius: 4px;
-  transition: all 120ms;
-}
-.edit-fill:hover {
-  background: var(--btn-bg);
-}
-.edit-fill.off {
-  color: var(--text-muted);
 }
 </style>

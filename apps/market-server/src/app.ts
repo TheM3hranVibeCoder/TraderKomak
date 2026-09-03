@@ -16,6 +16,7 @@ import { OandaStreamClient } from "./oanda/streamClient.js";
 import { BinanceRestClient } from "./binance/restClient.js";
 import { BinanceStreamClient } from "./binance/streamClient.js";
 import { CandleFeed } from "./market/candleFeed.js";
+import { CandlePersist } from "./market/candlePersist.js";
 import { MarketHub } from "./websocket/hub.js";
 import { registerHealthRoute } from "./routes/health.js";
 import { registerCandlesRoute } from "./routes/candles.js";
@@ -82,7 +83,7 @@ export async function createMarketServer(config: AppConfig): Promise<MarketServe
     },
   };
 
-  const feed = new CandleFeed(historyRouter, feedLog);
+  const feed = new CandleFeed(historyRouter, feedLog, new CandlePersist(config.dataDir, feedLog));
   const hub = new MarketHub(feed, oandaStream, hubLog, binanceStream);
 
   // Live-data pipeline (both providers → normalized tick → feed + watchlist)

@@ -57,23 +57,69 @@ function flagFor(currency: string): { type: "flag" | "icon"; value: string } {
 }
 
 /* ── Live pointer-based drag reordering ─────────────────────────────── */
+/* Slots are tracked on a virtual grid measured ONCE at drag start (uniform
+   rows). Swaps are decided from that grid, never from live rects — reading
+   rects of rows mid-glide fed the animation back into the swap decision,
+   which is what made dragging feel jerky. */
+
+const ROW_GAP = 6; // .watchlist-list gap
 
 const listRef = ref<HTMLElement | null>(null);
 const dragActive = ref(false);       // true once movement exceeds threshold
+const dragSettling = ref(false);     // true while the row glides into its slot on drop
+const listDragging = ref(false);     // true while any drag is in progress (dims siblings)
 const dragOffsetY = ref(0);          // dragged row's visual offset (px)
-let dragIdx: number | null = null;   // current index of the dragged row
-let dragStartY = 0;                  // clientY where the drag began
-let dragStep = 46;                   // row height + gap, measured at start
+let dragIdx: number | null = null;   // current slot index of the dragged row
+let dragStartY = 0;                  // clientY anchor so the row tracks the cursor 1:1
+let slotStep = 52;                   // row height + gap, measured at start
+let rowHeight = 46;                  // row height, measured at start
+let contentTop = 0;                  // slot 0's home top in CONTENT coordinates
+let listTop = 0;                     // viewport top of the list (fixed during drag)
+let rowCount = 0;
+let lastPointerY = 0;                // last cursor position (for edge auto-scroll)
+let autoScrollRaf = 0;               // rAF handle for edge auto-scroll loop
+let settleTimer: ReturnType<typeof setTimeout> | null = null;
 let suppressClick = false;
 
-function rowRects(): DOMRect[] {
+function listEl(): HTMLElement | null {
   // TransitionGroup ref exposes the rendered element via $el
   const raw = listRef.value as unknown as { $el?: HTMLElement } | null;
-  const list = raw ? (raw.$el ?? (raw as unknown as HTMLElement)) : null;
-  if (!list) return [];
-  return Array.from(list.querySelectorAll<HTMLElement>(".watch-item")).map((el) =>
-    el.getBoundingClientRect()
-  );
+  return raw ? (raw.$el ?? (raw as unknown as HTMLElement)) : null;
+}
+
+/** Captures the drag geometry once, from the still-resting list. */
+function measureSlots(): boolean {
+  const list = listEl();
+  if (!list) return false;
+  const rows = Array.from(list.querySelectorAll<HTMLElement>(".watch-item"));
+  if (rows.length < 2) return false;
+  const listRect = list.getBoundingClientRect();
+  const first = rows[0]!.getBoundingClientRect();
+  const second = rows[1]!.getBoundingClientRect();
+  slotStep = Math.abs(second.top - first.top);
+  rowHeight = first.height;
+  listTop = listRect.top;
+  contentTop = first.top - listRect.top + list.scrollTop;
+  rowCount = rows.length;
+  return true;
+}
+
+/** Viewport Y of slot i's home top for the given scroll position. */
+function slotTop(i: number, scrollTop: number): number {
+  return listTop + contentTop - scrollTop + i * slotStep;
+}
+
+function endSettle(): void {
+  if (settleTimer) {
+    clearTimeout(settleTimer);
+    settleTimer = null;
+  }
+  dragSettling.value = false;
+  dragActive.value = false;
+  dragIdx = null;
+  listDragging.value = false;
+  dragOffsetY.value = 0;
+  document.body.style.cursor = "";
 }
 
 function onRowPointerDown(e: PointerEvent, idx: number): void {
@@ -83,13 +129,22 @@ function onRowPointerDown(e: PointerEvent, idx: number): void {
   // Touch: only the ⋮⋮ handle starts a drag (keeps list scrollable)
   if (e.pointerType !== "mouse" && !(e.target as HTMLElement).closest(".drag-handle")) return;
 
-  const rects = rowRects();
-  const own = rects[idx];
-  if (own) dragStep = rects.length > 1 && rects[1] ? Math.abs(rects[1]!.top - rects[0]!.top) : own.height + 6;
-  else return;
+  // A fresh press cancels any in-flight settle animation
+  if (settleTimer) {
+    clearTimeout(settleTimer);
+    settleTimer = null;
+  }
+  dragSettling.value = false;
+  listDragging.value = false;
+  dragActive.value = false;
+  dragIdx = null;
+  document.body.style.cursor = "";
+  // No text selection / native image ghost while dragging rows
+  if (e.pointerType === "mouse") e.preventDefault();
 
   dragIdx = idx;
   dragStartY = e.clientY;
+  lastPointerY = e.clientY;
   dragOffsetY.value = 0;
   dragActive.value = false;
 
@@ -100,53 +155,92 @@ function onRowPointerDown(e: PointerEvent, idx: number): void {
 
 function onRowPointerMove(e: PointerEvent): void {
   if (dragIdx === null) return;
+  lastPointerY = e.clientY;
   const dy = e.clientY - dragStartY;
 
   if (!dragActive.value) {
-    if (Math.abs(dy) < 5) return; // dead-zone so clicks still work
+    if (Math.abs(dy) < 6) return; // dead-zone so clicks still work
+    if (!measureSlots()) return;
     dragActive.value = true;
+    listDragging.value = true;
+    document.body.style.cursor = "grabbing";
+    if (!autoScrollRaf) autoScrollRaf = requestAnimationFrame(autoScrollTick);
   }
-  dragOffsetY.value = dy;
+  applyDragPosition(e.clientY);
+}
 
-  // Live reorder: when the dragged row's center crosses a neighbour's
-  // midpoint, splice the array — siblings slide aside in real time.
-  const rects = rowRects();
-  const own = rects[dragIdx];
-  if (!own) return;
-  const center = own.top + own.height / 2 + dy;
+/** Tracks the cursor 1:1 and splices the list when the dragged row's center
+ *  is clearly nearer a neighbouring slot (hysteresis kills edge flicker). */
+function applyDragPosition(clientY: number): void {
+  if (dragIdx === null) return;
+  const list = listEl();
+  if (!list) return;
+  dragOffsetY.value = clientY - dragStartY;
+  if (rowCount < 2) return;
 
-  let target = dragIdx;
-  for (let i = 0; i < rects.length; i++) {
-    if (i === dragIdx) continue;
-    const mid = rects[i]!.top + rects[i]!.height / 2;
-    if (dragIdx < i ? center > mid : center < mid) {
-      target = i;
-      break;
-    }
+  const scrollTop = list.scrollTop;
+  const center = slotTop(dragIdx, scrollTop) + rowHeight / 2 + dragOffsetY.value;
+
+  let target = Math.round((center - slotTop(0, scrollTop) - rowHeight / 2) / slotStep);
+  target = Math.max(0, Math.min(rowCount - 1, target));
+  if (target === dragIdx) return;
+
+  // Hysteresis: commit only once ~3px past the midpoint toward the target
+  const ownCenter = slotTop(dragIdx, scrollTop) + rowHeight / 2;
+  const targetCenter = slotTop(target, scrollTop) + rowHeight / 2;
+  if (Math.abs(center - ownCenter) - Math.abs(center - targetCenter) < 6) return;
+
+  const arr = [...watchlist.instruments];
+  const [moved] = arr.splice(dragIdx, 1);
+  if (!moved) return;
+  arr.splice(target, 0, moved);
+  watchlist.instruments = arr;
+  // Keep the dragged row under the cursor after its home slot moved
+  dragStartY += (target - dragIdx) * slotStep;
+  dragOffsetY.value = clientY - dragStartY;
+  dragIdx = target;
+}
+
+/** Scrolls the list when the cursor hovers near its top/bottom edge. */
+function autoScrollTick(): void {
+  autoScrollRaf = 0;
+  const list = listEl();
+  if (!list || dragIdx === null || !dragActive.value) return;
+  const rect = list.getBoundingClientRect();
+  const edge = 44;
+  let speed = 0;
+  if (lastPointerY < rect.top + edge) {
+    speed = -Math.min(16, (rect.top + edge - lastPointerY) / 2.5);
+  } else if (lastPointerY > rect.bottom - edge) {
+    speed = Math.min(16, (lastPointerY - (rect.bottom - edge)) / 2.5);
   }
-
-  if (target !== dragIdx) {
-    const arr = [...watchlist.instruments];
-    const [moved] = arr.splice(dragIdx, 1);
-    if (!moved) return;
-    arr.splice(target, 0, moved);
-    watchlist.instruments = arr;
-    // Keep the dragged row under the cursor after the splice
-    dragStartY += (target - dragIdx) * dragStep;
-    dragOffsetY.value = e.clientY - dragStartY;
-    dragIdx = target;
+  if (speed !== 0) {
+    const before = list.scrollTop;
+    list.scrollTop += speed;
+    // The list scrolled under a stationary cursor — keep the row glued to it
+    dragStartY -= list.scrollTop - before;
+    dragOffsetY.value = lastPointerY - dragStartY;
+    applyDragPosition(lastPointerY);
   }
+  autoScrollRaf = requestAnimationFrame(autoScrollTick);
 }
 
 function onRowPointerUp(): void {
   window.removeEventListener("pointermove", onRowPointerMove);
-  if (dragActive.value) {
-    suppressClick = true;
-    setTimeout(() => (suppressClick = false), 0);
+  if (autoScrollRaf) {
+    cancelAnimationFrame(autoScrollRaf);
+    autoScrollRaf = 0;
   }
-  dragIdx = null;
-  dragActive.value = false;
+  if (!dragActive.value) {
+    endSettle();
+    return;
+  }
+  suppressClick = true;
+  setTimeout(() => (suppressClick = false), 0);
+  // Settle: glide the row the remaining distance into its slot instead of snapping
+  dragSettling.value = true;
   dragOffsetY.value = 0;
+  settleTimer = setTimeout(endSettle, 300);
 }
 
 function onClickRow(inst: string): void {
@@ -242,60 +336,69 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <aside class="watchlist" :class="{ open: watchlist.isOpen }">
-    <div class="search-wrap">
-      <span class="search-icon">⌕</span>
-      <input
-        v-model="search"
-        @keydown.enter="onSearchEnter"
-        placeholder="Search xauusd, eurusd…"
-        class="search-input"
-      />
-      <span v-if="search" class="search-clear" @click="search = ''">✕</span>
+  <aside class="watchlist" :class="{ open: watchlist.isOpen, 'is-dragging': listDragging }">
+    <div class="watchlist-inner">
+      <div class="search-wrap">
+        <span class="search-icon">⌕</span>
+        <input
+          v-model="search"
+          @keydown.enter="onSearchEnter"
+          placeholder="Search xauusd, eurusd…"
+          class="search-input"
+        />
+        <span v-if="search" class="search-clear" @click="search = ''">✕</span>
+      </div>
+
+      <TransitionGroup ref="listRef" name="wl" tag="div" class="watchlist-list">
+        <div v-if="watchlist.instruments.length === 0" key="empty" class="empty">
+          <span class="empty-icon">☆</span>
+          <span>Search above to add symbols</span>
+          <span class="empty-hint">Live price & % change via OANDA · Binance</span>
+        </div>
+
+        <div
+          v-for="(inst, idx) in watchlist.instruments"
+          :key="inst"
+          class="watch-item"
+          :class="{
+            active: inst === market.instrument,
+            dragging: dragIdx === idx && dragActive,
+            settling: dragIdx === idx && dragSettling,
+          }"
+          :style="
+            dragIdx === idx && dragActive ? { transform: `translateY(${dragOffsetY}px)` } : {}
+          "
+          @pointerdown="onRowPointerDown($event, idx)"
+          @click="onClickRow(inst)"
+        >
+          <span class="drag-handle" title="Drag to reorder">
+            <svg width="8" height="14" viewBox="0 0 8 14" fill="currentColor" aria-hidden="true">
+              <circle cx="2" cy="2" r="1.4" /><circle cx="6" cy="2" r="1.4" />
+              <circle cx="2" cy="7" r="1.4" /><circle cx="6" cy="7" r="1.4" />
+              <circle cx="2" cy="12" r="1.4" /><circle cx="6" cy="12" r="1.4" />
+            </svg>
+          </span>
+          <div class="watch-left">
+            <span class="watch-symbol">
+              <template v-for="part in [inst.split('_')[0]!, inst.split('_')[1]!]" :key="part">
+                <img v-if="flagFor(part).type === 'flag'" :src="flagFor(part).value" :alt="part" class="flag-img" draggable="false" />
+                <span v-else class="flag-emoji">{{ flagFor(part).value }}</span>
+                {{ part }}
+                <span v-if="part === inst.split('_')[0]"> / </span>
+              </template>
+            </span>
+            <span class="watch-sub">{{ providerOf(inst) === "binance" ? "BINANCE" : "OANDA" }}</span>
+          </div>
+          <div class="watch-right">
+            <span class="watch-price">{{ formatPrice(inst, watchlist.prices.get(inst)?.mid ?? null) }}</span>
+            <span class="watch-change" :class="changeClass(watchlist.prices.get(inst)! )">
+              {{ changeText(watchlist.prices.get(inst)! ) }}
+            </span>
+          </div>
+          <button class="watch-remove" @click.stop="watchlist.remove(inst)" title="Remove">✕</button>
+        </div>
+      </TransitionGroup>
     </div>
-
-    <TransitionGroup ref="listRef" name="wl" tag="div" class="watchlist-list">
-      <div v-if="watchlist.instruments.length === 0" key="empty" class="empty">
-        <span class="empty-icon">☆</span>
-        <span>Search above to add symbols</span>
-        <span class="empty-hint">Live price & % change via OANDA · Binance</span>
-      </div>
-
-      <div
-        v-for="(inst, idx) in watchlist.instruments"
-        :key="inst"
-        class="watch-item"
-        :class="{
-          active: inst === market.instrument,
-          dragging: dragIdx === idx && dragActive,
-        }"
-        :style="
-          dragIdx === idx && dragActive ? { transform: `translateY(${dragOffsetY}px)` } : {}
-        "
-        @pointerdown="onRowPointerDown($event, idx)"
-        @click="onClickRow(inst)"
-      >
-        <span class="drag-handle" title="Drag to reorder">⋮⋮</span>
-        <div class="watch-left">
-          <span class="watch-symbol">
-            <template v-for="part in [inst.split('_')[0]!, inst.split('_')[1]!]" :key="part">
-              <img v-if="flagFor(part).type === 'flag'" :src="flagFor(part).value" :alt="part" class="flag-img" />
-              <span v-else class="flag-emoji">{{ flagFor(part).value }}</span>
-              {{ part }}
-              <span v-if="part === inst.split('_')[0]"> / </span>
-            </template>
-          </span>
-          <span class="watch-sub">{{ providerOf(inst) === "binance" ? "BINANCE" : "OANDA" }}</span>
-        </div>
-        <div class="watch-right">
-          <span class="watch-price">{{ formatPrice(inst, watchlist.prices.get(inst)?.mid ?? null) }}</span>
-          <span class="watch-change" :class="changeClass(watchlist.prices.get(inst)! )">
-            {{ changeText(watchlist.prices.get(inst)! ) }}
-          </span>
-        </div>
-        <button class="watch-remove" @click.stop="watchlist.remove(inst)" title="Remove">✕</button>
-      </div>
-    </TransitionGroup>
   </aside>
 </template>
 
@@ -305,29 +408,42 @@ onBeforeUnmount(() => {
   min-width: 0;
   max-width: 320px;
   background: var(--bg-watchlist);
-  border-left: 0 solid transparent;
+  border-left: 1px solid transparent;
   display: flex;
   flex-direction: column;
   height: 100%;
-  backdrop-filter: blur(16px);
   overflow: hidden;
   position: relative;
   transition:
-    width 420ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    min-width 420ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    background 600ms cubic-bezier(0.4, 0, 0.2, 1),
-    border-color 300ms,
-    opacity 300ms;
-  opacity: 0;
+    width 420ms cubic-bezier(0.32, 0.72, 0, 1),
+    min-width 420ms cubic-bezier(0.32, 0.72, 0, 1),
+    border-color 300ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 420ms cubic-bezier(0.32, 0.72, 0, 1);
   pointer-events: none;
 }
 .watchlist.open {
   width: 320px;
   min-width: 320px;
-  border-left: 1px solid var(--border);
+  border-left-color: var(--border);
   box-shadow: -8px 0 24px rgba(0, 0, 0, 0.08);
-  opacity: 1;
   pointer-events: auto;
+}
+/* Content glides in with the panel instead of being clipped by it */
+.watchlist-inner {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  transform: translateX(-18px);
+  transition:
+    opacity 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 340ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.watchlist.open .watchlist-inner {
+  opacity: 1;
+  transform: translateX(0);
+  transition-delay: 90ms; /* content arrives as the panel finishes opening */
 }
 .search-wrap {
   position: relative;
@@ -385,6 +501,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  position: relative; /* anchors leaving rows during remove animation */
 }
 .empty {
   display: flex;
@@ -411,6 +528,8 @@ onBeforeUnmount(() => {
   border-radius: 2px;
   vertical-align: middle;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+  -webkit-user-drag: none; /* no native ghost image when dragging rows */
+  pointer-events: none;
 }
 .flag-emoji {
   font-size: 12px;
@@ -427,6 +546,9 @@ onBeforeUnmount(() => {
   cursor: pointer;
   transition: all 180ms;
   position: relative;
+  touch-action: pan-y; /* list stays scrollable on touch */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .watch-item:hover {
   border-color: var(--border-strong);
@@ -438,30 +560,107 @@ onBeforeUnmount(() => {
   background: linear-gradient(135deg, rgba(41, 98, 255, 0.08) 0%, rgba(106, 92, 255, 0.06) 100%);
   box-shadow: 0 0 0 1px rgba(41, 98, 255, 0.12);
 }
+/* Picked up: lifts with a slight scale + tilt and an accent ring; transform
+   (cursor tracking) stays untransitioned so the row never lags the pointer */
 .watch-item.dragging {
-  transition: none;
+  transition:
+    scale 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    rotate 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 200ms,
+    background 200ms;
   z-index: 30;
   cursor: grabbing;
-  opacity: 0.95;
+  scale: 1.03;
+  rotate: -0.6deg;
+  will-change: transform;
   box-shadow:
-    0 14px 28px rgba(0, 0, 0, 0.22),
-    0 0 0 1px rgba(41, 98, 255, 0.35);
+    0 14px 30px rgba(0, 0, 0, 0.32),
+    0 0 0 1.5px rgba(41, 98, 255, 0.55);
   background: var(--bg-panel);
+  border-color: rgba(41, 98, 255, 0.55);
+}
+/* Dropped: glides the remaining distance into its slot with a soft landing */
+.watch-item.dragging.settling {
+  scale: 1;
+  rotate: 0deg;
+  transition:
+    transform 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    scale 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    rotate 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 240ms cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 240ms;
 }
 /* Siblings glide aside while a row is dragged */
 .wl-move {
-  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
-.watch-item {
-  touch-action: pan-y; /* list stays scrollable on touch */
+/* Siblings stay dimmed and hover-neutral so the dragged row owns the moment */
+.watchlist.is-dragging .watch-item:not(.dragging) {
+  opacity: 0.55;
+  border-color: var(--border);
+}
+.watchlist.is-dragging .watch-item:not(.dragging):hover {
+  transform: none;
+  box-shadow: none;
+}
+.watchlist.is-dragging {
+  user-select: none;
+  cursor: grabbing;
+}
+/* New rows fade/slide in; removed rows fade out in place while siblings glide up */
+.wl-enter-active {
+  transition:
+    opacity 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.wl-enter-from {
+  opacity: 0;
+  transform: translateY(-10px) scale(0.98);
+}
+.wl-leave-active {
+  transition:
+    opacity 200ms ease,
+    transform 200ms ease;
+  position: absolute;
+  left: 8px;
+  right: 8px;
+}
+.wl-leave-to {
+  opacity: 0;
+  transform: scale(0.97);
+}
+@media (prefers-reduced-motion: reduce) {
+  .watchlist,
+  .watchlist-inner,
+  .watch-item,
+  .wl-move,
+  .wl-enter-active,
+  .wl-leave-active {
+    transition-duration: 1ms !important;
+  }
 }
 .drag-handle {
   color: var(--text-muted);
-  font-size: 10px;
+  display: grid;
+  place-items: center;
   cursor: grab;
-  padding: 2px;
-  opacity: 0.5;
+  padding: 4px 4px;
+  margin: -4px 0 -4px -4px;
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity 160ms ease, transform 180ms cubic-bezier(0.22, 1, 0.36, 1), color 160ms;
   touch-action: none; /* handle starts drags even on touch devices */
+  flex-shrink: 0;
+}
+.watch-item:hover .drag-handle {
+  opacity: 0.65;
+  transform: translateX(0);
+}
+.watch-item.dragging .drag-handle {
+  opacity: 1;
+  transform: translateX(0);
+  color: var(--accent);
 }
 .drag-handle:active {
   cursor: grabbing;

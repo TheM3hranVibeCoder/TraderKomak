@@ -136,10 +136,23 @@ export const useMarketStore = defineStore("market", () => {
     return ws;
   }
 
+  /** A flat candle (o=h=l=c) is a synthesized carry-forward (zero-tick bucket
+   *  or lull filler), not real streamed market data. */
+  function isFlat(c: Candle): boolean {
+    return c.high === c.low && c.open === c.close && c.high === c.close;
+  }
+
   function mergeCandles(base: Candle[], incoming: Candle[]): Candle[] {
     const map = new Map<number, Candle>();
     for (const c of base) map.set(c.time, { ...c });
-    for (const c of incoming) map.set(c.time, { ...c });
+    for (const c of incoming) {
+      const existing = map.get(c.time);
+      // Never let a synthesized flat candle degrade a locally streamed candle
+      // that carries real price movement (WS reconnect snapshots from a
+      // freshly recreated server session are often full of these).
+      if (existing && isFlat(c) && !isFlat(existing)) continue;
+      map.set(c.time, { ...c });
+    }
     return [...map.values()].sort((a, b) => a.time - b.time);
   }
 
@@ -148,6 +161,13 @@ export const useMarketStore = defineStore("market", () => {
     // We still handle via time-index logic: insert or replace, never duplicate.
     const idx = timeIndex.value.get(candle.time);
     if (idx !== undefined) {
+      // Same guard as mergeCandles: a flat synthetic must not overwrite a
+      // candle that was built from real streamed ticks.
+      const existing = candles.value[idx]!;
+      if (isFlat(candle) && !isFlat(existing)) {
+        void closed;
+        return;
+      }
       // Update active candle in place.
       candles.value[idx] = { ...candle };
       // Force reactivity when updating same index.

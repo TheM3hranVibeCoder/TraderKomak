@@ -61,6 +61,8 @@ export interface AppConfig {
   host: string;
   corsOrigin: string[];
   logLevel: string;
+  /** Directory for disk-persisted candle history (buffer-fed timeframes). */
+  dataDir: string;
   oanda: {
     /** Never exposed anywhere — only used inside Authorization headers. */
     apiToken: string;
@@ -122,6 +124,7 @@ export function loadConfig(): AppConfig {
     host: optionalEnv("HOST", "0.0.0.0"),
     corsOrigin: splitOrigins(optionalEnv("CORS_ORIGIN", "*")),
     logLevel: optionalEnv("LOG_LEVEL", "info"),
+    dataDir: optionalEnv("DATA_DIR", path.resolve(process.cwd(), ".data")),
     oanda: {
       // The raw token lives here and is used ONLY to build Authorization
       // headers inside the OANDA clients. It is never logged.

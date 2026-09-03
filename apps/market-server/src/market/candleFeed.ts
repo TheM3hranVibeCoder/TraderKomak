@@ -24,7 +24,8 @@ import {
   type MarketTick,
   type Timeframe,
 } from "@traderkomak/shared";
-import { CandleAggregator, aggregateCandles, chainFrom, fillGaps } from "./aggregator.js";
+import { CandleAggregator, aggregateCandles, chainContinuity, chainFrom, fillGaps } from "./aggregator.js";
+import type { CandlePersist } from "./candlePersist.js";
 import type { Log } from "../logger.js";
 
 /**
@@ -53,8 +54,6 @@ interface FeedEvents {
 }
 
 const BUFFER_CAPACITY = 5000;
-/** Native candles fetched to prime the active bucket on session start. */
-const PRIME_COUNT = 2;
 /** Safety cap for ticks queued while a session is still priming. */
 const MAX_PENDING_TICKS = 10_000;
 
@@ -89,7 +88,10 @@ export class CandleFeed extends EventEmitter {
 
   constructor(
     private readonly rest: HistorySource | null,
-    private readonly log: Log
+    private readonly log: Log,
+    /** Optional disk persistence for buffer-fed sessions (1s) — gives the
+     *  1s chart history that survives server restarts. */
+    private readonly persist?: CandlePersist
   ) {
     super();
   }
@@ -160,6 +162,29 @@ export class CandleFeed extends EventEmitter {
     return slice.map((c) => ({ ...c }));
   }
 
+  /**
+   * Like `bufferSnapshot`, but waits for the session's historical priming to
+   * settle first. Subscribe-time snapshots would otherwise race `prime()`
+   * and arrive empty (or full of lull synthetics) on every reconnect.
+   */
+  snapshotWhenReady(instrument: string, timeframe: Timeframe, count?: number): Promise<Candle[]> {
+    const session = this.sessions.get(sessionKey(instrument, timeframe));
+    if (!session || session.primingSettled) {
+      return Promise.resolve(this.bufferSnapshot(instrument, timeframe, count));
+    }
+    return new Promise((resolve) => {
+      const started = Date.now();
+      const poll = () => {
+        if (session.primingSettled || Date.now() - started > 8000) {
+          resolve(this.bufferSnapshot(instrument, timeframe, count));
+          return;
+        }
+        setTimeout(poll, 100);
+      };
+      poll();
+    });
+  }
+
   /** Entry point for every normalized upstream tick. */
   handleTick(tick: MarketTick): void {
     for (const session of this.sessions.values()) {
@@ -227,6 +252,22 @@ export class CandleFeed extends EventEmitter {
         );
       });
     } else {
+      // Buffer-fed session (1s): restore the persisted history tail so the
+      // chart keeps its past across server restarts, and continue the active
+      // bucket if the persisted data reaches into it.
+      const persisted = this.persist?.load(instrument, timeframe, BUFFER_CAPACITY) ?? [];
+      if (persisted.length > 0) {
+        session.buffer = persisted.map((c) => ({ ...c }));
+        const nowBucketSec = Math.floor(Date.now() / (TIMEFRAME_SECONDS[timeframe] * 1000));
+        const candidate = persisted.at(-1);
+        if (candidate && candidate.time >= nowBucketSec) {
+          session.aggregator.seed(candidate);
+        }
+        this.log.info(
+          { instrument, timeframe, candles: persisted.length },
+          "restored persisted candle history"
+        );
+      }
       session.primingSettled = true;
     }
 
@@ -237,18 +278,26 @@ export class CandleFeed extends EventEmitter {
    * Seeds the active bucket from native history so a freshly created
    * session does not produce an artificially short first candle. Ticks
    * arriving while the fetch runs are queued and replayed afterwards.
+   *
+   * Also rebuilds the recent buffer from native history: without this, a
+   * session recreated after a client reconnect would serve snapshots full
+   * of flat synthetic candles (rollover/lull fillers) that would overwrite
+   * the client's real streamed candles on merge.
    */
   private async prime(session: Session): Promise<void> {
     try {
       assertRest(this.rest);
+      const seconds = TIMEFRAME_SECONDS[session.timeframe];
+      // Rebuild ~SNAPSHOT_CANDLES worth of recent history so the buffer the
+      // snapshot is served from matches what the history route would serve.
+      const wantBuckets = 300;
       const native = await this.rest.getNativeCandles(
         session.instrument,
         session.timeframe,
-        PRIME_COUNT
+        nativeCandlesNeeded(session.timeframe, wantBuckets)
       );
 
       let seedSource = native;
-      const seconds = TIMEFRAME_SECONDS[session.timeframe];
       if (seconds > TIMEFRAME_SECONDS["5s"] && native.length > 0) {
         seedSource = aggregateCandles(native, seconds);
       }
@@ -260,6 +309,13 @@ export class CandleFeed extends EventEmitter {
       const candidate = seedSource.at(-1);
       if (candidate && candidate.time >= nowBucketSec) {
         session.aggregator.seed(candidate);
+      }
+
+      // Fill the recent buffer with the authoritative (chained) history so
+      // reconnect snapshots contain real candles, not lull synthetics.
+      if (seedSource.length > 0) {
+        const recent = chainContinuity(seedSource.slice(-wantBuckets));
+        session.buffer = recent.map((c) => ({ ...c }));
       }
     } catch (err: unknown) {
       this.log.warn(
@@ -307,10 +363,18 @@ export class CandleFeed extends EventEmitter {
         return;
       }
 
-      const closedC = chainFrom(
-        session.buffer.at(-1)?.close ?? result.closed.open,
-        result.closed
-      );
+      // Chain to the PREVIOUS bucket's close. The active candle is pushed
+      // to the buffer on every tick, so buffer.at(-1) here is the very
+      // bucket being closed — chaining to it would set open := its own
+      // close and collapse every tick-closed candle into a bodyless doji.
+      let prevClose = result.closed.open;
+      for (let i = session.buffer.length - 1; i >= 0; i--) {
+        if (session.buffer[i]!.time < result.closed.time) {
+          prevClose = session.buffer[i]!.close;
+          break;
+        }
+      }
+      const closedC = chainFrom(prevClose, result.closed);
       this.pushBuffer(session, closedC);
       this.emitCandle(session, closedC, true);
       // Replace our stream-subset version with OANDA's authoritative candle
@@ -328,6 +392,11 @@ export class CandleFeed extends EventEmitter {
     const last = session.buffer.at(-1);
     if (last && last.time === result.candle.time && last.open !== result.candle.open) {
       result.candle = chainFrom(last.open, result.candle);
+    } else if (last && last.time < result.candle.time) {
+      // First live bucket of a session whose history was restored from disk:
+      // chain its open to the persisted close so restored history and the
+      // live candle are seamless.
+      result.candle = chainFrom(last.close, result.candle);
     }
     this.pushBuffer(session, result.candle);
     this.emitCandle(session, result.candle, false);
@@ -385,7 +454,13 @@ export class CandleFeed extends EventEmitter {
 
         // OANDA sometimes has NO candle for the bucket (zero ticks even in
         // their full feed). Carry the previous close forward — same as the
-        // platform chart — when the bucket directly follows ours.
+        // platform chart — but ONLY when we don't already hold real streamed
+        // data for the bucket: flattening a candle that was built from real
+        // stream ticks destroys live data (the "candles turned to dojis" bug).
+        const existingForBucket = session.buffer.find((c) => c.time === closed.time);
+        const streamedHasBody =
+          !!existingForBucket &&
+          (existingForBucket.high > existingForBucket.low || existingForBucket.open !== existingForBucket.close);
         const bufPre = session.buffer;
         let prevBefore = bufPre.length ? bufPre[bufPre.length - 1]! : undefined;
         for (let i = bufPre.length - 1; i >= 0; i--) {
@@ -394,7 +469,7 @@ export class CandleFeed extends EventEmitter {
             break;
           }
         }
-        if ((!auth || auth.time !== closed.time) && prevBefore) {
+        if ((!auth || auth.time !== closed.time) && prevBefore && !streamedHasBody) {
           const contiguous = closed.time - prevBefore.time === tfSec;
           if (contiguous && Number.isFinite(prevBefore.close)) {
             auth = {
@@ -430,6 +505,11 @@ export class CandleFeed extends EventEmitter {
         const chained = chainFrom(prevClose, auth);
 
         const existing = buf[idx]!;
+        const incomingIsFlat =
+          chained.high === chained.low && chained.open === chained.close && chained.high === chained.close;
+        const existingHasBody = existing.high > existing.low || existing.open !== existing.close;
+        // Never degrade real streamed data with a flat synthetic
+        if (existingHasBody && incomingIsFlat) return;
         if (
           existing.open === chained.open &&
           existing.high === chained.high &&
@@ -534,6 +614,12 @@ export class CandleFeed extends EventEmitter {
   }
 
   private emitCandle(session: Session, candle: Candle, closed: boolean): void {
+    // Persist closed candles for buffer-fed sessions (1s) — the disk file is
+    // their only history source across restarts. Corrections re-emit the same
+    // bucket time and are deduped inside the persist store.
+    if (closed && this.persist && NATIVE_HISTORY_GRANULARITY[session.timeframe] === null) {
+      this.persist.append(session.instrument, session.timeframe, candle);
+    }
     this.emit("candle", {
       instrument: session.instrument,
       timeframe: session.timeframe,

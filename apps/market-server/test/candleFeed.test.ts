@@ -74,4 +74,36 @@ describe("CandleFeed reconciliation", () => {
     expect(b.close).toBe(1.105);
     expect(b.high).toBe(1.105);
   });
+
+  it("tick-closed candle chains to the PREVIOUS bucket's close, not its own (no doji collapse)", async () => {
+    const rest: HistorySource = { getNativeCandles: async () => [] };
+    const feed = new CandleFeed(rest, { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} });
+
+    const events: Array<{ closed: boolean; c: Candle }> = [];
+    feed.on("candle", (e) => events.push({ closed: e.closed, c: e.candle }));
+
+    feed.addSubscriber("EUR_USD", "5s");
+    await vi.waitFor(() => {
+      feed.handleTick(tick(1.2000, BASE + 100));
+      if (events.length === 0) throw new Error("priming not settled");
+    });
+
+    // Bucket A: 1.2000 → 1.2000 (first bucket, no predecessor)
+    // Bucket B: real intrabar movement 1.2010 → 1.2015 → 1.2005, closes at 1.2005
+    events.length = 0;
+    feed.handleTick(tick(1.2000, BASE + TF * 1000 - 100)); // last tick of A
+    feed.handleTick(tick(1.2010, BASE + TF * 1000 + 100)); // first tick of B
+    feed.handleTick(tick(1.2015, BASE + TF * 1000 + 1500));
+    feed.handleTick(tick(1.2005, BASE + TF * 1000 + 2500));
+    feed.handleTick(tick(1.2007, BASE + TF * 2 * 1000 + 100)); // first tick of C → closes B
+
+    const closedB = events.find((e) => e.closed && e.c.time === (BASE + TF * 1000) / 1000);
+    expect(closedB).toBeTruthy();
+    // open must chain to bucket A's close (1.2), NOT collapse onto B's own
+    // close — o === c is the "live candles render as bodyless dojis" bug.
+    expect(closedB!.c.open).toBe(1.2);
+    expect(closedB!.c.close).toBe(1.2005);
+    expect(closedB!.c.high).toBe(1.2015);
+    expect(closedB!.c.open).not.toBe(closedB!.c.close);
+  });
 });

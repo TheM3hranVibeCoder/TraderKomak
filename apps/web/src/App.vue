@@ -111,4 +111,7 @@ function onTimeframeChange(next: Timeframe): void {
 .watchlist-rail:hover .rail-lines span {
   background: var(--text);
 }
+.watchlist-rail.open:hover .rail-lines span {
+  background: var(--accent-hover);
+}
 </style>

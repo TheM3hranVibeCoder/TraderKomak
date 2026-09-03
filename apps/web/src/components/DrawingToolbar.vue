@@ -25,7 +25,7 @@ const tools = [
     <button
       class="tool-btn danger"
       title="Clear all drawings on this chart"
-      @click="drawings.clearAll(drawings.drawings ? Object.keys(drawings.drawings)[0] || '' : '', '')"
+      @click="drawings.clearAll(drawings.drawings ? Object.keys(drawings.drawings)[0] || '' : '')"
       v-if="false"
     >🗑</button>
   </aside>

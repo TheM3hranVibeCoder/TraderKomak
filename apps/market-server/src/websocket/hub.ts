@@ -198,13 +198,18 @@ export class MarketHub {
         this.feed.addSubscriber(msg.instrument, msg.timeframe);
         subs.add(keyOf(msg.instrument, msg.timeframe));
         this.updateStreamInstruments();
-        const candles = this.feed.bufferSnapshot(msg.instrument, msg.timeframe, SNAPSHOT_CANDLES);
-        this.send(socket, {
-          type: "snapshot",
-          instrument: msg.instrument,
-          timeframe: msg.timeframe,
-          candles,
-        });
+        // Wait for the session's historical priming so the snapshot carries
+        // the rebuilt real-history buffer instead of racing it empty.
+        void this.feed
+          .snapshotWhenReady(msg.instrument, msg.timeframe, SNAPSHOT_CANDLES)
+          .then((candles) => {
+            this.send(socket, {
+              type: "snapshot",
+              instrument: msg.instrument,
+              timeframe: msg.timeframe,
+              candles,
+            });
+          });
         return;
       }
     }

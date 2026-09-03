@@ -41,6 +41,10 @@ export interface ChartAdapter {
   yToPrice(y: number): number | null;
   subscribeVisibleRange(cb: (range: { from: number; to: number } | null) => void): void;
   unsubscribeVisibleRange(cb: (range: { from: number; to: number } | null) => void): void;
+  /** Fires whenever the series data changes (live ticks, corrections) —
+   *  callers re-project price-anchored overlays (drawings) after this. */
+  subscribeDataChanged(cb: () => void): void;
+  unsubscribeDataChanged(cb: () => void): void;
 }
 
 function toLW(c: Candle): CandlestickData<Time> {
@@ -50,6 +54,25 @@ function toLW(c: Candle): CandlestickData<Time> {
     high: c.high,
     low: c.low,
     close: c.close,
+  };
+}
+
+/**
+ * Display-continuity: open := prevClose with high/low clamped so the body
+ * still contains it (high/low/close keep their real values). Mirrors the
+ * server's chainContinuity so LIVE candles and refreshed history render
+ * identically — a transient open/close mismatch between consecutive streamed
+ * candles (reconcile pacing, flat-guard divergences) never shows as a gap
+ * between bodies, and a corrected candle re-chains its neighbour instantly
+ * instead of after 2-3 more candles.
+ */
+function chainTo(prevClose: number, candle: Candle): Candle {
+  const open = prevClose;
+  return {
+    ...candle,
+    open,
+    high: Math.max(candle.high, open),
+    low: Math.min(candle.low, open),
   };
 }
 
@@ -150,6 +173,10 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
   /** Flips true after the first non-empty dataset — enables view preservation. */
   let hadDataOnce = false;
   const rangeCbs = new Set<(range: { from: number; to: number } | null) => void>();
+  const dataCbs = new Set<() => void>();
+  const notifyDataChanged = () => {
+    for (const cb of dataCbs) cb();
+  };
   chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
     const r = range as { from: number; to: number } | null;
     for (const cb of rangeCbs) cb(r);
@@ -164,6 +191,56 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     return 5;
   }
 
+  /**
+   * Linear x↔bar-index grid, calibrated on two integer bars inside the
+   * visible range where LWC's `logicalToCoordinate` is exact (and uniform).
+   *
+   * Conversions MUST happen in index space rather than raw time: the data has
+   * weekend/session gaps, so time is not linear in x across the dataset.
+   * LWC's own reverse conversion (`coordinateToLogical`/`coordinateToTime`) is
+   * only reliable ON data bars — in the right margin / over the price axis it
+   * returns indices hundreds of bars off, which used to corrupt drawings
+   * resized past the last candle. Everything off the data range therefore
+   * extrapolates along this grid instead.
+   */
+  function barGrid(): { xRef: number; iRef: number; pxPerBar: number; barSec: number } | null {
+    const n = lastData.length;
+    if (n < 2) return null;
+    let range: { from: number; to: number } | null = null;
+    try {
+      range = chart.timeScale().getVisibleLogicalRange() as { from: number; to: number } | null;
+    } catch {
+      return null;
+    }
+    if (!range) return null;
+    const iFrom = Math.ceil(range.from);
+    const iTo = Math.floor(range.to);
+    if (iTo - iFrom < 1) return null; // degenerate viewport
+    let xFrom: number | null = null;
+    let xTo: number | null = null;
+    try {
+      xFrom = chart.timeScale().logicalToCoordinate(iFrom as never);
+      xTo = chart.timeScale().logicalToCoordinate(iTo as never);
+    } catch {
+      return null;
+    }
+    if (xFrom === null || xTo === null || xTo === xFrom) return null;
+    const barSec = barSeconds();
+    if (barSec <= 0) return null;
+    return { xRef: xFrom, iRef: iFrom, pxPerBar: (xTo - xFrom) / (iTo - iFrom), barSec };
+  }
+
+  /** Bar index → time: exact bar times inside the data, uniform seconds-per-bar
+   *  extrapolation beyond either end (margins / over the axis / off-pane). */
+  function indexToTime(i: number): number | null {
+    const n = lastData.length;
+    if (n === 0) return null;
+    const idx = Math.round(i);
+    if (idx >= n) return lastData[n - 1]!.time + (idx - (n - 1)) * barSeconds();
+    if (idx < 0) return lastData[0]!.time + idx * barSeconds();
+    return lastData[idx]!.time;
+  }
+
   return {
     setData(candles: Candle[]): void {
       // Capture the user's viewport BEFORE replacing data so it survives
@@ -175,8 +252,13 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       const prevFirstTime = lastData.length ? lastData[0]!.time : null;
 
       lastData = [...candles].sort((a, b) => a.time - b.time);
+      // Display-continuity pass (see chainTo)
+      for (let i = 1; i < lastData.length; i++) {
+        lastData[i] = chainTo(lastData[i - 1]!.close, lastData[i]!);
+      }
       if (lastData.length === 0) {
         series.setData([]);
+        notifyDataChanged();
         return;
       }
       series.setData(lastData.map(toLW));
@@ -207,31 +289,46 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       } else {
         // Fresh mount / symbol / timeframe switch: reset price auto-scale
         // (vertical drags disable it and would freeze the OLD symbol's
-        // price range) and show recent bars with right margin.
+        // price range) and open at the SAME default zoom on every timeframe:
+        // the last ~150 bars plus the standard right margin. A freshly
+        // (re)populating 1s buffer simply grows into the window.
         chart.priceScale("right").applyOptions({ autoScale: true });
-        const visible = Math.min(150, lastData.length);
         chart.timeScale().setVisibleLogicalRange({
-          from: lastData.length - visible,
+          from: lastData.length - 150,
           to: lastData.length + RIGHT_MARGIN_BARS,
         });
       }
       hadDataOnce = true;
+      notifyDataChanged();
     },
 
     updateCandle(candle: Candle): void {
-      const existing = lastData.find((c) => c.time === candle.time);
-      if (existing) {
-        Object.assign(existing, candle);
-        series.update(toLW(candle));
+      const idx = lastData.findIndex((c) => c.time === candle.time);
+      if (idx >= 0) {
+        // Update in place, re-chained to the predecessor (the server's
+        // reconcile may correct any candle after the fact).
+        lastData[idx] = chainTo(idx > 0 ? lastData[idx - 1]!.close : candle.open, candle);
+        series.update(toLW(lastData[idx]));
       } else {
-        // New bucket — append WITHOUT touching the viewport. The chart must
+        // New bucket — insert WITHOUT touching the viewport. The chart must
         // never move on its own: if the user is at the live edge they can
         // pan right to reveal new bars; if scrolled away, nothing shifts.
         lastData.push({ ...candle });
         lastData.sort((a, b) => a.time - b.time);
-        series.update(toLW(candle));
+        const at = lastData.findIndex((c) => c.time === candle.time);
+        lastData[at] = chainTo(at > 0 ? lastData[at - 1]!.close : candle.open, lastData[at]!);
+        series.update(toLW(lastData[at]));
+      }
+      // The updated/corrected candle changes the close its successor was
+      // chained to — re-chain the neighbour so bodies never detach.
+      const nextIdx = lastData.findIndex((c) => c.time === candle.time) + 1;
+      const next = lastData[nextIdx];
+      if (next && next.open !== lastData[nextIdx - 1]!.close) {
+        lastData[nextIdx] = chainTo(lastData[nextIdx - 1]!.close, next);
+        series.update(toLW(lastData[nextIdx]));
       }
       if (lastData.length > 5000) lastData = lastData.slice(-5000);
+      notifyDataChanged();
     },
 
     fitContent(): void {
@@ -286,19 +383,44 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
         const x = chart.timeScale().timeToCoordinate(time as never);
         if (typeof x === "number" && Number.isFinite(x)) return x;
       } catch {
-        /* fall through to logical extrapolation */
+        /* fall through to bar-grid extrapolation */
       }
-      // timeToCoordinate returns null for times that are not on a data bar
-      // (left/right margins). Extrapolate via the bar grid so drawings in the
-      // margin still render.
-      if (lastData.length === 0) return null;
-      try {
-        const logical = (time - lastData[0]!.time) / barSeconds();
-        const x = chart.timeScale().logicalToCoordinate(logical as never);
-        return typeof x === "number" && Number.isFinite(x) ? x : null;
-      } catch {
-        return null;
+      // timeToCoordinate returns null for times off the current bar grid —
+      // both outside the data range (margins) and for in-data times that
+      // aren't on a bucket boundary (e.g. a 1s-anchored rectangle edge
+      // viewed on the 5s chart). Project along the calibrated bar grid:
+      // outside the data extrapolate; inside it, locate the surrounding
+      // bars and interpolate (index space — session gaps make time
+      // non-linear in x, see barGrid).
+      const grid = barGrid();
+      if (!grid) return null;
+      const n = lastData.length;
+      const lastT = lastData[n - 1]!.time;
+      const firstT = lastData[0]!.time;
+      let logical: number;
+      if (time >= lastT) {
+        logical = n - 1 + (time - lastT) / grid.barSec;
+      } else if (time <= firstT) {
+        logical = (time - firstT) / grid.barSec;
+      } else {
+        let lo = 0;
+        let hi = n - 1;
+        let i = 0;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          if (lastData[mid]!.time <= time) {
+            i = mid;
+            lo = mid + 1;
+          } else {
+            hi = mid - 1;
+          }
+        }
+        const t0 = lastData[i]!.time;
+        const t1 = i + 1 < n ? lastData[i + 1]!.time : t0 + grid.barSec;
+        const frac = t1 > t0 ? (time - t0) / (t1 - t0) : 0;
+        logical = i + frac;
       }
+      return grid.xRef + (logical - grid.iRef) * grid.pxPerBar;
     },
     logicalToX(logical: number): number | null {
       try {
@@ -309,22 +431,16 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       }
     },
     xToTime(x: number): number | null {
-      try {
-        const t = chart.timeScale().coordinateToTime(x as never);
-        if (typeof t === "number") return t;
-      } catch {
-        /* fall through to logical extrapolation */
-      }
-      // coordinateToTime returns null outside the data range — use the logical
-      // index grid instead so the margins stay drawable.
-      if (lastData.length === 0) return null;
-      try {
-        const logical = chart.timeScale().coordinateToLogical(x as never);
-        if (logical === null || logical === undefined) return null;
-        return Math.round(lastData[0]!.time + Number(logical) * barSeconds());
-      } catch {
-        return null;
-      }
+      // Pure bar-grid conversion: in the margins / over the price axis LWC's
+      // coordinateToTime returns null (or worse, off-by-hundreds-of-bars
+      // indices), so always convert via the calibrated index grid. The result
+      // is always an exact bar time (grid-aligned), so timeToX renders it
+      // exactly — full round-trip fidelity for drawing handles.
+      const grid = barGrid();
+      if (!grid) return null;
+      const logical = grid.iRef + (x - grid.xRef) / grid.pxPerBar;
+      if (!Number.isFinite(logical)) return null;
+      return indexToTime(logical);
     },
     yToPrice(y: number): number | null {
       try {
@@ -339,6 +455,13 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     },
     unsubscribeVisibleRange(cb: (range: { from: number; to: number } | null) => void): void {
       rangeCbs.delete(cb);
+    },
+
+    subscribeDataChanged(cb: () => void): void {
+      dataCbs.add(cb);
+    },
+    unsubscribeDataChanged(cb: () => void): void {
+      dataCbs.delete(cb);
     },
 
     destroy(): void {
