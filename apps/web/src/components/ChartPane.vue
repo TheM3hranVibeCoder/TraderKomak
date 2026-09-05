@@ -92,24 +92,34 @@ function stopHold(): void {
 }
 
 /** While picking, the replay line follows the mouse across the chart. */
-function onPickingMove(ev: MouseEvent): void {
-  if (!adapter || !containerRef.value || !props.candles.length) return;
+/** Mouse x → time via the VISIBLE LOGICAL RANGE (deterministic — immune to
+ *  the bar-grid calibration glitches that could produce times far outside
+ *  the data during layout transitions). */
+function replayTimeAt(clientX: number): number | null {
+  if (!adapter || !containerRef.value || !displayCandles.value.length) return null;
   const r = containerRef.value.getBoundingClientRect();
-  const t = adapter.xToTime(ev.clientX - r.left);
+  const lr = adapter.getLogicalRange();
+  if (!lr || lr.to <= lr.from) return null;
+  const chartW = containerRef.value.clientWidth - axisRightW.value;
+  const frac = Math.min(Math.max((clientX - r.left) / chartW, 0), 1);
+  const idx = Math.round(lr.from + frac * (lr.to - lr.from));
+  const clamped = Math.min(Math.max(idx, 0), displayCandles.value.length - 1);
+  return displayCandles.value[clamped]!.time;
+}
+
+function onPickingMove(ev: MouseEvent): void {
+  const t = replayTimeAt(ev.clientX);
   if (t === null) return;
-  // xToTime can produce garbage during layout transitions (bad bar-grid
-  // calibration) — clamp to the loaded candle range so the replay line can
-  // never leave the chart (a garbage cutoff once emptied the whole chart
-  // and made the exit view land on the oldest data).
-  const first = props.candles[0]!.time;
-  const last = props.candles[props.candles.length - 1]!.time;
-  pickTime.value = Math.min(Math.max(t, first), last);
+  pickTime.value = t;
   recalcRects();
 }
 
 function stopPickingListeners(): void {
   if (pickingMove && containerRef.value) {
-    containerRef.value.removeEventListener("mousemove", pickingMove);
+    // CAPTURE phase: LWC's canvas listeners stopPropagation on real mouse
+    // moves, which would kill a bubble-phase listener — capture runs first
+    // and always fires.
+    containerRef.value.removeEventListener("mousemove", pickingMove, { capture: true });
   }
   pickingMove = null;
 }
@@ -118,15 +128,20 @@ watch(
   () => replay.picking,
   (picking) => {
     stopPickingListeners();
-    if (picking && adapter && containerRef.value && props.candles.length) {
-      // Start the line at ~60% of the visible chart (clamped to the data)
+    if (picking && containerRef.value && displayCandles.value.length) {
+      // Start the line at ~60% of the visible chart
       const w = containerRef.value.clientWidth - axisRightW.value;
-      const t = adapter.xToTime(w * 0.6);
-      const first = props.candles[0]!.time;
-      const last = props.candles[props.candles.length - 1]!.time;
-      pickTime.value = Math.min(Math.max(t ?? last, first), last);
+      const lr = adapter?.getLogicalRange();
+      let idx: number;
+      if (lr && lr.to > lr.from) {
+        idx = Math.round(lr.from + 0.6 * (lr.to - lr.from));
+      } else {
+        idx = displayCandles.value.length - 1;
+      }
+      idx = Math.min(Math.max(idx, 0), displayCandles.value.length - 1);
+      pickTime.value = displayCandles.value[idx]!.time;
       pickingMove = onPickingMove;
-      containerRef.value.addEventListener("mousemove", pickingMove);
+      containerRef.value.addEventListener("mousemove", pickingMove, { capture: true });
       recalcRects();
     }
   }
@@ -2543,14 +2558,9 @@ onMounted(async () => {
       if (e.button !== 0 || !isInChartArea(e) || !adapter || !containerRef.value) return;
       e.preventDefault();
       e.stopPropagation();
-      const r = containerRef.value.getBoundingClientRect();
-      const t = adapter.xToTime(e.clientX - r.left);
-      // Clamp to the loaded range — a garbage conversion must never produce
-      // an empty chart (or a cutoff in the future/past outside the data).
-      if (t !== null && props.candles.length) {
-        const first = props.candles[0]!.time;
-        const last = props.candles[props.candles.length - 1]!.time;
-        replay.startAt(Math.min(Math.max(t, first), last));
+      const t = replayTimeAt(e.clientX);
+      if (t !== null) {
+        replay.startAt(t);
         // Cut here: jump so the last candle sits at the right with free space
         focusReplayEdge();
       }
