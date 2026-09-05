@@ -37,8 +37,10 @@ const displayCandles = computed(() =>
 /* ── Replay playback engine ─────────────────────────────────────────── */
 const pickTime = ref<number | null>(null);
 const replayVlX = ref<number | null>(null);
+const replayTag = ref<{ y: number; text: string } | null>(null);
 let replayTimer: ReturnType<typeof setInterval> | null = null;
 let holdTimer: ReturnType<typeof setInterval> | null = null;
+let holdTimeout: ReturnType<typeof setTimeout> | null = null;
 let pickingMove: ((ev: MouseEvent) => void) | null = null;
 
 /** Advance the replay boundary to the next / previous candle. */
@@ -68,13 +70,21 @@ function togglePlay(): void {
   replay.playing = !replay.playing;
 }
 
-/** Hold-to-repeat stepping (forward / backward buttons). */
+/** Hold-to-repeat stepping (forward / backward buttons): one step on press,
+ *  then the repeat starts after a short hold at the SELECTED speed
+ *  (1x = 1 candle/sec … 10x = 10 candles/sec). */
 function holdStep(dir: 1 | -1): void {
   stopHold();
   replayStep(dir);
-  holdTimer = setInterval(() => replayStep(dir), 180);
+  holdTimeout = setTimeout(() => {
+    holdTimer = setInterval(() => replayStep(dir), 1000 / replay.speed);
+  }, 350);
 }
 function stopHold(): void {
+  if (holdTimeout) {
+    clearTimeout(holdTimeout);
+    holdTimeout = null;
+  }
   if (holdTimer) {
     clearInterval(holdTimer);
     holdTimer = null;
@@ -126,6 +136,27 @@ watch(
     if (replay.active && replay.playing && !replay.picking) {
       replayTimer = setInterval(() => replayStep(1), 1000 / replay.speed);
     }
+  }
+);
+
+/** Keep the replay candle at the right edge with free space: on cut, while
+ *  playing, and on exit. Double nextTick defers past the displayCandles
+ *  watcher's setData so the viewport survives it. */
+function focusReplayEdge(): void {
+  nextTick(() => nextTick(() => adapter?.focusLast()));
+}
+watch(
+  () => replay.cutoff,
+  (cutoff, prev) => {
+    if (replay.active && cutoff !== null && replay.playing && prev !== null && cutoff > prev) {
+      focusReplayEdge();
+    }
+  }
+);
+watch(
+  () => replay.active,
+  (active) => {
+    if (!active) focusReplayEdge(); // smooth return to the live edge on exit
   }
 );
 
@@ -971,6 +1002,18 @@ const buildPolyPixel = (
   const replayT = replay.picking ? pickTime.value : replay.cutoff;
   replayVlX.value = replay.active && replayT !== null ? (ad.timeToX(replayT) ?? null) : null;
 
+  // Replay price tag: the close of the last visible candle, rendered on the
+  // price scale directly UNDER the live price label (the series ends there,
+  // so LWC's own label sits at the same price).
+  if (replay.active && !replay.picking && displayCandles.value.length) {
+    const lastC = displayCandles.value[displayCandles.value.length - 1]!;
+    const y = ad.getPriceY(lastC.close);
+    const lh = adapter.getPriceLabelHeight();
+    replayTag.value = y !== null ? { y: y + lh / 2 + 1, text: lastC.close.toFixed(instrumentPrecision(market.instrument)) } : null;
+  } else {
+    replayTag.value = null;
+  }
+
   // Keep the open edit panel anchored to its rectangle through pan/zoom and
   // chart resizes (watchlist toggle, window resize) — the rectangle's pixels
   // changed under it, so the panel would otherwise sit at stale coordinates.
@@ -1706,10 +1749,19 @@ function positionPolyPanel(id: string): void {
   }
 }
 
-/** Shared corner-anchored panel placement (used by trendline + polyline). */
-function computeCornerPanelPos(ex: number, ey: number, pane: HTMLElement, el: HTMLElement | null): { x: number; y: number } {
-  const w = el?.offsetWidth || PANEL_W;
-  const h = el?.offsetHeight || PANEL_H;
+/** Shared corner-anchored panel placement (used by trendline + polyline).
+ *  `forceW`/`forceH` may be passed so a first paint with a hidden panel
+ *  (display:less measuring) never flips to the wrong side. */
+function computeCornerPanelPos(
+  ex: number,
+  ey: number,
+  pane: HTMLElement,
+  el: HTMLElement | null,
+  forceW?: number,
+  forceH?: number
+): { x: number; y: number } {
+  const w = forceW != null ? forceW : el?.offsetWidth || PANEL_W;
+  const h = forceH != null ? forceH : el?.offsetHeight || PANEL_H;
   const gap = 8;
   let x = ex + gap;
   let y = ey - h - gap;
@@ -1930,27 +1982,50 @@ function onPosClick(id: string, e: MouseEvent): void {
 
 /** Panel anchored to the position's top-right corner (profit-box side).
  *  When the position is small the %/pips stats sit above the TP line, so
- *  the panel is lifted higher to never cover them. */
+ *  the panel is lifted higher to never cover them. The panel's real size is
+ *  cached (measured even while visibility-hidden) so the first placement —
+ *  including the left/right flip decision — is already correct. */
+let posPanelW = 0;
+let posPanelH = 0;
 function positionPosPanel(id: string): void {
   const px = posPixels.value.find((p) => p.id === id);
   const pane = containerRef.value;
   if (!px || !pane) return;
   const topY = Math.min(px.tpY, px.entryY);
   const anchorY = px.width >= 140 ? topY : topY - 35;
-  posPanelPos.value = computeCornerPanelPos(px.left + px.width, anchorY, pane, posPanelEl.value);
+  const place = () => {
+    const p2 = posPixels.value.find((q) => q.id === id);
+    if (!p2 || !containerRef.value) return;
+    const t2 = Math.min(p2.tpY, p2.entryY);
+    posPanelPos.value = computeCornerPanelPos(
+      p2.left + p2.width,
+      p2.width >= 140 ? t2 : t2 - 35,
+      containerRef.value,
+      posPanelEl.value,
+      posPanelW || undefined,
+      posPanelH || undefined
+    );
+  };
+  posPanelPos.value = computeCornerPanelPos(
+    px.left + px.width,
+    anchorY,
+    pane,
+    posPanelEl.value,
+    posPanelW || undefined,
+    posPanelH || undefined
+  );
   if (!posPanelEl.value) {
     posPanelReady.value = false;
     void nextTick(() => {
-      const sel = selectedPos.value;
-      if (!posPanelEl.value || !sel || !containerRef.value) return;
-      const p = posPixels.value.find((q) => q.id === sel.id);
-      if (p) {
-        const t2 = Math.min(p.tpY, p.entryY);
-        posPanelPos.value = computeCornerPanelPos(p.left + p.width, p.width >= 140 ? t2 : t2 - 35, containerRef.value, posPanelEl.value);
-      }
+      if (!posPanelEl.value) return;
+      posPanelW = posPanelEl.value.offsetWidth;
+      posPanelH = posPanelEl.value.offsetHeight;
+      place();
       posPanelReady.value = true;
     });
   } else {
+    posPanelW = posPanelEl.value.offsetWidth;
+    posPanelH = posPanelEl.value.offsetHeight;
     posPanelReady.value = true;
   }
 }
@@ -2414,6 +2489,8 @@ onMounted(async () => {
       const r = containerRef.value.getBoundingClientRect();
       const t = adapter.xToTime(e.clientX - r.left);
       if (t !== null) replay.startAt(t);
+      // Cut here: jump so the last candle sits at the right with free space
+      focusReplayEdge();
       return;
     }
     // The price/time scales are not drawing surfaces — ignore presses there
@@ -3272,10 +3349,9 @@ onBeforeUnmount(() => {
     <!-- Edit panel for the selected Long/Short position -->
     <div
       v-if="selectedPos && posPanelPos"
-      v-show="posPanelReady"
       ref="posPanelEl"
       class="rect-edit-panel"
-      :style="{ left: posPanelPos.x + 'px', top: posPanelPos.y + 'px' }"
+      :style="{ left: posPanelPos.x + 'px', top: posPanelPos.y + 'px', visibility: posPanelReady ? 'visible' : 'hidden' }"
       @click.stop
     >
       <button
@@ -3310,21 +3386,23 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <!-- Replay mode: vertical line at the replay boundary -->
+    <!-- Replay mode: vertical line while picking the start point -->
     <div
-      v-if="replay.active"
+      v-if="replay.active && replay.picking"
       class="replay-layer drawing-clip"
       :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }"
     >
       <div
         v-if="replayVlX !== null"
-        class="replay-vl"
-        :class="{ picking: replay.picking, playing: replay.playing }"
+        class="replay-vl picking"
         :style="{ left: replayVlX + 'px' }"
       >
-        <span class="replay-vl-knob">{{ replay.picking ? "▶" : "" }}</span>
+        <span class="replay-vl-knob">▶</span>
       </div>
     </div>
+
+    <!-- Replay price tag: under the live price label on the price scale -->
+    <div v-if="replayTag" class="replay-price-tag" :style="{ top: replayTag.y + 'px' }">{{ replayTag.text }}</div>
 
     <!-- Replay control panel -->
     <div v-if="replay.active" class="replay-panel">
@@ -3368,10 +3446,9 @@ onBeforeUnmount(() => {
     <!-- Edit panel for the selected one-click line -->
     <div
       v-if="drawingsStore.selectedSingle && singlePanelPos"
-      v-show="singlePanelReady"
       ref="singlePanelEl"
       class="rect-edit-panel"
-      :style="{ left: singlePanelPos.x + 'px', top: singlePanelPos.y + 'px' }"
+      :style="{ left: singlePanelPos.x + 'px', top: singlePanelPos.y + 'px', visibility: singlePanelReady ? 'visible' : 'hidden' }"
       @click.stop
     >
       <div class="edit-colors">
@@ -4339,6 +4416,18 @@ onBeforeUnmount(() => {
   color: var(--accent);
   border-color: var(--accent);
   background: rgba(41, 98, 255, 0.12);
+}
+.replay-price-tag {
+  position: absolute;
+  right: 0;
+  background: #26a69a;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 6px;
+  border-radius: 3px 0 0 3px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
 }
 .rp-sep {
   width: 1px;

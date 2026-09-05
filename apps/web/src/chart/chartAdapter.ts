@@ -22,6 +22,9 @@ export interface ChartAdapter {
   setData(candles: Candle[]): void;
   updateCandle(candle: Candle): void;
   fitContent(): void;
+  /** Scroll so the newest candle sits at the right edge with the standard
+   *  free margin — used by replay mode on start / play / exit. */
+  focusLast(back?: number): void;
   resize(width: number, height: number): void;
   destroy(): void;
   setTheme(isDark: boolean): void;
@@ -335,6 +338,15 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
 
     fitContent(): void {
       chart.timeScale().fitContent();
+    },
+
+    focusLast(back = 150): void {
+      if (!lastData.length) return;
+      const last = lastData.length - 1;
+      chart.timeScale().setVisibleLogicalRange({
+        from: last - (back - 1),
+        to: last + RIGHT_MARGIN_BARS,
+      });
     },
 
     resize(width: number, height: number): void {

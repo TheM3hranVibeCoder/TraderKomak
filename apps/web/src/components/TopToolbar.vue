@@ -76,9 +76,9 @@ function onSearchBlur() {
         @click="toggleReplay"
       >
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
-          <path d="M4.5 5.5 A 8 8 0 1 0 12 4" />
-          <path d="M4.5 2 L4.5 5.5 L8 5.5" stroke-linejoin="round" />
-          <path d="M10.2 8.8 L15.6 12 L10.2 15.2 Z" fill="currentColor" stroke="none" />
+          <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+          <path d="M20.5 3.5v4h-4" stroke-linejoin="round" />
+          <path d="M10.4 8.9L15.4 12l-5 3.1z" fill="currentColor" stroke="none" />
         </svg>
         <span>Replay</span>
       </button>
