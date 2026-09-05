@@ -97,6 +97,10 @@ function onPickingMove(ev: MouseEvent): void {
   const r = containerRef.value.getBoundingClientRect();
   const t = adapter.xToTime(ev.clientX - r.left);
   if (t === null) return;
+  // xToTime can produce garbage during layout transitions (bad bar-grid
+  // calibration) — clamp to the loaded candle range so the replay line can
+  // never leave the chart (a garbage cutoff once emptied the whole chart
+  // and made the exit view land on the oldest data).
   const first = props.candles[0]!.time;
   const last = props.candles[props.candles.length - 1]!.time;
   pickTime.value = Math.min(Math.max(t, first), last);
@@ -114,11 +118,13 @@ watch(
   () => replay.picking,
   (picking) => {
     stopPickingListeners();
-    if (picking && adapter && containerRef.value) {
-      // Start the line at ~60% of the visible chart
+    if (picking && adapter && containerRef.value && props.candles.length) {
+      // Start the line at ~60% of the visible chart (clamped to the data)
       const w = containerRef.value.clientWidth - axisRightW.value;
       const t = adapter.xToTime(w * 0.6);
-      pickTime.value = t ?? props.candles[props.candles.length - 1]?.time ?? null;
+      const first = props.candles[0]!.time;
+      const last = props.candles[props.candles.length - 1]!.time;
+      pickTime.value = Math.min(Math.max(t ?? last, first), last);
       pickingMove = onPickingMove;
       containerRef.value.addEventListener("mousemove", pickingMove);
       recalcRects();
@@ -172,8 +178,12 @@ watch(
   () => market.timeframe,
   () => {
     // A timeframe switch re-enables autoScale (fresh-mount branch of
-    // setData) — re-freeze it while replay is still active.
-    if (replay.active) adapter?.setPriceAutoScale(false);
+    // setData) — re-freeze it while replay is still active, and pin the
+    // replay edge back to the right with free space.
+    if (replay.active) {
+      adapter?.setPriceAutoScale(false);
+      if (replay.cutoff !== null) focusReplayEdge();
+    }
   }
 );
 
@@ -2535,9 +2545,15 @@ onMounted(async () => {
       e.stopPropagation();
       const r = containerRef.value.getBoundingClientRect();
       const t = adapter.xToTime(e.clientX - r.left);
-      if (t !== null) replay.startAt(t);
-      // Cut here: jump so the last candle sits at the right with free space
-      focusReplayEdge();
+      // Clamp to the loaded range — a garbage conversion must never produce
+      // an empty chart (or a cutoff in the future/past outside the data).
+      if (t !== null && props.candles.length) {
+        const first = props.candles[0]!.time;
+        const last = props.candles[props.candles.length - 1]!.time;
+        replay.startAt(Math.min(Math.max(t, first), last));
+        // Cut here: jump so the last candle sits at the right with free space
+        focusReplayEdge();
+      }
       return;
     }
     // The price/time scales are not drawing surfaces — ignore presses there

@@ -17,6 +17,7 @@ import {
   normalizeInstrument,
 } from "@traderkomak/shared";
 import { fetchCandles } from "@/services/api";
+import { useReplayStore } from "@/stores/replay";
 import { MarketWsClient, type WsStatus } from "@/services/wsClient";
 
 const HISTORY_COUNT = 20000;
@@ -197,13 +198,22 @@ export const useMarketStore = defineStore("market", () => {
     error.value = null;
     hasMore.value = true;
 
+    // Replay mode: load history ENDING at the replay boundary so lower
+    // timeframes show the chart around the cut point (their near-now data
+    // would otherwise be entirely after the cutoff → empty chart).
+    const replay = useReplayStore();
+    // The replay boundary is the fetch target: `to` is in SECONDS (same
+    // unit as candle times / the lazy-load param).
+    const replayTo =
+      replay.active && replay.cutoff !== null ? replay.cutoff : undefined;
+
     // Up to 3 attempts — the very first request after server start can hit a
     // cold upstream connection; retrying transparently avoids a false error.
     let data: Candle[] | null = null;
     let lastError: unknown = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        data = await fetchCandles(wantInstrument, wantTimeframe, HISTORY_COUNT);
+        data = await fetchCandles(wantInstrument, wantTimeframe, HISTORY_COUNT, replayTo);
         lastError = null;
         break;
       } catch (e) {
