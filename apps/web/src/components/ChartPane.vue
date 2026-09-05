@@ -4,6 +4,7 @@ import { createChartAdapter, type ChartAdapter } from "@/chart/chartAdapter";
 import { useThemeStore } from "@/stores/theme";
 import { useMarketStore } from "@/stores/market";
 import { useDrawingsStore, type DrawingRect, type DrawingTrend, type DrawingPoly, type DrawingPosition, type DrawingHLine, type DrawingHRay, type DrawingVLine, type SingleKind, type SingleDrawing, type DashStyle } from "@/stores/drawings";
+import { useReplayStore } from "@/stores/replay";
 import type { Candle } from "@traderkomak/shared";
 import { currencyFlagUrl, commodityIcon } from "@/utils/flags";
 import { TIMEFRAME_SECONDS, instrumentPrecision, instrumentPipSize, providerOf } from "@traderkomak/shared";
@@ -17,11 +18,116 @@ const props = defineProps<{
 
 const market = useMarketStore();
 const drawingsStore = useDrawingsStore();
+const replay = useReplayStore();
 
 const themeStore = useThemeStore();
 const containerRef = ref<HTMLElement | null>(null);
 let adapter: ChartAdapter | null = null;
 let ro: ResizeObserver | null = null;
+
+/** Candles the chart actually shows: in replay mode everything after the
+ *  replay boundary is hidden. The full series stays untouched in the store,
+ *  so lazy-loading keeps working and exit restores the chart instantly. */
+const displayCandles = computed(() =>
+  replay.active && replay.cutoff !== null
+    ? props.candles.filter((c) => c.time <= replay.cutoff!)
+    : props.candles
+);
+
+/* ── Replay playback engine ─────────────────────────────────────────── */
+const pickTime = ref<number | null>(null);
+const replayVlX = ref<number | null>(null);
+let replayTimer: ReturnType<typeof setInterval> | null = null;
+let holdTimer: ReturnType<typeof setInterval> | null = null;
+let pickingMove: ((ev: MouseEvent) => void) | null = null;
+
+/** Advance the replay boundary to the next / previous candle. */
+function replayStep(dir: 1 | -1): void {
+  const arr = props.candles;
+  if (!arr.length || replay.cutoff === null) return;
+  if (dir === 1) {
+    const next = arr.find((c) => c.time > replay.cutoff!);
+    if (next) replay.stepTo(next.time);
+    else replay.playing = false; // reached the newest candle
+  } else {
+    let prev = null as null | (typeof arr)[number];
+    for (const c of arr) {
+      if (c.time < replay.cutoff!) prev = c;
+      else break;
+    }
+    if (prev) replay.stepTo(prev.time);
+  }
+}
+
+function togglePlay(): void {
+  if (replay.picking) {
+    if (pickTime.value !== null) replay.startAt(pickTime.value);
+    replay.playing = true;
+    return;
+  }
+  replay.playing = !replay.playing;
+}
+
+/** Hold-to-repeat stepping (forward / backward buttons). */
+function holdStep(dir: 1 | -1): void {
+  stopHold();
+  replayStep(dir);
+  holdTimer = setInterval(() => replayStep(dir), 180);
+}
+function stopHold(): void {
+  if (holdTimer) {
+    clearInterval(holdTimer);
+    holdTimer = null;
+  }
+}
+
+/** While picking, the replay line follows the mouse across the chart. */
+function onPickingMove(ev: MouseEvent): void {
+  if (!adapter || !containerRef.value || !props.candles.length) return;
+  const r = containerRef.value.getBoundingClientRect();
+  const t = adapter.xToTime(ev.clientX - r.left);
+  if (t === null) return;
+  const first = props.candles[0]!.time;
+  const last = props.candles[props.candles.length - 1]!.time;
+  pickTime.value = Math.min(Math.max(t, first), last);
+  recalcRects();
+}
+
+function stopPickingListeners(): void {
+  if (pickingMove && containerRef.value) {
+    containerRef.value.removeEventListener("mousemove", pickingMove);
+  }
+  pickingMove = null;
+}
+
+watch(
+  () => replay.picking,
+  (picking) => {
+    stopPickingListeners();
+    if (picking && adapter && containerRef.value) {
+      // Start the line at ~60% of the visible chart
+      const w = containerRef.value.clientWidth - axisRightW.value;
+      const t = adapter.xToTime(w * 0.6);
+      pickTime.value = t ?? props.candles[props.candles.length - 1]?.time ?? null;
+      pickingMove = onPickingMove;
+      containerRef.value.addEventListener("mousemove", pickingMove);
+      recalcRects();
+    }
+  }
+);
+
+watch(
+  () => [replay.playing, replay.speed, replay.active, replay.picking] as const,
+  () => {
+    if (replayTimer) {
+      clearInterval(replayTimer);
+      replayTimer = null;
+    }
+    if (replay.active && replay.playing && !replay.picking) {
+      replayTimer = setInterval(() => replayStep(1), 1000 / replay.speed);
+    }
+  }
+);
 
 function flagFor(currency: string): { type: "flag" | "icon"; value: string } {
   const flag = currencyFlagUrl(currency);
@@ -37,7 +143,7 @@ function displayWithSpaces(inst: string | undefined): string {
 }
 
 watch(
-  () => props.candles,
+  displayCandles,
   (next, prev) => {
     if (!adapter) return;
     // Re-anchor the badge after any data change (scale may shift)
@@ -182,7 +288,12 @@ function isForexClosed(d = new Date()): boolean {
  * same size, same blue background — they read as one stacked unit.
  */
 function updateBadgePosition(): void {
-  const last = props.candles[props.candles.length - 1];
+  // During replay the real-time price is in the hidden future — hide the tag
+  if (replay.active) {
+    tagVisible.value = false;
+    return;
+  }
+  const last = displayCandles.value[displayCandles.value.length - 1];
   if (!last || !adapter || !containerRef.value) {
     tagVisible.value = false;
     return;
@@ -205,6 +316,12 @@ function updateBadgePosition(): void {
 function updateCountdown() {
   marketClosed.value = isForexClosed();
   updateBadgePosition();
+
+  // Real-time countdown makes no sense while replaying the past
+  if (replay.active) {
+    countdown.value = "";
+    return;
+  }
 
   if (marketClosed.value) {
     countdown.value = "CLOSED";
@@ -440,8 +557,8 @@ function getSingle(kind: SingleKind, id: string): SingleDrawing | null {
 /** With CTRL held, snap the cursor to the high/low of the nearest candle
  *  (whichever is closer in pixels). */
 function snapToCandle(time: number, price: number, snap: boolean): { time: number; price: number } {
-  if (!snap || !adapter || !props.candles.length) return { time, price };
-  const arr = props.candles;
+  if (!snap || !adapter || !displayCandles.value.length) return { time, price };
+  const arr = displayCandles.value;
   let lo = 0;
   let hi = arr.length - 1;
   while (hi - lo > 1) {
@@ -849,6 +966,10 @@ const buildPolyPixel = (
     }
   }
   singlePixels.value = singleOut;
+
+  // Replay vertical line position
+  const replayT = replay.picking ? pickTime.value : replay.cutoff;
+  replayVlX.value = replay.active && replayT !== null ? (ad.timeToX(replayT) ?? null) : null;
 
   // Keep the open edit panel anchored to its rectangle through pan/zoom and
   // chart resizes (watchlist toggle, window resize) — the rectangle's pixels
@@ -2208,7 +2329,7 @@ onMounted(async () => {
   adapter = createChartAdapter(containerRef.value);
   adapter.setTheme(themeStore.theme === "dark");
   if (props.instrument) adapter.setInstrument(props.instrument);
-  adapter.setData(props.candles);
+  adapter.setData(displayCandles.value);
   // Measure the price/time scales once LWC has laid out its panes
   requestAnimationFrame(updateAxisSizes);
   // Make sure drawings stored from a previous session render as soon as the
@@ -2284,6 +2405,17 @@ onMounted(async () => {
   // tool is active. In cursor mode this handler does nothing and the chart
   // behaves normally.
   const onChartMouseDown = (e: MouseEvent) => {
+    // Replay picking: a click on the chart starts replay at that candle —
+    // everything to the right of the line becomes hidden.
+    if (replay.active && replay.picking) {
+      if (e.button !== 0 || !isInChartArea(e) || !adapter || !containerRef.value) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const r = containerRef.value.getBoundingClientRect();
+      const t = adapter.xToTime(e.clientX - r.left);
+      if (t !== null) replay.startAt(t);
+      return;
+    }
     // The price/time scales are not drawing surfaces — ignore presses there
     if (!isInChartArea(e)) return;
     const tool = drawingsStore.activeTool;
@@ -2465,6 +2597,12 @@ onBeforeUnmount(() => {
   if (visibleCb && adapter) adapter.unsubscribeVisibleRange(visibleCb);
   if (dataCb && adapter) adapter.unsubscribeDataChanged(dataCb);
   if (countdownTimer) clearInterval(countdownTimer);
+  stopHold();
+  stopPickingListeners();
+  if (replayTimer) {
+    clearInterval(replayTimer);
+    replayTimer = null;
+  }
   if (interactionEl && interactCb) {
     interactionEl.removeEventListener("pointermove", interactCb);
     interactionEl.removeEventListener("pointerdown", interactCb);
@@ -3170,6 +3308,61 @@ onBeforeUnmount(() => {
           <path d="M6.7 7.2v3.9M9.3 7.2v3.9" />
         </svg>
       </button>
+    </div>
+
+    <!-- Replay mode: vertical line at the replay boundary -->
+    <div
+      v-if="replay.active"
+      class="replay-layer drawing-clip"
+      :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }"
+    >
+      <div
+        v-if="replayVlX !== null"
+        class="replay-vl"
+        :class="{ picking: replay.picking, playing: replay.playing }"
+        :style="{ left: replayVlX + 'px' }"
+      >
+        <span class="replay-vl-knob">{{ replay.picking ? "▶" : "" }}</span>
+      </div>
+    </div>
+
+    <!-- Replay control panel -->
+    <div v-if="replay.active" class="replay-panel">
+      <template v-if="replay.picking">
+        <span class="replay-hint">Replay — click a candle to start</span>
+        <button class="rp-btn accent" title="Start replay at the line" @click="togglePlay">▶</button>
+        <button class="rp-btn danger" title="Exit replay" @click="replay.exit()">✕</button>
+      </template>
+      <template v-else>
+        <button
+          class="rp-btn"
+          title="Step back (hold to repeat)"
+          @mousedown.prevent="holdStep(-1)"
+          @mouseup="stopHold"
+          @mouseleave="stopHold"
+        >⏮</button>
+        <button class="rp-btn accent" :title="replay.playing ? 'Pause' : 'Play'" @click="togglePlay">
+          {{ replay.playing ? "⏸" : "▶" }}
+        </button>
+        <button
+          class="rp-btn"
+          title="Step forward (hold to repeat)"
+          @mousedown.prevent="holdStep(1)"
+          @mouseup="stopHold"
+          @mouseleave="stopHold"
+        >⏭</button>
+        <span class="rp-sep" />
+        <button
+          v-for="s in [1, 2, 5, 10]"
+          :key="s"
+          class="rp-btn speed"
+          :class="{ active: replay.speed === s }"
+          :title="`Speed ${s}x`"
+          @click="replay.speed = s as any"
+        >{{ s }}x</button>
+        <span class="rp-sep" />
+        <button class="rp-btn danger" title="Exit replay" @click="replay.exit()">✕</button>
+      </template>
     </div>
 
     <!-- Edit panel for the selected one-click line -->
@@ -4051,5 +4244,106 @@ onBeforeUnmount(() => {
 .single-time-tag.selected {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* ── Replay mode ─────────────────────────────────────────────────────── */
+.replay-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+.replay-vl {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1.5px;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(41, 98, 255, 0.5);
+}
+.replay-vl.picking {
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+}
+.replay-vl.playing {
+  background: #26a69a;
+  box-shadow: 0 0 8px rgba(38, 166, 154, 0.5);
+}
+.replay-vl-knob {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 4px;
+  font-size: 8px;
+  line-height: 1;
+  padding: 2px 3px;
+}
+.replay-panel {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  pointer-events: auto;
+}
+.replay-hint {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-right: 4px;
+  white-space: nowrap;
+}
+.rp-btn {
+  min-width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  background: var(--btn-bg);
+  color: var(--text);
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  transition: all 140ms;
+  user-select: none;
+}
+.rp-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.rp-btn.accent {
+  background: var(--accent-gradient);
+  border-color: transparent;
+  color: #fff;
+}
+.rp-btn.danger:hover {
+  color: #ef5350;
+  border-color: rgba(239, 83, 80, 0.55);
+}
+.rp-btn.speed.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(41, 98, 255, 0.12);
+}
+.rp-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  flex-shrink: 0;
 }
 </style>

@@ -2,6 +2,7 @@
 import { ref } from "vue";
 import TimeframeSelector from "./TimeframeSelector.vue";
 import { useThemeStore } from "@/stores/theme";
+import { useReplayStore } from "@/stores/replay";
 import { SUPPORTED_INSTRUMENTS, normalizeInstrument } from "@traderkomak/shared";
 import type { Timeframe } from "@traderkomak/shared";
 
@@ -16,6 +17,12 @@ const emit = defineEmits<{
 }>();
 
 const themeStore = useThemeStore();
+const replay = useReplayStore();
+
+function toggleReplay(): void {
+  if (replay.active) replay.exit();
+  else replay.begin();
+}
 
 const search = ref("");
 
@@ -58,6 +65,23 @@ function onSearchBlur() {
         <button v-if="search" class="search-clear" @click="search = ''">✕</button>
       </div>
       <TimeframeSelector :model-value="timeframe" @update:model-value="emit('update:timeframe', $event)" />
+      <!-- Replay mode: pick a point on the chart, hide the right side, then
+           play the candles forward bar-by-bar -->
+      <button
+        class="replay-btn"
+        type="button"
+        :class="{ active: replay.active }"
+        :title="replay.active ? 'Exit replay mode' : 'Replay mode — click a candle to start'"
+        aria-label="Toggle replay mode"
+        @click="toggleReplay"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <path d="M4.5 5.5 A 8 8 0 1 0 12 4" />
+          <path d="M4.5 2 L4.5 5.5 L8 5.5" stroke-linejoin="round" />
+          <path d="M10.2 8.8 L15.6 12 L10.2 15.2 Z" fill="currentColor" stroke="none" />
+        </svg>
+        <span>Replay</span>
+      </button>
     </div>
 
     <div class="right">
@@ -210,6 +234,35 @@ function onSearchBlur() {
 .theme-btn:hover {
   transform: translateY(-1px);
   border-color: var(--border-strong);
+}
+.replay-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: var(--card-shadow);
+  transition: all 200ms;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.replay-btn:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.replay-btn.active {
+  background: var(--accent-gradient);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 3px 12px rgba(41, 98, 255, 0.35);
 }
 @media (max-width: 720px) {
   .toolbar {
