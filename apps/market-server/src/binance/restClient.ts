@@ -36,7 +36,7 @@ export class BinanceRestError extends Error {
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const BINANCE_MAX_LIMIT = 1000;
-const MAX_BATCHES = 10;
+const MAX_BATCHES = 20;
 const RETRY_DELAY_MS = 500;
 const MAX_ATTEMPTS = 3;
 

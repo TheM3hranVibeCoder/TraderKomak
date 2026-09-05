@@ -19,7 +19,7 @@ import {
 import { fetchCandles } from "@/services/api";
 import { MarketWsClient, type WsStatus } from "@/services/wsClient";
 
-const HISTORY_COUNT = 2000;
+const HISTORY_COUNT = 20000;
 const LAZY_BATCH = 500;
 
 /** Local cache of lazy-loaded history, per symbol+timeframe, so scrolling
@@ -180,9 +180,10 @@ export const useMarketStore = defineStore("market", () => {
       } else {
         candles.value = [...candles.value, { ...candle }];
       }
-      // Cap at reasonable size to avoid unbounded growth (keep last 5000).
-      if (candles.value.length > 5000) {
-        candles.value = candles.value.slice(-5000);
+      // Cap at reasonable size to avoid unbounded growth
+      // (keep the full initial history window).
+      if (candles.value.length > HISTORY_COUNT) {
+        candles.value = candles.value.slice(-HISTORY_COUNT);
       }
     }
     void closed; // reserved for future use (e.g. close animation)

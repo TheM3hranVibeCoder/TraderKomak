@@ -27,7 +27,7 @@ import type { CandleFeed, HistorySource } from "../market/candleFeed.js";
 import type { OandaRestError, RestErrorCode } from "../oanda/restClient.js";
 
 const DEFAULT_COUNT = 1000;
-const MAX_COUNT = 5000;
+const MAX_COUNT = 20000;
 
 interface CandlesRouteDeps {
   rest: HistorySource | null;
