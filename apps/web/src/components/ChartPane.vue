@@ -148,15 +148,32 @@ function focusReplayEdge(): void {
 watch(
   () => replay.cutoff,
   (cutoff, prev) => {
-    if (replay.active && cutoff !== null && replay.playing && prev !== null && cutoff > prev) {
-      focusReplayEdge();
-    }
+    // While replaying forward, the chart stays still as candles fill the
+    // free space; it only follows once the newest candle reaches the right
+    // edge (TradingView behavior).
+    if (!replay.active || cutoff === null || prev === null || cutoff <= prev) return;
+    const idx = displayCandles.value.length - 1;
+    const r = adapter?.getLogicalRange();
+    if (r && idx > r.to - 3) focusReplayEdge();
   }
 );
 watch(
   () => replay.active,
   (active) => {
+    // Freeze the price scale and hide the series' live-price label while
+    // replaying — the replay price tag takes its place on the scale. This
+    // is what keeps backward/play from moving the chart.
+    adapter?.setPriceAutoScale(!active);
+    adapter?.setLastValueVisible(!active);
     if (!active) focusReplayEdge(); // smooth return to the live edge on exit
+  }
+);
+watch(
+  () => market.timeframe,
+  () => {
+    // A timeframe switch re-enables autoScale (fresh-mount branch of
+    // setData) — re-freeze it while replay is still active.
+    if (replay.active) adapter?.setPriceAutoScale(false);
   }
 );
 
@@ -198,10 +215,15 @@ watch(
       adapter.setData(next);
       return;
     }
+    // Removing candle(s) from the END (replay backward step): restore the
+    // exact pre-shrink visible range so the chart stays perfectly still
+    // (LWC would otherwise re-anchor the right edge and shift the view).
+    const preShrinkRange = adapter.getLogicalRange();
     const prevLast = prev[prev.length - 1];
     const nextLast = next[next.length - 1];
     if (!nextLast || !prevLast) {
       adapter.setData(next);
+      restoreRange(preShrinkRange, prev.length - next.length);
       return;
     }
     // Single new candle appended at end (live) — update without refit
@@ -211,6 +233,9 @@ watch(
     }
     if (next.length !== prev.length) {
       adapter.setData(next);
+      if (next.length < prev.length && preShrinkRange) {
+        restoreRange(preShrinkRange, prev.length - next.length);
+      }
       return;
     }
     if (prevLast.time === nextLast.time) {
@@ -318,6 +343,28 @@ function isForexClosed(d = new Date()): boolean {
  * Positions the timer label flush under LWC's native live-price label:
  * same size, same blue background — they read as one stacked unit.
  */
+
+/** Restore the visible range after candles were removed from the end.
+ *  LWC re-anchors the window by right-offset (shifting it ~1 bar per
+ *  removed candle) and normalizes set ranges, so measure the actual drift
+ *  and correct it. */
+function restoreRange(pre: { from: number; to: number } | null, removed: number): void {
+  const ad = adapter;
+  if (!pre || !ad) return;
+  const apply = (from: number, to: number) => ad.setLogicalRange({ from, to });
+  const drifted = ad.getLogicalRange();
+  if (!drifted) return;
+  const dFrom = pre.from - drifted.from;
+  const dTo = pre.to - drifted.to;
+  if (Math.abs(dFrom) < 0.1 && Math.abs(dTo) < 0.1) return;
+  apply(drifted.from + dFrom, drifted.to + dTo);
+  // LWC may re-normalize once — verify and correct again if needed
+  const check = ad.getLogicalRange();
+  if (check && (Math.abs(pre.from - check.from) > 0.1 || Math.abs(pre.to - check.to) > 0.1)) {
+    apply(check.from + (pre.from - check.from), check.to + (pre.to - check.to));
+  }
+}
+
 function updateBadgePosition(): void {
   // During replay the real-time price is in the hidden future — hide the tag
   if (replay.active) {

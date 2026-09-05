@@ -25,6 +25,12 @@ export interface ChartAdapter {
   /** Scroll so the newest candle sits at the right edge with the standard
    *  free margin — used by replay mode on start / play / exit. */
   focusLast(back?: number): void;
+  /** Freeze / unfreeze the right price scale (replay mode keeps it fixed
+   *  so stepping or playing never moves the chart). */
+  setPriceAutoScale(on: boolean): void;
+  /** Show / hide the series' own last-value label on the price scale
+   *  (replay mode hides it and shows the replay price tag instead). */
+  setLastValueVisible(on: boolean): void;
   resize(width: number, height: number): void;
   destroy(): void;
   setTheme(isDark: boolean): void;
@@ -349,6 +355,14 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       });
     },
 
+    setPriceAutoScale(on: boolean): void {
+      chart.priceScale("right").applyOptions({ autoScale: on });
+    },
+
+    setLastValueVisible(on: boolean): void {
+      series.applyOptions({ lastValueVisible: on });
+    },
+
     resize(width: number, height: number): void {
       chart.resize(width, height);
     },
@@ -376,7 +390,14 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       return chart.timeScale().getVisibleLogicalRange() as { from: number; to: number } | null;
     },
     setLogicalRange(range: { from: number; to: number } | null): void {
-      if (range) chart.timeScale().setVisibleLogicalRange(range);
+      if (!range) return;
+      // The rightOffset OPTION would otherwise re-assert itself and snap the
+      // viewport back (visible as a 1-bar drift on replay backward steps) —
+      // keep it in sync with the requested range.
+      chart.timeScale().applyOptions({
+        rightOffset: Math.max(0, range.to - (lastData.length - 1)),
+      });
+      chart.timeScale().setVisibleLogicalRange(range);
     },
     getPriceY(price: number): number | null {
       try {
