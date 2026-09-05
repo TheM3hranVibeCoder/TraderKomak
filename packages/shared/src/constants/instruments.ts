@@ -111,6 +111,20 @@ function isFinitePricePrecisionJpy(instrument: string): boolean {
 }
 
 /**
+ * Price distance of one "pip" for the instrument (OANDA-style):
+ *   forex 0.0001 · JPY quotes 0.01 · metals 0.01.
+ * Crypto / indices / energy have no pip convention — 1.0 (whole point).
+ */
+export function instrumentPipSize(instrument: string): number {
+  const norm = normalizeInstrument(instrument);
+  if (JPY_QUOTE.has(norm)) return 0.01;
+  if (METAL.has(norm)) return 0.01;
+  if (norm === "BTC_USD" || norm === "ETH_USD" || CRYPTO_MAJOR.has(norm) || CRYPTO_MINOR.has(norm)) return 1;
+  if (norm === "SPX500_USD" || norm === "NAS100_USD" || norm === "BCO_USD") return 1;
+  return 0.0001;
+}
+
+/**
  * Normalizes user/provider input to canonical form:
  *   "eur/usd" → EUR_USD      "xauusd" → XAU_USD
  *   "btcusdt" / "btc_usdt" / "BTC-USDT" → BTCUSDT
