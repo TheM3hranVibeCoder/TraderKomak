@@ -230,6 +230,12 @@ export const useMarketStore = defineStore("market", () => {
       if (mySeq !== loadSeq) return;
       if (wantInstrument !== instrument.value || wantTimeframe !== timeframe.value) return;
       if (data) {
+        // Replay mode: remember where the replay-loaded history ends so
+        // forward stepping never reveals candles beyond it (the live stream
+        // continues after the fetch window and would draw one huge candle).
+        if (replayTo !== undefined && data.length > 0) {
+          useReplayStore().setDataEnd(data[data.length - 1]!.time);
+        }
         // Merge locally cached lazy-loaded history (older than the fetch
         // window) so revisiting a symbol/timeframe shows the full cached
         // history immediately instead of re-fetching it via lazy loading.

@@ -49,8 +49,19 @@ function replayStep(dir: 1 | -1): void {
   if (!arr.length || replay.cutoff === null) return;
   if (dir === 1) {
     const next = arr.find((c) => c.time > replay.cutoff!);
-    if (next) replay.stepTo(next.time);
-    else replay.playing = false; // reached the newest candle
+    if (!next) {
+      replay.playing = false; // reached the newest candle
+      return;
+    }
+    // Never step across a data discontinuity: after a TF/symbol switch in
+    // replay the loaded history ENDS at the boundary — the next candle in
+    // the full array is a live-stream candle from after the fetch window,
+    // and revealing it would draw one huge candle across the gap.
+    if (replay.dataEnd !== null && next.time > replay.dataEnd) {
+      replay.playing = false;
+      return;
+    }
+    replay.stepTo(next.time);
   } else {
     let prev = null as null | (typeof arr)[number];
     for (const c of arr) {

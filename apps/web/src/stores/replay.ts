@@ -15,6 +15,11 @@ export const useReplayStore = defineStore("replay", () => {
   const cutoff = ref<number | null>(null);
   const playing = ref(false);
   const speed = ref<1 | 2 | 5 | 10>(1);
+  /** Latest candle time of the history loaded FOR replay (a TF/symbol
+   *  switch during replay fetches history ending at the boundary). Forward
+   *  stepping must never reveal candles beyond it — that jump would draw
+   *  one huge live-stream candle. */
+  const dataEnd = ref<number | null>(null);
 
   /** Enter replay: show the line and wait for the user to pick a point. */
   function begin(): void {
@@ -22,12 +27,17 @@ export const useReplayStore = defineStore("replay", () => {
     picking.value = true;
     cutoff.value = null;
     playing.value = false;
+    dataEnd.value = null; // unrestricted until a TF/symbol switch loads one
   }
 
   /** Start playback from the picked point (hides everything after it). */
   function startAt(t: number): void {
     picking.value = false;
     cutoff.value = t;
+  }
+
+  function setDataEnd(t: number): void {
+    dataEnd.value = t;
   }
 
   /** Move the replay boundary to another candle time. */
@@ -41,7 +51,8 @@ export const useReplayStore = defineStore("replay", () => {
     picking.value = false;
     playing.value = false;
     cutoff.value = null;
+    dataEnd.value = null;
   }
 
-  return { active, picking, cutoff, playing, speed, begin, startAt, stepTo, exit };
+  return { active, picking, cutoff, playing, speed, dataEnd, begin, startAt, stepTo, setDataEnd, exit };
 });
