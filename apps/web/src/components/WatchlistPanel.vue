@@ -425,9 +425,8 @@ onBeforeUnmount(() => {
   width: 320px;
   min-width: 320px;
   border-left-color: var(--border);
-  /* hard-edged side shadow (no blur): a blurred one bleeds above and
-     below the panel, showing as dark lines at its top and bottom */
-  box-shadow: -6px 0 0 rgba(0, 0, 0, 0.06);
+  /* no box-shadow here: any shadow (blurred or solid) paints over the
+     chart's right edge and reads as a dark strip / dead zone */
   pointer-events: auto;
 }
 /* Content glides in with the panel instead of being clipped by it */
