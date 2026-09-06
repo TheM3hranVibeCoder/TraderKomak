@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { useDrawingsStore } from "@/stores/drawings";
 
 const drawings = useDrawingsStore();
@@ -16,31 +16,42 @@ const ICONS: Record<string, string> = {
   rectangle: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="6.5" width="18" height="11" rx="2"/></svg>`,
 };
 
-const tools: Array<{ id: string; title: string; flyout?: boolean }> = [
+const tools: Array<{ id: string; title: string }> = [
   { id: "cursor", title: "Cursor / Select" },
-  { id: "trendline", title: "Trend Line & Lines", flyout: true },
+  { id: "trendline", title: "Trend Line & Lines" },
   { id: "position", title: "Long / Short Position — click entry, then click SL (below = long, above = short)" },
   { id: "polyline", title: "Draw Polyline (double-click to finish)" },
   { id: "rectangle", title: "Draw Rectangle" },
 ];
 
-/* Line tools grouped inside the trendline button (flyout) */
+const LINE_TOOL_IDS = ["trendline", "hline", "hray", "vline"];
 const lineTools: Array<{ id: string; title: string }> = [
   { id: "trendline", title: "Trend Line" },
   { id: "hline", title: "Horizontal Line" },
   { id: "hray", title: "Horizontal Ray (extends right)" },
   { id: "vline", title: "Vertical Line" },
 ];
+
+/* The split button shows and activates the LAST USED line tool; the small
+   arrow on its right opens the full line-tools flyout. */
+const lastLineTool = ref(localStorage.getItem("tk-last-line-tool") ?? "trendline");
 const flyoutOpen = ref(false);
 const flyoutEl = ref<HTMLElement | null>(null);
 const flyoutTop = ref(80);
 
-function onTrendlineClick(e: MouseEvent): void {
-  const btn = e.currentTarget as HTMLElement | null;
+const lineToolActive = computed(() => LINE_TOOL_IDS.includes(drawings.activeTool));
+
+function activateLineTool(): void {
+  drawings.activeTool = lastLineTool.value as never;
+}
+function openFlyout(e: MouseEvent): void {
+  const btn = (e.currentTarget as HTMLElement).closest(".tool-split");
   if (btn) flyoutTop.value = btn.getBoundingClientRect().top;
   flyoutOpen.value = !flyoutOpen.value;
 }
 function pickLineTool(id: string): void {
+  lastLineTool.value = id;
+  localStorage.setItem("tk-last-line-tool", id);
   drawings.activeTool = id as never;
   flyoutOpen.value = false;
 }
@@ -59,18 +70,33 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
       v-for="tool in tools"
       :key="tool.id"
       class="tool-btn"
-      :class="{ active: drawings.activeTool === tool.id || (tool.flyout && lineTools.some((t) => t.id === drawings.activeTool)) }"
+      :class="{ active: drawings.activeTool === tool.id }"
       :title="tool.title"
-      @click="tool.flyout ? onTrendlineClick($event) : (drawings.activeTool = tool.id as any)"
+      @click="drawings.activeTool = tool.id as any"
     >
       <span class="tool-ic" v-html="ICONS[tool.id]"></span>
     </button>
+
+    <!-- Line tools split button: main = last used, arrow = flyout -->
+    <div class="tool-split" :class="{ active: lineToolActive }">
+      <button
+        class="split-main"
+        :title="'Line tools — ' + (lineTools.find((t) => t.id === lastLineTool)?.title ?? '')"
+        @click="activateLineTool"
+      >
+        <span class="tool-ic" v-html="ICONS[lastLineTool]"></span>
+      </button>
+      <button class="split-arrow" title="Line tools" @click.stop="openFlyout">
+        <svg viewBox="0 0 8 6" width="7" height="6" aria-hidden="true"><path d="M0 0l4 5 4-5z" fill="currentColor"/></svg>
+      </button>
+    </div>
+
     <!-- Line tools flyout: trend line / horizontal line / ray / vertical -->
     <div v-if="flyoutOpen" ref="flyoutEl" class="line-flyout" :style="{ top: flyoutTop + 'px' }">
       <button
         v-for="t in lineTools"
         :key="t.id"
-        class="tool-btn flyout-btn"
+        class="flyout-btn"
         :class="{ active: drawings.activeTool === t.id }"
         :title="t.title"
         @click.stop="pickLineTool(t.id)"
@@ -138,6 +164,52 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
   background: var(--border);
   margin: 4px 0;
   flex-shrink: 0;
+}
+/* Split button: main icon + flyout arrow */
+.tool-split {
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  display: flex;
+  overflow: hidden;
+  transition: all 150ms;
+  flex-shrink: 0;
+}
+.tool-split.active {
+  border-color: rgba(41, 98, 255, 0.55);
+  box-shadow: 0 0 0 1px rgba(41, 98, 255, 0.25);
+}
+.split-main {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 0 0 3px;
+}
+.split-arrow {
+  width: 11px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 0 2px 0;
+  font-size: 8px;
+}
+.tool-split:hover .split-main,
+.tool-split:hover .split-arrow {
+  color: var(--text);
+  background: var(--btn-bg);
+}
+.tool-split.active .split-main,
+.tool-split.active .split-arrow {
+  color: var(--accent);
+  background: rgba(41, 98, 255, 0.12);
 }
 .line-flyout {
   position: fixed;
