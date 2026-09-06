@@ -425,7 +425,9 @@ onBeforeUnmount(() => {
   width: 320px;
   min-width: 320px;
   border-left-color: var(--border);
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.08);
+  /* hard-edged side shadow (no blur): a blurred one bleeds above and
+     below the panel, showing as dark lines at its top and bottom */
+  box-shadow: -6px 0 0 rgba(0, 0, 0, 0.06);
   pointer-events: auto;
 }
 /* Content glides in with the panel instead of being clipped by it */

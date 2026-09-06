@@ -5,7 +5,7 @@ import { useThemeStore } from "@/stores/theme";
 import { useMarketStore } from "@/stores/market";
 import { useDrawingsStore, type DrawingRect, type DrawingTrend, type DrawingPoly, type DrawingPosition, type DrawingHLine, type DrawingHRay, type DrawingVLine, type SingleKind, type SingleDrawing, type DashStyle } from "@/stores/drawings";
 import { useReplayStore } from "@/stores/replay";
-import { useDemoStore, type DemoSide, type DemoStatus, type DemoKind } from "@/stores/demo";
+import { useDemoStore, demoValuePerPrice, type DemoSide, type DemoStatus, type DemoKind } from "@/stores/demo";
 import DemoPanel from "./DemoPanel.vue";
 import type { Candle } from "@traderkomak/shared";
 import { currencyFlagUrl, commodityIcon } from "@/utils/flags";
@@ -23,11 +23,16 @@ const drawingsStore = useDrawingsStore();
 const replay = useReplayStore();
 const demo = useDemoStore();
 
+/** Price display precision of the active instrument (template + tags). */
+const prec = computed(() => instrumentPrecision(market.instrument));
+
 /* ── Demo trading: chart lines for pending/open positions ───────────── */
 interface DemoLinePx {
   id: string;
   level: "entry" | "sl" | "tp";
   y: number;
+  /** the line's price — shown on the price-scale tag */
+  price: number;
   color: string;
   dashed: boolean;
   direction: DemoSide;
@@ -54,44 +59,73 @@ function rebuildDemoLines(): void {
   const out: DemoLinePx[] = [];
   if (!demo.active) { demoLines.value = out; return; }
   const prec = instrumentPrecision(market.instrument);
+  const vppOf = (p: { symbol: string; entry: number }) => demoValuePerPrice(p.symbol, p.entry);
   for (const p of demo.openPositions) {
     if (p.symbol !== market.instrument) continue;
-    const risk = p.sl !== null ? Math.abs(p.entry - p.sl) * p.lot : 0;
-    const reward = p.tp !== null ? Math.abs(p.tp - p.entry) * p.lot : 0;
+    const vpp = vppOf(p);
+    const risk = p.sl !== null ? Math.abs(p.entry - p.sl) * p.lot * vpp : 0;
+    const reward = p.tp !== null ? Math.abs(p.tp - p.entry) * p.lot * vpp : 0;
     const rr = risk > 0 ? +(reward / risk).toFixed(2) : null;
     // blue entry line at the filled price
     if (p.kind === "market") {
       const y = demoLevelY(p.entry);
-      if (y !== null) out.push({ id: p.id, level: "entry", y, color: "#2962ff", dashed: false, direction: p.direction, status: "open", lot: p.lot, money: 0, rr: null });
+      if (y !== null) out.push({ id: p.id, level: "entry", y, price: p.entry, color: "#2962ff", dashed: false, direction: p.direction, status: "open", lot: p.lot, money: 0, rr: null });
     }
     if (p.sl !== null) {
       const y = demoLevelY(p.sl);
-      if (y !== null) out.push({ id: p.id, level: "sl", y, color: "#ef5350", dashed: false, direction: p.direction, status: "open", lot: p.lot, money: +risk.toFixed(2), rr: null });
+      if (y !== null) out.push({ id: p.id, level: "sl", y, price: p.sl, color: "#ef5350", dashed: false, direction: p.direction, status: "open", lot: p.lot, money: +risk.toFixed(2), rr: null });
     }
     if (p.tp !== null) {
       const y = demoLevelY(p.tp);
-      if (y !== null) out.push({ id: p.id, level: "tp", y, color: "#26a69a", dashed: false, direction: p.direction, status: "open", lot: p.lot, money: +reward.toFixed(2), rr });
+      if (y !== null) out.push({ id: p.id, level: "tp", y, price: p.tp, color: "#26a69a", dashed: false, direction: p.direction, status: "open", lot: p.lot, money: +reward.toFixed(2), rr });
     }
   }
+  // Pending limit orders: all three lines (entry dashed), like the draft
   for (const p of demo.positions) {
     if (p.symbol !== market.instrument || p.status !== "pending") continue;
-    const y = demoLevelY(p.entry);
-    if (y !== null) out.push({ id: p.id, level: "entry", y, color: "#2962ff", dashed: true, direction: p.direction, status: "pending", lot: p.lot, money: 0, rr: null });
+    const vpp = vppOf(p);
+    const risk = p.sl !== null ? Math.abs(p.entry - p.sl) * p.lot * vpp : 0;
+    const reward = p.tp !== null ? Math.abs(p.tp - p.entry) * p.lot * vpp : 0;
+    const rr = risk > 0 && p.tp !== null ? +((Math.abs(p.tp - p.entry) * p.lot * vpp) / risk).toFixed(2) : null;
+    const yEntry = demoLevelY(p.entry);
+    if (yEntry !== null) out.push({ id: p.id, level: "entry", y: yEntry, price: p.entry, color: "#2962ff", dashed: true, direction: p.direction, status: "pending", lot: p.lot, money: 0, rr: null });
+    if (p.sl !== null) {
+      const y = demoLevelY(p.sl);
+      if (y !== null) out.push({ id: p.id, level: "sl", y, price: p.sl, color: "#ef5350", dashed: false, direction: p.direction, status: "pending", lot: p.lot, money: +risk.toFixed(2), rr: null });
+    }
+    if (p.tp !== null) {
+      const y = demoLevelY(p.tp);
+      if (y !== null) out.push({ id: p.id, level: "tp", y, price: p.tp, color: "#26a69a", dashed: false, direction: p.direction, status: "pending", lot: p.lot, money: +reward.toFixed(2), rr });
+    }
   }
-  // Draft order lines (armed but not yet Set) — entry dashed, SL/TP solid
+  // Draft order lines (armed but not yet Set) — market: SL/TP only (entry
+  // is the pinned current price and gets its line after Set fills);
+  // limit: all three lines, entry dashed and draggable.
   if (draft.value) {
     const d = draft.value;
     const distSl = Math.abs(d.entry - d.sl);
     const distTp = Math.abs(d.tp - d.entry);
-    const risk = demo.sizeMode === "percent" ? (demo.balance * demo.riskPct) / 100 : demo.riskUsd;
-    const reward = distTp > 0 ? distTp * (risk / distSl) : 0;
+    const vpp = demoValuePerPrice(market.instrument, d.entry);
+    const risk =
+      demo.sizeMode === "lot"
+        ? distSl * demo.lot * vpp
+        : demo.sizeMode === "percent"
+          ? (demo.balance * demo.riskPct) / 100
+          : demo.riskUsd;
+    const lotEff =
+      demo.sizeMode === "lot"
+        ? demo.lot
+        : distSl > 0 ? Math.max(0.01, +(risk / (distSl * vpp)).toFixed(2)) : demo.lot;
+    const reward = distTp * lotEff * vpp;
     const rr = distSl > 0 ? +(distTp / distSl).toFixed(2) : null;
-    const yEntry = demoLevelY(d.entry);
     const ySl = demoLevelY(d.sl);
     const yTp = demoLevelY(d.tp);
-    if (yEntry !== null) out.push({ id: "__draft", level: "entry", y: yEntry, color: "#2962ff", dashed: true, direction: d.side, status: "pending", lot: 0, money: 0, rr: null });
-    if (ySl !== null) out.push({ id: "__draft", level: "sl", y: ySl, color: "#ef5350", dashed: false, direction: d.side, status: "pending", lot: 0, money: +risk.toFixed(2), rr: null });
-    if (yTp !== null) out.push({ id: "__draft", level: "tp", y: yTp, color: "#26a69a", dashed: false, direction: d.side, status: "pending", lot: 0, money: +reward.toFixed(2), rr });
+    if (d.kind === "limit") {
+      const yEntry = demoLevelY(d.entry);
+      if (yEntry !== null) out.push({ id: "__draft", level: "entry", y: yEntry, price: d.entry, color: "#2962ff", dashed: true, direction: d.side, status: "pending", lot: lotEff, money: 0, rr: null });
+    }
+    if (ySl !== null) out.push({ id: "__draft", level: "sl", y: ySl, price: d.sl, color: "#ef5350", dashed: false, direction: d.side, status: "pending", lot: lotEff, money: +risk.toFixed(2), rr: null });
+    if (yTp !== null) out.push({ id: "__draft", level: "tp", y: yTp, price: d.tp, color: "#26a69a", dashed: false, direction: d.side, status: "pending", lot: lotEff, money: +reward.toFixed(2), rr });
   }
   demoLines.value = out;
 }
@@ -113,10 +147,11 @@ function onDemoLineDragStart(e: MouseEvent, id: string, level: "entry" | "sl" | 
       const d = draft.value;
       const long = d.side === "long";
       if (level === "entry") {
-        const delta = p - d.entry;
-        d.entry = p;
-        d.sl += delta;
-        d.tp += delta;
+        // entry moves on its own — clamped between SL and TP, never
+        // dragging the other lines with it
+        d.entry = long
+          ? Math.min(Math.max(p, d.sl), d.tp)
+          : Math.min(Math.max(p, d.tp), d.sl);
       } else if (level === "sl") {
         d.sl = long ? Math.min(p, d.entry) : Math.max(p, d.entry);
       } else {
@@ -151,12 +186,26 @@ function armDemo(side: DemoSide, kind: DemoKind): void {
   if (!replay.active && demo.isClosed()) return;
   const c = market.candles;
   if (!c.length) return;
-  const last = c[c.length - 1]!.close;
+  // Market: entry is the current price — in replay mode that is the last
+  // VISIBLE (boundary) candle's close, not the live price
+  const last =
+    replay.active && replay.cutoff !== null
+      ? c.filter((x) => x.time <= replay.cutoff!).slice(-1)[0]!.close
+      : c[c.length - 1]!.close;
   const long = side === "long";
   const dir = long ? 1 : -1;
-  // market: the entry pins to the live price; limit: 0.5% away (draggable)
-  const entry = kind === "limit" ? last * (1 - dir * 0.005) : last;
-  const slDist = entry * 0.005;
+  // default SL/TP distances scale with the timeframe via the average
+  // candle range (ATR-14): tight on 1m, wide on D/W
+  const visible =
+    replay.active && replay.cutoff !== null ? c.filter((x) => x.time <= replay.cutoff!) : c;
+  const win = visible.slice(-14);
+  const atr =
+    win.length > 1
+      ? win.reduce((s, x) => s + (x.high - x.low), 0) / win.length
+      : 0;
+  const slDist = atr > 0 ? atr * 1.5 : last * 0.005;
+  // limit: entry 1 ATR away (draggable)
+  const entry = kind === "limit" ? last - dir * slDist : last;
   draft.value = {
     side,
     kind,
@@ -185,6 +234,7 @@ function cancelDemoDraft(): void {
 }
 
 const demoSummary = computed(() => demo.summaryFor(demoPeriod.value));
+const pendingOrders = computed(() => demo.positions.filter((p) => p.status === "pending"));
 const marketClosedNote = computed(() => !replay.active && isForexClosed());
 function pnlClass(v: number | undefined): string {
   return (v ?? 0) >= 0 ? "pos" : "neg";
@@ -358,9 +408,12 @@ watch(
     // edge — panning by the current view WIDTH (no dependence on the
     // adapter's capped data length).
     if (!replay.active || cutoff === null || prev === null) return;
-    // Demo positions track the price AT the replay boundary
+    // Demo positions track the price AT the replay boundary. Forward steps
+    // process the whole revealed candle — its WICK can fill pending limits
+    // and hit TP/SL, not just the close.
     const lastShown = displayCandles.value[displayCandles.value.length - 1];
-    if (lastShown) demo.processReplayPrice(lastShown.close, market.instrument);
+    if (lastShown && cutoff > prev) demo.processReplayCandle(lastShown, market.instrument);
+    else if (lastShown) demo.processReplayPrice(lastShown.close, market.instrument);
     // Stepping backward past a trade's entry deletes the whole trade
     if (cutoff < prev) demo.deleteBeyond(cutoff, market.instrument);
     if (cutoff <= prev) return;
@@ -3715,9 +3768,9 @@ onBeforeUnmount(() => {
           :class="[l.level, { dashed: l.dashed }]"
           :style="{ top: l.y + 'px', background: l.color }"
         ></div>
-        <!-- Left-edge labels: lot size + $ loss on the SL line, $ reward and
-             R:R on the TP line (per position) -->
-        <template v-for="p in demo.openPositions" :key="'lbl-' + p.id">
+        <!-- Left-edge line labels for open positions AND pending orders:
+             lot + $ loss on the SL line, $ reward + R:R on the TP line -->
+        <template v-for="p in demo.positions.filter((x) => x.symbol === market.instrument && x.status !== 'closed')" :key="'lbl-' + p.id">
           <div
             v-for="l in demoLines.filter((x) => x.id === p.id)"
             :key="'lbl-' + l.level"
@@ -3725,7 +3778,8 @@ onBeforeUnmount(() => {
             :class="l.level"
             :style="{ top: l.y - 10 + 'px' }"
           >
-            <template v-if="l.level === 'sl'">SL {{ p.lot }} lot &#183; -${{ l.money }}</template>
+            <template v-if="l.level === 'entry'">ENTRY {{ p.lot }} lot &#183; @{{ p.entry.toFixed(prec) }}</template>
+            <template v-else-if="l.level === 'sl'">SL {{ p.lot }} lot &#183; -${{ l.money }}</template>
             <template v-else-if="l.level === 'tp'">TP ${{ l.money }} &#183; R:R {{ l.rr }}</template>
           </div>
         </template>
@@ -3746,7 +3800,7 @@ onBeforeUnmount(() => {
             class="demo-axis-tag"
             :class="l.level"
             :style="{ top: l.y - 9 + 'px' }"
-          >{{ l.level === "entry" ? "ENTRY" : l.level === "sl" ? "SL" : "TP" }}</div>
+          >{{ l.level === "entry" ? "ENTRY " : l.level === "sl" ? "SL " : "TP " }}{{ l.price.toFixed(prec) }}</div>
         </template>
       </div>
     </template>
@@ -3754,7 +3808,7 @@ onBeforeUnmount(() => {
     <!-- Demo money management (compact, top-right, collapsible) -->
     <div v-if="demo.active" class="demo-mgr" :class="{ mini: demoMini }">
       <div class="demo-mgr-head">
-        <span class="demo-mgr-title">DEMO</span>
+        <span v-if="!demoMini" class="demo-mgr-title">DEMO</span>
         <button class="demo-mini-btn" :title="demoMini ? 'Expand' : 'Minimize'" @click.stop="demoMini = !demoMini">{{ demoMini ? "+" : "−" }}</button>
       </div>
       <template v-if="!demoMini">
@@ -3987,7 +4041,7 @@ onBeforeUnmount(() => {
         <button class="demo-reset" title="Reset demo account to $100,000" @click="demo.resetAccount()">Reset</button>
       </div>
       <div class="demo-tabs">
-        <button class="demo-tab" :class="{ active: demoTab === 'positions' }" @click="demoTab = 'positions'">Positions ({{ demo.openPositions.length }})</button>
+        <button class="demo-tab" :class="{ active: demoTab === 'positions' }" @click="demoTab = 'positions'">Positions ({{ demo.openPositions.length + pendingOrders.length }})</button>
         <button class="demo-tab" :class="{ active: demoTab === 'history' }" @click="demoTab = 'history'">History ({{ demo.closedPositions.length }})</button>
         <button class="demo-tab" :class="{ active: demoTab === 'stats' }" @click="demoTab = 'stats'">Stats</button>
         <span class="demo-flex" />
@@ -3996,8 +4050,8 @@ onBeforeUnmount(() => {
         </template>
       </div>
       <div v-if="demoTab === 'positions'" class="demo-table">
-        <div v-if="!demo.openPositions.length" class="demo-empty">No open positions — place a trade from the toolbar above the chart.</div>
-        <table v-else>
+        <div v-if="!demo.openPositions.length && !pendingOrders.length" class="demo-empty">No open positions — place a trade from the toolbar above the chart.</div>
+        <table v-if="demo.openPositions.length">
           <thead><tr><th>Symbol</th><th>Side</th><th>Lot</th><th>Entry</th><th>SL</th><th>TP</th><th>P/L $</th><th>P/L %</th><th></th></tr></thead>
           <tbody>
             <tr v-for="p in demo.openPositions" :key="p.id">
@@ -4007,9 +4061,25 @@ onBeforeUnmount(() => {
               <td>{{ p.entry }}</td>
               <td>{{ p.sl ?? '-' }}</td>
               <td>{{ p.tp ?? '-' }}</td>
-              <td :class="pnlClass(((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1))">{{ fmtMoney(((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1) * p.lot) }}</td>
+              <td :class="pnlClass(demo.pnlFor(p, p.lastPrice ?? p.entry))">{{ fmtMoney(demo.pnlFor(p, p.lastPrice ?? p.entry)) }}</td>
               <td :class="pnlClass(((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1))">{{ (((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1) * 100 / p.entry).toFixed(2) }}%</td>
               <td><button class="demo-close" title="Close position" @click="demo.closeAtMarket(p.id)">✕</button></td>
+            </tr>
+          </tbody>
+        </table>
+        <table v-if="pendingOrders.length">
+          <thead><tr><th colspan="6" style="text-align:left">Pending orders</th><th></th><th></th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="p in pendingOrders" :key="p.id">
+              <td>{{ p.symbol.replace('_', '/') }}</td>
+              <td :class="p.direction === 'long' ? 'pos' : 'neg'">{{ p.direction === 'long' ? 'BUY LIM' : 'SELL LIM' }}</td>
+              <td>{{ p.lot }}</td>
+              <td>{{ p.entry }}</td>
+              <td>{{ p.sl ?? '-' }}</td>
+              <td>{{ p.tp ?? '-' }}</td>
+              <td></td>
+              <td></td>
+              <td><button class="demo-close" title="Delete pending order" @click="demo.removePending(p.id)">✕</button></td>
             </tr>
           </tbody>
         </table>
@@ -4039,7 +4109,7 @@ onBeforeUnmount(() => {
           <div class="demo-stat-card"><span>Wins</span><b>{{ demoSummary.wins }}</b></div>
           <div class="demo-stat-card"><span>Winrate</span><b>{{ demoSummary.winrate }}%</b></div>
           <div class="demo-stat-card"><span>Profit factor</span><b>{{ demoSummary.profitFactor ?? '-' }}</b></div>
-          <div class="demo-stat-card"><span :class="pnlClass(demoSummary.profit)">P/L</span><b :class="pnlClass(demoSummary.profit)">{{ fmtMoney(demoSummary.profit) }}</b></div>
+          <div class="demo-stat-card"><span :class="pnlClass(demoSummary.profit)">P/L %</span><b :class="pnlClass(demoSummary.profit)">{{ demoSummary.profitPct >= 0 ? '+' : '' }}{{ demoSummary.profitPct.toFixed(2) }}%</b></div>
           <div class="demo-stat-card"><span>Gross profit</span><b class="pos">{{ fmtMoney(demoSummary.grossProfit) }}</b></div>
           <div class="demo-stat-card"><span>Gross loss</span><b class="neg">{{ fmtMoney(demoSummary.grossLoss) }}</b></div>
           <div class="demo-stat-card"><span>Symbols</span><b>{{ demo.tradedSymbols.length }}</b></div>
@@ -4977,24 +5047,32 @@ onBeforeUnmount(() => {
 .demo-axis-tag.tp {
   background: #26a69a;
 }
-/* Left-edge line labels: lot + $ loss on SL, $ reward + R:R on TP */
+/* Left-edge line labels: lot + $ loss on SL, $ reward + R:R on TP —
+   solid level colors with white text so they stay readable on any
+   background / theme */
 .demo-line-label {
   position: absolute;
-  left: 56px;
+  /* pinned to the left edge of the chart pane */
+  left: 2px;
   font-size: 10px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   padding: 1px 6px;
   border-radius: 4px;
-  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  background: #2962ff;
   white-space: nowrap;
   pointer-events: none;
+  text-shadow: none;
+}
+.demo-line-label.entry {
+  background: #2962ff;
 }
 .demo-line-label.sl {
-  color: #ef5350;
+  background: #ef5350;
 }
 .demo-line-label.tp {
-  color: #26a69a;
+  background: #26a69a;
 }
 .demo-size-modes {
   display: inline-flex;
@@ -5038,6 +5116,13 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   padding: 6px 8px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+.demo-mgr.mini {
+  width: auto;
+  padding: 3px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
 }
 .demo-mgr-head {
   display: flex;

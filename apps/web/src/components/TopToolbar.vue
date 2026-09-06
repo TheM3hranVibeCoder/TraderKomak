@@ -3,6 +3,7 @@ import { ref } from "vue";
 import TimeframeSelector from "./TimeframeSelector.vue";
 import { useReplayStore } from "@/stores/replay";
 import { useDemoStore } from "@/stores/demo";
+import { useThemeStore } from "@/stores/theme";
 import { SUPPORTED_INSTRUMENTS, normalizeInstrument } from "@traderkomak/shared";
 import type { Timeframe } from "@traderkomak/shared";
 
@@ -18,6 +19,7 @@ const emit = defineEmits<{
 
 const replay = useReplayStore();
 const demo = useDemoStore();
+const themeStore = useThemeStore();
 
 function toggleDemo(): void {
   demo.active = !demo.active;
@@ -103,7 +105,20 @@ function onSearchBlur() {
       </button>
     </div>
 
-    <div class="right"></div>
+    <div class="right">
+      <!-- theme toggle: in the header, exactly above the watchlist rail -->
+      <button
+        class="theme-btn"
+        type="button"
+        :class="themeStore.theme"
+        @click="themeStore.toggle()"
+        :title="`Switch to ${themeStore.theme === 'dark' ? 'light' : 'dark'} mode`"
+        aria-label="Toggle theme"
+      >
+        <span v-if="themeStore.theme === 'dark'" class="theme-icon">☀️</span>
+        <span v-else class="theme-icon">🌙</span>
+      </button>
+    </div>
   </header>
 </template>
 
@@ -116,7 +131,7 @@ function onSearchBlur() {
   padding: 8px 12px;
   background: var(--bg-toolbar);
   backdrop-filter: blur(16px) saturate(1.2);
-  border-bottom: 1px solid var(--border);
+  border-bottom: none;
   box-shadow: var(--toolbar-shadow);
   flex-shrink: 0;
   flex-wrap: wrap;
@@ -222,6 +237,26 @@ function onSearchBlur() {
   color: var(--text-muted);
   cursor: pointer;
   font-size: 9px;
+}
+.theme-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* align with the 36px watchlist rail below (cancels the toolbar padding) */
+  margin-right: -12px;
+  width: 36px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  cursor: pointer;
+  transition: all 200ms;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.theme-btn:hover {
+  border-color: var(--border-strong);
+  background: var(--btn-bg);
 }
 .demo-btn {
   display: inline-flex;

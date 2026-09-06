@@ -26,11 +26,14 @@ export type DemoSizeMode = "lot" | "percent" | "usd";
 /** MT5-style contract value: the $ value of a 1.0 price move for 1.0 lot.
  *  Forex (non-JPY quote) 100,000; JPY-quoted 100,000/rate; XAU 100;
  *  XAG 5,000; crypto/indices/energy 1. */
+const CRYPTO_BASES = new Set(["BTC", "ETH"]);
 export function demoValuePerPrice(symbol: string, price: number): number {
   const norm = symbol.toUpperCase();
   if (norm.endsWith("_JPY")) return 100000 / price;
   if (norm === "XAU_USD") return 100;
   if (norm === "XAG_USD") return 5000;
+  const [base] = norm.split("_");
+  if (CRYPTO_BASES.has(base ?? "")) return 1;
   if (/^[A-Z]{3}_[A-Z]{3}$/.test(norm)) return 100000;
   return 1;
 }
@@ -204,16 +207,21 @@ export const useDemoStore = defineStore("demo", () => {
   }
 
   function closePosition(p: DemoPosition, price: number, reason: "tp" | "sl" | "manual"): void {
-    const dirMult = p.direction === "long" ? 1 : -1;
-    const pnl = (price - p.entry) * dirMult * p.lot * demoValuePerPrice(p.symbol, p.entry);
+    const pnl = pnlFor(p, price);
     p.status = "closed";
     p.closePrice = price;
     p.closeTime = nowSec();
     p.closeReason = reason;
     p.pnl = +pnl.toFixed(2);
-    p.pnlPct = +(((price - p.entry) * dirMult) / p.entry * 100).toFixed(2);
+    p.pnlPct = +(((price - p.entry) * (p.direction === "long" ? 1 : -1)) / p.entry * 100).toFixed(2);
     balance.value = +(balance.value + pnl).toFixed(2);
     persist();
+  }
+
+  /** MT5-style floating P/L in $: (price − entry) × direction × lot × contract value. */
+  function pnlFor(p: DemoPosition, price: number): number {
+    const dirMult = p.direction === "long" ? 1 : -1;
+    return (price - p.entry) * dirMult * p.lot * demoValuePerPrice(p.symbol, p.entry);
   }
 
   /* ── Live processing: fills + TP/SL exits against the current price ── */
@@ -277,6 +285,43 @@ export const useDemoStore = defineStore("demo", () => {
     processPrice(price, symbol, true);
   }
 
+  /** Replay mode, forward step: the WHOLE newly revealed candle can touch
+   *  levels with its wick — pending limits fill on high/low, open
+   *  positions exit on high/low (SL checked first when both are touched
+   *  inside one candle). */
+  function processReplayCandle(
+    candle: { high: number; low: number; close: number },
+    symbol: string
+  ): void {
+    if (!active.value) return;
+    const prec = precisionOf(symbol);
+    const px = +candle.close.toFixed(prec);
+    let changed = false;
+    for (const p of positions.value) {
+      if (p.symbol !== symbol) continue;
+      const long = p.direction === "long";
+      p.lastPrice = px;
+      if (p.status === "pending" && p.kind === "limit") {
+        if (long ? candle.low <= p.entry : candle.high >= p.entry) {
+          p.status = "open";
+          changed = true;
+        }
+        continue;
+      }
+      if (p.status !== "open") continue;
+      if (p.sl !== null && (long ? candle.low <= p.sl : candle.high >= p.sl)) {
+        closePosition(p, p.sl, "sl");
+        changed = true;
+        continue;
+      }
+      if (p.tp !== null && (long ? candle.high >= p.tp : candle.low <= p.tp)) {
+        closePosition(p, p.tp, "tp");
+        changed = true;
+      }
+    }
+    if (changed) persist();
+  }
+
   /** Replay backward past a trade's entry → the whole trade is deleted. */
   function deleteBeyond(cutoff: number, symbol: string): void {
     const before = positions.value.length;
@@ -310,7 +355,7 @@ export const useDemoStore = defineStore("demo", () => {
     let total = 0;
     for (const p of openPositions.value) {
       const price = p.symbol === market.instrument ? px : (p.lastPrice ?? p.entry);
-      total += (price - p.entry) * (p.direction === "long" ? 1 : -1) * p.lot;
+      total += pnlFor(p, price);
     }
     return +total.toFixed(2);
   });
@@ -336,6 +381,8 @@ export const useDemoStore = defineStore("demo", () => {
       profitFactor: grossLoss > 0 ? +(grossProfit / grossLoss).toFixed(2) : grossProfit > 0 ? null : 0,
       grossProfit: +grossProfit.toFixed(2),
       grossLoss: +grossLoss.toFixed(2),
+      /** P/L as % of the balance before the period's trades */
+      profitPct: closed.length ? +((closed.reduce((s, p) => s + (p.pnl ?? 0), 0) / Math.max(1, balance.value - closed.reduce((s, p) => s + (p.pnl ?? 0), 0))) * 100).toFixed(2) : 0,
     };
   }
 
@@ -362,12 +409,14 @@ export const useDemoStore = defineStore("demo", () => {
     error,
     lastPrice,
     riskAmount,
+    pnlFor,
     placeOrder,
     closeAtMarket,
     removePending,
     updateLevel,
     processPrice,
     processReplayPrice,
+    processReplayCandle,
     isClosed,
     deleteBeyond,
     summaryFor,
