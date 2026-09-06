@@ -224,7 +224,5 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
   z-index: 50;
 }
-.flyout-btn {
-  background: var(--btn-bg);
-}
+
 </style>
