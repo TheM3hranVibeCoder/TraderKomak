@@ -39,11 +39,9 @@ interface DemoLinePx {
 }
 const demoLines = ref<DemoLinePx[]>([]);
 let demoLineDrag: { id: string; level: "entry" | "sl" | "tp" } | null = null;
-/** Armed limit placement: the next chart click places the order. */
-const demoArm = ref<{ side: DemoSide; kind: DemoKind } | null>(null);
 const demoTab = ref<"positions" | "history" | "stats">("positions");
 const demoPeriod = ref<"day" | "week" | "month" | "all">("week");
-const placingDemo = ref(false);
+const demoMini = ref(false);
 
 function demoLevelY(price: number): number | null {
   return adapter ? adapter.getPriceY(price) : null;
@@ -72,6 +70,21 @@ function rebuildDemoLines(): void {
     const y = demoLevelY(p.entry);
     if (y !== null) out.push({ id: p.id, level: "entry", y, color: "#2962ff", dashed: true, direction: p.direction, status: "pending", lot: p.lot, money: 0, rr: null });
   }
+  // Draft order lines (armed but not yet Set) — entry dashed, SL/TP solid
+  if (draft.value) {
+    const d = draft.value;
+    const distSl = Math.abs(d.entry - d.sl);
+    const distTp = Math.abs(d.tp - d.entry);
+    const risk = demo.sizeMode === "percent" ? (demo.balance * demo.riskPct) / 100 : demo.riskUsd;
+    const reward = distTp > 0 ? distTp * (risk / distSl) : 0;
+    const rr = distSl > 0 ? +(distTp / distSl).toFixed(2) : null;
+    const yEntry = demoLevelY(d.entry);
+    const ySl = demoLevelY(d.sl);
+    const yTp = demoLevelY(d.tp);
+    if (yEntry !== null) out.push({ id: "__draft", level: "entry", y: yEntry, color: "#2962ff", dashed: true, direction: d.side, status: "pending", lot: 0, money: 0, rr: null });
+    if (ySl !== null) out.push({ id: "__draft", level: "sl", y: ySl, color: "#ef5350", dashed: false, direction: d.side, status: "pending", lot: 0, money: +risk.toFixed(2), rr: null });
+    if (yTp !== null) out.push({ id: "__draft", level: "tp", y: yTp, color: "#26a69a", dashed: false, direction: d.side, status: "pending", lot: 0, money: +reward.toFixed(2), rr });
+  }
   demoLines.value = out;
 }
 
@@ -85,7 +98,26 @@ function onDemoLineDragStart(e: MouseEvent, id: string, level: "entry" | "sl" | 
     const r = containerRef.value.getBoundingClientRect();
     const p = adapter.yToPrice(ev.clientY - r.top);
     if (p === null) return;
-    demo.updateLevel(id, level, p);
+    // Draft lines adjust the in-progress order (entry shifts the whole
+    // structure; SL/TP clamp to the loss/profit sides); real positions
+    // update through the store.
+    if (id === "__draft" && draft.value) {
+      const d = draft.value;
+      const long = d.side === "long";
+      if (level === "entry") {
+        const delta = p - d.entry;
+        d.entry = p;
+        d.sl += delta;
+        d.tp += delta;
+      } else if (level === "sl") {
+        d.sl = long ? Math.min(p, d.entry) : Math.max(p, d.entry);
+      } else {
+        d.tp = long ? Math.max(p, d.entry) : Math.min(p, d.entry);
+      }
+    } else {
+      demo.updateLevel(id, level, p);
+    }
+    recalcRects();
   };
   const up = () => {
     demoLineDrag = null;
@@ -96,34 +128,53 @@ function onDemoLineDragStart(e: MouseEvent, id: string, level: "entry" | "sl" | 
   window.addEventListener("mouseup", up);
 }
 
-function placeDemoMarket(side: DemoSide): void {
+/** Draft order: lines draw on the chart (entry/SL/TP), adjustable by
+ *  dragging, until Set places it or Cancel discards it. */
+const draft = ref<null | {
+  side: DemoSide;
+  kind: DemoKind;
+  entry: number;
+  sl: number;
+  tp: number;
+}>(null);
+
+function armDemo(side: DemoSide, kind: DemoKind): void {
   const c = market.candles;
-  const entry = c.length ? c[c.length - 1]!.close : null;
-  if (entry === null) return;
-  const dirMult = side === "long" ? 1 : -1;
-  const risk = demo.riskAmount();
-  const sl = risk > 0 && demo.lot > 0 ? entry - dirMult * (risk / demo.lot) : null;
-  const tp = demo.rewardUsd > 0 && demo.lot > 0 ? entry + dirMult * (demo.rewardUsd / demo.lot) : null;
-  demo.placeOrder(market.instrument, side, "market", entry, sl, tp);
+  if (!c.length) return;
+  const last = c[c.length - 1]!.close;
+  const long = side === "long";
+  const dir = long ? 1 : -1;
+  // limit: the entry sits 0.5% away from the market by default (draggable)
+  const entry = kind === "limit" ? last * (1 - dir * 0.005) : last;
+  const slDist = entry * 0.005;
+  draft.value = {
+    side,
+    kind,
+    entry,
+    sl: entry - dir * slDist,
+    tp: entry + dir * slDist * 2,
+  };
+  recalcRects();
 }
 
-function armDemoLimit(side: DemoSide): void {
-  demoArm.value = { side, kind: "limit" };
-  placingDemo.value = true;
+function setDemoDraft(): void {
+  const d = draft.value;
+  if (!d) return;
+  // Live market closed → block (replay trades against the cut data are fine)
+  if (!replay.active && isForexClosed()) {
+    demo.error = "Market closed — use Replay to place trades";
+    return;
+  }
+  demo.placeOrder(market.instrument, d.side, d.kind, d.entry, d.sl, d.tp);
+  draft.value = null;
 }
 
-function placeDemoLimitAt(price: number): void {
-  if (!demoArm.value) return;
-  const dirMult = demoArm.value.side === "long" ? 1 : -1;
-  const risk = demo.riskAmount();
-  const sl = risk > 0 && demo.lot > 0 ? price - dirMult * (risk / demo.lot) : null;
-  const tp = demo.rewardUsd > 0 && demo.lot > 0 ? price + dirMult * (demo.rewardUsd / demo.lot) : null;
-  demo.placeOrder(market.instrument, demoArm.value.side, "limit", price, sl, tp);
-  demoArm.value = null;
-  placingDemo.value = false;
+function cancelDemoDraft(): void {
+  draft.value = null;
 }
 
 const demoSummary = computed(() => demo.summaryFor(demoPeriod.value));
+const marketClosedNote = computed(() => !replay.active && isForexClosed());
 function pnlClass(v: number | undefined): string {
   return (v ?? 0) >= 0 ? "pos" : "neg";
 }
@@ -2688,14 +2739,21 @@ onMounted(async () => {
   // tool is active. In cursor mode this handler does nothing and the chart
   // behaves normally.
   const onChartMouseDown = (e: MouseEvent) => {
-    // Demo limit placement: a click places the pending order at that price
-    if (demo.active && demoArm.value) {
+    // Demo limit placement: a click sets the draft entry price
+    if (demo.active && draft.value) {
       if (e.button !== 0 || !isInChartArea(e) || !adapter || !containerRef.value) return;
       e.preventDefault();
       e.stopPropagation();
       const r = containerRef.value.getBoundingClientRect();
       const p = adapter.yToPrice(e.clientY - r.top);
-      if (p !== null) placeDemoLimitAt(p);
+      if (p !== null) {
+        // Shift the whole structure (SL/TP keep their distances to entry)
+        const delta = p - draft.value.entry;
+        draft.value.entry = p;
+        draft.value.sl += delta;
+        draft.value.tp += delta;
+      }
+      recalcRects();
       return;
     }
     // Replay picking: a click on the chart starts replay at that candle —
@@ -3679,25 +3737,34 @@ onBeforeUnmount(() => {
       </div>
     </template>
 
-    <!-- Demo trading toolbar (lot size / $ risk / $ reward + order buttons) -->
-    <div v-if="demo.active" class="demo-toolbar">
-      <span class="demo-tb-title">DEMO</span>
-      <div class="demo-size-modes">
-        <button class="demo-mode" :class="{ active: demo.sizeMode === 'lot' }" title="Size by lot (risk $ per SL)" @click.stop="demo.sizeMode = 'lot'">Lot</button>
-        <button class="demo-mode" :class="{ active: demo.sizeMode === 'percent' }" title="Risk = % of balance" @click.stop="demo.sizeMode = 'percent'">%</button>
-        <button class="demo-mode" :class="{ active: demo.sizeMode === 'usd' }" title="Risk = entered $ amount" @click.stop="demo.sizeMode = 'usd'">$</button>
+    <!-- Demo money management (compact, top-right, collapsible) -->
+    <div v-if="demo.active" class="demo-mgr" :class="{ mini: demoMini }">
+      <div class="demo-mgr-head">
+        <span class="demo-mgr-title">DEMO</span>
+        <button class="demo-mini-btn" :title="demoMini ? 'Expand' : 'Minimize'" @click.stop="demoMini = !demoMini">{{ demoMini ? "+" : "−" }}</button>
       </div>
-      <label v-if="demo.sizeMode === 'lot'" class="demo-inp"><span>Lot</span><input type="number" min="0.01" step="0.01" v-model.number="demo.lot" /></label>
-      <label v-if="demo.sizeMode === 'lot' || demo.sizeMode === 'usd'" class="demo-inp"><span>Risk $</span><input type="number" min="1" step="1" v-model.number="demo.riskUsd" /></label>
-      <label v-if="demo.sizeMode === 'percent'" class="demo-inp"><span>Risk %</span><input type="number" min="0.1" step="0.1" v-model.number="demo.riskPct" /></label>
-      <label class="demo-inp"><span>Reward $</span><input type="number" min="1" step="1" v-model.number="demo.rewardUsd" /></label>
-      <span class="rp-sep" />
-      <button class="demo-tb-btn buy" :class="{ armed: demoArm?.side === 'long' && demoArm?.kind === 'limit' }" title="Buy Limit — click a price on the chart" @click.stop="armDemoLimit('long')">Buy Limit</button>
-      <button class="demo-tb-btn sell" :class="{ armed: demoArm?.side === 'short' && demoArm?.kind === 'limit' }" title="Sell Limit — click a price on the chart" @click.stop="armDemoLimit('short')">Sell Limit</button>
-      <span class="rp-sep" />
-      <button class="demo-tb-btn buy" title="Market buy — opens instantly" @click.stop="placeDemoMarket('long')">Buy</button>
-      <button class="demo-tb-btn sell" title="Market sell — opens instantly" @click.stop="placeDemoMarket('short')">Sell</button>
-      <span v-if="demo.error" class="demo-err">{{ demo.error }}</span>
+      <template v-if="!demoMini">
+        <div class="demo-size-modes">
+          <button class="demo-mode" :class="{ active: demo.sizeMode === 'lot' }" title="Size by lot (risk $ per SL)" @click.stop="demo.sizeMode = 'lot'">Lot</button>
+          <button class="demo-mode" :class="{ active: demo.sizeMode === 'percent' }" title="Risk = % of balance" @click.stop="demo.sizeMode = 'percent'">%</button>
+          <button class="demo-mode" :class="{ active: demo.sizeMode === 'usd' }" title="Risk = entered $ amount" @click.stop="demo.sizeMode = 'usd'">$</button>
+        </div>
+        <label v-if="demo.sizeMode === 'lot'" class="demo-mgr-inp"><span>Lot</span><input type="number" min="0.01" step="0.01" v-model.number="demo.lot" /></label>
+        <label v-if="demo.sizeMode === 'usd'" class="demo-mgr-inp"><span>Risk $</span><input type="number" min="1" step="1" v-model.number="demo.riskUsd" /></label>
+        <label v-if="demo.sizeMode === 'percent'" class="demo-mgr-inp"><span>Risk %</span><input type="number" min="0.1" step="0.1" v-model.number="demo.riskPct" /></label>
+        <div class="demo-mgr-btns">
+          <button class="dm-btn buy" title="Buy Limit — lines draw on the chart, then Set" @click.stop="armDemo('long', 'limit')">Buy Lim</button>
+          <button class="dm-btn sell" title="Sell Limit — lines draw on the chart, then Set" @click.stop="armDemo('short', 'limit')">Sell Lim</button>
+          <button class="dm-btn buy" title="Market Buy — lines draw, then Set fills at market" @click.stop="armDemo('long', 'market')">Buy</button>
+          <button class="dm-btn sell" title="Market Sell — lines draw, then Set fills at market" @click.stop="armDemo('short', 'market')">Sell</button>
+        </div>
+        <div v-if="draft" class="demo-draft-btns">
+          <button class="dm-btn set" title="Place the order" @click.stop="setDemoDraft">Set</button>
+          <button class="dm-btn cancel" title="Cancel" @click.stop="cancelDemoDraft">✕</button>
+        </div>
+        <div v-if="demo.error" class="demo-err">{{ demo.error }}</div>
+        <div v-if="marketClosedNote" class="demo-closed-note">Market closed — use Replay</div>
+      </template>
     </div>
 
     <!-- Replay control panel -->
@@ -4938,21 +5005,114 @@ onBeforeUnmount(() => {
   font-weight: 700;
   white-space: nowrap;
 }
-.demo-toolbar {
+.demo-mgr {
   position: absolute;
-  top: 14px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 25;
+  top: 12px;
+  right: 12px; /* near the watchlist side of the chart */
+  z-index: 26;
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 5px;
+  width: 132px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 6px 10px;
+  padding: 6px 8px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
-  flex-wrap: wrap;
+}
+.demo-mgr-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.demo-mgr-title {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #26a69a;
+}
+.demo-mini-btn {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  background: var(--btn-bg);
+  color: var(--text-muted);
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0;
+}
+.demo-mini-btn:hover {
+  color: var(--text);
+  border-color: var(--border-strong, var(--border));
+}
+.demo-mgr-inp {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.demo-mgr-inp input {
+  width: 64px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  outline: none;
+  text-align: right;
+}
+.demo-mgr-inp input:focus {
+  border-color: var(--accent);
+}
+.demo-mgr-btns,
+.demo-draft-btns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.demo-draft-btns {
+  grid-template-columns: 2fr 1fr;
+}
+.dm-btn {
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--btn-bg);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 140ms;
+  white-space: nowrap;
+}
+.dm-btn.buy:hover {
+  color: #26a69a;
+  border-color: #26a69a;
+}
+.dm-btn.sell:hover {
+  color: #ef5350;
+  border-color: #ef5350;
+}
+.dm-btn.set {
+  background: var(--accent-gradient);
+  border-color: transparent;
+  color: #fff;
+}
+.dm-btn.cancel {
+  color: var(--text-muted);
+}
+.dm-btn.cancel:hover {
+  color: #ef5350;
+  border-color: rgba(239, 83, 80, 0.5);
 }
 .demo-tb-title {
   font-size: 10px;
