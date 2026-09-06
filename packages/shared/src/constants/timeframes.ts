@@ -1,12 +1,11 @@
 /**
- * Supported chart timeframes — sorted small → big (1s → 1h) for dropdown ordering.
+ * Supported chart timeframes — sorted small → big (5s → 1M) for dropdown ordering.
  *
- * OANDA has no native 1-second granularity, so `1s` candles are generated
- * by the aggregation engine from the live pricing stream. Historical data
- * availability per timeframe is documented in the market server's
- * history-resolution logic (see apps/market-server/src/routes/candles.ts).
+ * OANDA's finest granularity is S5, so the smallest timeframe is `5s`.
+ * Historical data availability per timeframe is documented in the market
+ * server's history-resolution logic (see apps/market-server/src/routes/candles.ts).
  */
-export const TIMEFRAMES = ["1s", "5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M"] as const;
+export const TIMEFRAMES = ["5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M"] as const;
 
 export type Timeframe = (typeof TIMEFRAMES)[number];
 
@@ -14,7 +13,6 @@ export const DEFAULT_TIMEFRAME: Timeframe = "5s";
 
 /** Candle bucket length, in seconds, for each timeframe. */
 export const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
-  "1s": 1,
   "5s": 5,
   "10s": 10,
   "15s": 15,
@@ -34,8 +32,6 @@ export const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
  * Which upstream-native granularity can provide HISTORY for a timeframe.
  *
  * - `S5` / `M1` / `M5` / `M15` / `M30` / `H1`: native OANDA REST granularities.
- * - `null`: no native source exists (only `1s`); history must come from
- *   the live aggregation buffers held by the market server.
  *
  * Note `10s`/`30s` are exact multiples of `S5`, so their history is
  * derived by aggregating S5 candles with the same engine used live.
@@ -45,7 +41,6 @@ export const NATIVE_HISTORY_GRANULARITY: Record<
   Timeframe,
   "S5" | "M1" | "M5" | "M15" | "M30" | "H1" | "H4" | "D" | "W" | "M" | null
 > = {
-  "1s": null,
   "5s": "S5",
   "10s": "S5",
   "15s": "S5",
@@ -63,7 +58,6 @@ export const NATIVE_HISTORY_GRANULARITY: Record<
 
 /** Display labels — 1d/1w/1M are shown as D/W/M (TradingView-style). */
 export const TIMEFRAME_LABELS: Record<Timeframe, string> = {
-  "1s": "1s",
   "5s": "5s",
   "10s": "10s",
   "15s": "15s",
