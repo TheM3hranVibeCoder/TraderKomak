@@ -87,12 +87,46 @@ export function registerCandlesRoute(
     }
 
     try {
+      const key = historyCacheKey(instrument, timeframe, count, to);
+      const hit = historyCacheGet(key);
+      if (hit) return reply.send({ instrument, timeframe, candles: hit });
       const candles = await resolveHistory(rest, feed, instrument, timeframe, count, to);
+      historyCachePut(key, candles);
       return reply.send({ instrument, timeframe, candles });
     } catch (err) {
       return sendHistoryError(reply, err);
     }
   });
+}
+
+/* ── Short-TTL history cache ────────────────────────────────────────────
+ * Switching timeframes/symbols re-requests the same windows over and over;
+ * without a cache every switch pays the full upstream (OANDA) round trip.
+ * The live stream keeps the chart head fresh, so a short TTL is safe. */
+const HISTORY_TTL_MS = 30_000;
+const HISTORY_CACHE_MAX = 300;
+const historyCache = new Map<string, { at: number; candles: unknown[] }>();
+
+function historyCacheKey(instrument: string, timeframe: string, count: number, to?: number): string {
+  // bucket `to` to 5 minutes so near-identical lazy loads share an entry
+  const toBucket = to !== undefined ? Math.floor(to / 300) : "now";
+  return `${instrument}|${timeframe}|${count}|${toBucket}`;
+}
+function historyCacheGet(key: string): unknown[] | null {
+  const e = historyCache.get(key);
+  if (!e) return null;
+  if (Date.now() - e.at > HISTORY_TTL_MS) {
+    historyCache.delete(key);
+    return null;
+  }
+  return e.candles;
+}
+function historyCachePut(key: string, candles: unknown[]): void {
+  if (historyCache.size >= HISTORY_CACHE_MAX) {
+    const oldest = historyCache.keys().next().value;
+    if (oldest !== undefined) historyCache.delete(oldest);
+  }
+  historyCache.set(key, { at: Date.now(), candles });
 }
 
 async function resolveHistory(
@@ -103,16 +137,7 @@ async function resolveHistory(
   count: number,
   to?: number
 ) {
-  if (timeframe === "1s") {
-    // No upstream-native source exists; answer from the live buffer.
-    // If `to` is provided (lazy load), filter buffer to time < to
-    const snap = feed.bufferSnapshot(instrument, "1s", to ? 5000 : count);
-    if (to !== undefined) {
-      const filtered = snap.filter((c) => c.time < to);
-      return filtered.slice(-count);
-    }
-    return snap.slice(-count);
-  }
+  void feed;
   if (!rest) throw new Error("REST client unavailable");
 
   const toIso = to !== undefined ? new Date(to * 1000).toISOString() : undefined;

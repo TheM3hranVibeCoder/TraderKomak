@@ -21,8 +21,13 @@ import { fetchCandles } from "@/services/api";
 import { useReplayStore } from "@/stores/replay";
 import { MarketWsClient, type WsStatus } from "@/services/wsClient";
 
-const HISTORY_COUNT = 20000;
-const LAZY_BATCH = 500;
+// Progressive history: paint a screenful fast (~1 fetch to OANDA), then
+// lazy-load older candles in batches as the user scrolls back. Loading the
+// full 20k-bar history up front was the slow part of every TF/symbol switch.
+const HISTORY_COUNT = 1500;
+const LAZY_BATCH = 1000;
+/** Hard cap for the in-memory series (initial window + lazy-loaded history). */
+const MAX_SERIES = 20000;
 
 /** Local cache of lazy-loaded history, per symbol+timeframe, so scrolling
  *  back through old candles doesn't re-download them on every visit. */
@@ -182,10 +187,9 @@ export const useMarketStore = defineStore("market", () => {
       } else {
         candles.value = [...candles.value, { ...candle }];
       }
-      // Cap at reasonable size to avoid unbounded growth
-      // (keep the full initial history window).
-      if (candles.value.length > HISTORY_COUNT) {
-        candles.value = candles.value.slice(-HISTORY_COUNT);
+      // Cap the in-memory series (initial window + lazy-loaded history)
+      if (candles.value.length > MAX_SERIES) {
+        candles.value = candles.value.slice(-MAX_SERIES);
       }
     }
     void closed; // reserved for future use (e.g. close animation)
