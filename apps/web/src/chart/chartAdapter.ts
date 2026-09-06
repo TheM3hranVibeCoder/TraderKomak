@@ -145,7 +145,7 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       secondsVisible: true,
       rightOffset: 15,
       barSpacing: 5,
-      minBarSpacing: 0.1, // deep zoom-out — all 5000 bars fit on screen
+      minBarSpacing: 0.1, // deep zoom-out — all 20000 bars fit on screen
       fixLeftEdge: false,
       fixRightEdge: false,
       // Never let the library yank the viewport to the live edge on a new
@@ -338,7 +338,9 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
         lastData[nextIdx] = chainTo(lastData[nextIdx - 1]!.close, next);
         series.update(toLW(lastData[nextIdx]));
       }
-      if (lastData.length > 5000) lastData = lastData.slice(-5000);
+      // Cap in sync with the market store's HISTORY_COUNT (20000) — a stale
+      // smaller cap made focusLast teleport the viewport to old bars.
+      if (lastData.length > 20000) lastData = lastData.slice(-20000);
       notifyDataChanged();
     },
 

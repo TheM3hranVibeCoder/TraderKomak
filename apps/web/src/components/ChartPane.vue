@@ -182,11 +182,17 @@ watch(
   (cutoff, prev) => {
     // While replaying forward, the chart stays still as candles fill the
     // free space; it only follows once the newest candle reaches the right
-    // edge (TradingView behavior).
+    // edge — panning by the current view WIDTH (no dependence on the
+    // adapter's capped data length).
     if (!replay.active || cutoff === null || prev === null || cutoff <= prev) return;
     const idx = displayCandles.value.length - 1;
     const r = adapter?.getLogicalRange();
-    if (r && idx > r.to - 3) focusReplayEdge();
+    const ad = adapter;
+    if (!r || !ad) return;
+    if (idx > r.to - 3) {
+      const width = r.to - r.from;
+      ad.setLogicalRange({ from: idx - width + 15, to: idx + 15 });
+    }
   }
 );
 watch(
