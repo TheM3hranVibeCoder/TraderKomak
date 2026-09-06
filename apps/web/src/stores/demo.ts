@@ -23,6 +23,18 @@ export type DemoStatus = "pending" | "open" | "closed";
 export type DemoKind = "market" | "limit";
 export type DemoSizeMode = "lot" | "percent" | "usd";
 
+/** MT5-style contract value: the $ value of a 1.0 price move for 1.0 lot.
+ *  Forex (non-JPY quote) 100,000; JPY-quoted 100,000/rate; XAU 100;
+ *  XAG 5,000; crypto/indices/energy 1. */
+export function demoValuePerPrice(symbol: string, price: number): number {
+  const norm = symbol.toUpperCase();
+  if (norm.endsWith("_JPY")) return 100000 / price;
+  if (norm === "XAU_USD") return 100;
+  if (norm === "XAG_USD") return 5000;
+  if (/^[A-Z]{3}_[A-Z]{3}$/.test(norm)) return 100000;
+  return 1;
+}
+
 export interface DemoPosition {
   id: string;
   symbol: string;
@@ -113,17 +125,25 @@ export const useDemoStore = defineStore("demo", () => {
     const long = direction === "long";
     const market = useMarketStore();
     if (kind === "market") {
-      // market order: fill immediately at the current price
-      const c = market.candles;
-      const px = c.length ? c[c.length - 1]!.close : entry;
+      // market order: fills at the current price — in replay mode that is
+      // the price AT the replay boundary, not the live price
+      const co = replay.cutoff;
+      let px = entry;
+      if (replay.active && co !== null) {
+        const shown = market.candles.filter((c) => c.time <= co);
+        if (shown.length) px = shown[shown.length - 1]!.close;
+      } else {
+        const c = market.candles;
+        if (c.length) px = c[c.length - 1]!.close;
+      }
       entry = px;
     }
     // Position size: in lot mode the manual lot is used as-is; in percent/usd
     // modes the lot derives from the $ risk and the SL distance.
-    let lotEff = lot.value;
+    let lotEff = +(lot.value).toFixed(2);
     const risk = riskAmount();
     if (sizeMode.value !== "lot" && sl !== null) {
-      const dist = Math.abs(entry - sl);
+      const dist = Math.abs(entry - sl) * demoValuePerPrice(symbol, entry);
       lotEff = dist > 0 ? Math.max(0.01, +(risk / dist).toFixed(2)) : lot.value;
     }
     if (!(lotEff > 0)) {
@@ -185,7 +205,7 @@ export const useDemoStore = defineStore("demo", () => {
 
   function closePosition(p: DemoPosition, price: number, reason: "tp" | "sl" | "manual"): void {
     const dirMult = p.direction === "long" ? 1 : -1;
-    const pnl = (price - p.entry) * dirMult * p.lot;
+    const pnl = (price - p.entry) * dirMult * p.lot * demoValuePerPrice(p.symbol, p.entry);
     p.status = "closed";
     p.closePrice = price;
     p.closeTime = nowSec();
@@ -239,6 +259,17 @@ export const useDemoStore = defineStore("demo", () => {
       }
     }
     if (changed) persist();
+  }
+
+  /** Live market closed (weekend/holiday) — order buttons go inert. */
+  function isClosed(): boolean {
+    const d = new Date();
+    const day = d.getUTCDay();
+    const h = d.getUTCHours() + d.getUTCMinutes() / 60;
+    if (day === 6) return true; // Saturday
+    if (day === 0 && h < 21.5) return true; // Sunday before 21:30 UTC
+    if (day === 5 && h >= 21.2) return true; // Friday after 21:00 UTC
+    return false;
   }
 
   /** Replay mode: process the price at the replay boundary. */
@@ -337,6 +368,7 @@ export const useDemoStore = defineStore("demo", () => {
     updateLevel,
     processPrice,
     processReplayPrice,
+    isClosed,
     deleteBeyond,
     summaryFor,
     resetAccount,

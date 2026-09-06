@@ -41,6 +41,9 @@ const demoLines = ref<DemoLinePx[]>([]);
 let demoLineDrag: { id: string; level: "entry" | "sl" | "tp" } | null = null;
 const demoTab = ref<"positions" | "history" | "stats">("positions");
 const demoPeriod = ref<"day" | "week" | "month" | "all">("week");
+/** Height of the demo bottom panel (measured) — the replay panel floats
+ *  just above it while both are active. */
+const demoBottomH = ref(96);
 const demoMini = ref(false);
 
 function demoLevelY(price: number): number | null {
@@ -56,6 +59,11 @@ function rebuildDemoLines(): void {
     const risk = p.sl !== null ? Math.abs(p.entry - p.sl) * p.lot : 0;
     const reward = p.tp !== null ? Math.abs(p.tp - p.entry) * p.lot : 0;
     const rr = risk > 0 ? +(reward / risk).toFixed(2) : null;
+    // blue entry line at the filled price
+    if (p.kind === "market") {
+      const y = demoLevelY(p.entry);
+      if (y !== null) out.push({ id: p.id, level: "entry", y, color: "#2962ff", dashed: false, direction: p.direction, status: "open", lot: p.lot, money: 0, rr: null });
+    }
     if (p.sl !== null) {
       const y = demoLevelY(p.sl);
       if (y !== null) out.push({ id: p.id, level: "sl", y, color: "#ef5350", dashed: false, direction: p.direction, status: "open", lot: p.lot, money: +risk.toFixed(2), rr: null });
@@ -139,12 +147,14 @@ const draft = ref<null | {
 }>(null);
 
 function armDemo(side: DemoSide, kind: DemoKind): void {
+  // Market closed (live): the order buttons do nothing — replay is allowed
+  if (!replay.active && demo.isClosed()) return;
   const c = market.candles;
   if (!c.length) return;
   const last = c[c.length - 1]!.close;
   const long = side === "long";
   const dir = long ? 1 : -1;
-  // limit: the entry sits 0.5% away from the market by default (draggable)
+  // market: the entry pins to the live price; limit: 0.5% away (draggable)
   const entry = kind === "limit" ? last * (1 - dir * 0.005) : last;
   const slDist = entry * 0.005;
   draft.value = {
@@ -154,6 +164,7 @@ function armDemo(side: DemoSide, kind: DemoKind): void {
     sl: entry - dir * slDist,
     tp: entry + dir * slDist * 2,
   };
+  demo.error = null;
   recalcRects();
 }
 
@@ -604,6 +615,9 @@ function updateBadgePosition(): void {
 function updateCountdown() {
   marketClosed.value = isForexClosed();
   updateBadgePosition();
+  // Track the demo bottom panel height (the replay panel floats above it)
+  const db = document.querySelector(".demo-bottom");
+  if (db) demoBottomH.value = db.getBoundingClientRect().height;
 
   // Real-time countdown makes no sense while replaying the past
   if (replay.active) {
@@ -3763,12 +3777,17 @@ onBeforeUnmount(() => {
           <button class="dm-btn cancel" title="Cancel" @click.stop="cancelDemoDraft">✕</button>
         </div>
         <div v-if="demo.error" class="demo-err">{{ demo.error }}</div>
-        <div v-if="marketClosedNote" class="demo-closed-note">Market closed — use Replay</div>
       </template>
     </div>
 
-    <!-- Replay control panel -->
-    <div v-if="replay.active" class="replay-panel">
+    <!-- Replay control panel: when the demo panel is open it sits above
+         it, right of the Open P/L stat -->
+    <div
+      v-if="replay.active"
+      class="replay-panel"
+      :class="{ 'demo-shift': demo.active }"
+      :style="demo.active ? { bottom: demoBottomH + 6 + 'px', right: '12px', left: 'auto', transform: 'none' } : undefined"
+    >
       <template v-if="replay.picking">
         <span class="replay-hint">Replay — click a candle to start</span>
         <button class="rp-btn accent" title="Start replay at the line" @click="togglePlay">▶</button>
