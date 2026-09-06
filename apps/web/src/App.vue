@@ -76,8 +76,10 @@ function onTimeframeChange(next: Timeframe): void {
 .watchlist-rail {
   width: 36px;
   min-width: 36px;
-  background: var(--bg-panel);
-  border-left: 1px solid var(--border);
+  /* same background as the watchlist panel so the rail blends in — a
+     flat panel color here read as a dark strip beside the gradient */
+  background: var(--bg-watchlist);
+  border-left: none;
   display: flex;
   align-items: flex-start;
   justify-content: center;

@@ -19,7 +19,7 @@
   --reconnecting: #ff9800;
   --connecting: #868993;
   --card-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
-  --toolbar-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 4px 20px rgba(0, 0, 0, 0.3);
+  --toolbar-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 2px 6px rgba(0, 0, 0, 0.12);
   --btn-bg: rgba(255, 255, 255, 0.06);
   --btn-hover: rgba(255, 255, 255, 0.1);
   --chart-bg: #131722;
