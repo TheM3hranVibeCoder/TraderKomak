@@ -3,6 +3,8 @@ import vue from "@vitejs/plugin-vue";
 import path from "node:path";
 
 export default defineConfig({
+  // cache-buster: forces fresh dep optimization (v=?v= hash changes)
+  optimizeDeps: { force: true },
   plugins: [vue()],
   // Load .env from traderkomak/ (where VITE_MARKET_WS_URL lives) as well as apps/web/
   envDir: path.resolve(__dirname, "../../"),

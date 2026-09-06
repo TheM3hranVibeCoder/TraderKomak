@@ -70,3 +70,36 @@ export function bucketStart(timestampMs: number, timeframeSeconds: number): numb
   const ms = timeframeSeconds * 1000;
   return Math.floor(timestampMs / ms) * ms;
 }
+
+/** US DST window in UTC for a given year: 2nd Sunday of March 07:00 UTC to
+ *  1st Sunday of November 06:00 UTC. */
+function usDstRangeUTC(year: number): { start: number; end: number } {
+  const nthSunday = (month: number, n: number, hourUTC: number) => {
+    const first = Date.UTC(year, month, 1, hourUTC);
+    const offset = (7 - new Date(first).getUTCDay()) % 7;
+    return first + offset + (n - 1) * 7 * 86400000;
+  };
+  return { start: nthSunday(2, 2, 7), end: nthSunday(10, 1, 6) };
+}
+
+/**
+ * Start of the DAILY bucket per OANDA's convention: candles open at 5pm
+ * New York (21:00 UTC in DST, 22:00 UTC otherwise) — NOT at UTC midnight.
+ * The live daily aggregation must match the native D history boundaries or
+ * the 1d chart shows stray overlapping candles.
+ */
+export function oandaDailyBucketStart(timestampMs: number): number {
+  const DAY = 86400000;
+  const EDT_OPEN = 21 * 3600000;
+  const EST_OPEN = 22 * 3600000;
+  let best = -Infinity;
+  for (let d = -2; d <= 1; d++) {
+    const dayStart = Math.floor(timestampMs / DAY) * DAY + d * DAY;
+    const noon = dayStart + 12 * 3600000;
+    const { start, end } = usDstRangeUTC(new Date(noon).getUTCFullYear());
+    const open = noon >= start && noon < end ? EDT_OPEN : EST_OPEN;
+    const candidate = dayStart + open;
+    if (candidate <= timestampMs && candidate > best) best = candidate;
+  }
+  return best === -Infinity ? Math.floor((timestampMs - EST_OPEN) / DAY) * DAY + EST_OPEN : best;
+}

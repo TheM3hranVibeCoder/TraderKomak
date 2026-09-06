@@ -17,6 +17,7 @@ import {
   NATIVE_HISTORY_GRANULARITY,
   TIMEFRAME_SECONDS,
   bucketStart,
+  oandaDailyBucketStart,
   isInstrument,
   isTimeframe,
   nativeCandlesNeeded,
@@ -298,11 +299,17 @@ export class CandleFeed extends EventEmitter {
       );
 
       let seedSource = native;
-      if (seconds > TIMEFRAME_SECONDS["5s"] && native.length > 0) {
+      // Only aggregate when the native granularity is finer than the target
+      // (S5-derived TFs). 1:1 native TFs (M1/M5/…/D) must pass through —
+      // re-bucketing daily candles to UTC midnight corrupts OANDA's
+      // 5pm-NY daily alignment.
+      if (NATIVE_HISTORY_GRANULARITY[session.timeframe] === "S5" && native.length > 0) {
         seedSource = aggregateCandles(native, seconds);
       }
 
-      const nowBucketSec = bucketStart(Date.now(), seconds) / 1000;
+      const nowBucketSec = seconds === 86400
+        ? oandaDailyBucketStart(Date.now()) / 1000
+        : bucketStart(Date.now(), seconds) / 1000;
       // Seed the ACTIVE bucket from native history so a freshly created
       // session continues OANDA's in-progress candle instead of building one
       // from zero. `>=` tolerates minor clock skew between us and OANDA.

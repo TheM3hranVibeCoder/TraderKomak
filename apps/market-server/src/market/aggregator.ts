@@ -15,6 +15,7 @@
 import {
   TIMEFRAME_SECONDS,
   bucketStart,
+  oandaDailyBucketStart,
   resolveCandlePrice,
   type Candle,
   type MarketTick,
@@ -75,8 +76,12 @@ export class CandleAggregator {
     if (price === null) return null; // no usable side — drop safely
 
     // bucketStart() yields the bucket boundary in epoch ms; candle times
-    // are whole seconds, so convert once here.
-    const time = bucketStart(tick.timestamp, this.timeframeSeconds) / 1000;
+    // are whole seconds, so convert once here. Daily buckets follow
+    // OANDA's 5pm-New-York convention so the live 1d candle aligns with
+    // the native D history.
+    const time = (this.timeframeSeconds === 86400
+      ? oandaDailyBucketStart(tick.timestamp)
+      : bucketStart(tick.timestamp, this.timeframeSeconds)) / 1000;
 
     if (this.current && time < this.current.time) {
       this.staleTicksIgnored++;
