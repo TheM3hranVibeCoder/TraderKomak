@@ -3,6 +3,7 @@ import { ref } from "vue";
 import TimeframeSelector from "./TimeframeSelector.vue";
 import { useThemeStore } from "@/stores/theme";
 import { useReplayStore } from "@/stores/replay";
+import { useDemoStore } from "@/stores/demo";
 import { SUPPORTED_INSTRUMENTS, normalizeInstrument } from "@traderkomak/shared";
 import type { Timeframe } from "@traderkomak/shared";
 
@@ -18,6 +19,11 @@ const emit = defineEmits<{
 
 const themeStore = useThemeStore();
 const replay = useReplayStore();
+const demo = useDemoStore();
+
+function toggleDemo(): void {
+  demo.active = !demo.active;
+}
 
 function toggleReplay(): void {
   if (replay.active) replay.exit();
@@ -67,6 +73,21 @@ function onSearchBlur() {
       <TimeframeSelector :model-value="timeframe" @update:model-value="emit('update:timeframe', $event)" />
       <!-- Replay mode: pick a point on the chart, hide the right side, then
            play the candles forward bar-by-bar -->
+      <button
+        class="demo-btn"
+        type="button"
+        :class="{ active: demo.active }"
+        title="Demo trading — 00,000 paper account"
+        aria-label="Toggle demo trading"
+        @click="toggleDemo"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <rect x="3" y="5" width="18" height="14" rx="2.5" />
+          <path d="M3 9.5h18" />
+          <path d="M7 15.5h4" />
+        </svg>
+        <span>Demo</span>
+      </button>
       <button
         class="replay-btn"
         type="button"
@@ -234,6 +255,35 @@ function onSearchBlur() {
 .theme-btn:hover {
   transform: translateY(-1px);
   border-color: var(--border-strong);
+}
+.demo-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: var(--card-shadow);
+  transition: all 200ms;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.demo-btn:hover {
+  transform: translateY(-1px);
+  border-color: #26a69a;
+  color: #26a69a;
+}
+.demo-btn.active {
+  background: linear-gradient(135deg, #26a69a, #1b8a80);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 3px 12px rgba(38, 166, 154, 0.35);
 }
 .replay-btn {
   display: inline-flex;

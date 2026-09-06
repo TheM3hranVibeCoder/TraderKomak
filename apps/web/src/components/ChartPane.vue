@@ -5,6 +5,7 @@ import { useThemeStore } from "@/stores/theme";
 import { useMarketStore } from "@/stores/market";
 import { useDrawingsStore, type DrawingRect, type DrawingTrend, type DrawingPoly, type DrawingPosition, type DrawingHLine, type DrawingHRay, type DrawingVLine, type SingleKind, type SingleDrawing, type DashStyle } from "@/stores/drawings";
 import { useReplayStore } from "@/stores/replay";
+import { useDemoStore, type DemoSide, type DemoStatus, type DemoKind } from "@/stores/demo";
 import type { Candle } from "@traderkomak/shared";
 import { currencyFlagUrl, commodityIcon } from "@/utils/flags";
 import { TIMEFRAME_SECONDS, instrumentPrecision, instrumentPipSize, providerOf } from "@traderkomak/shared";
@@ -19,6 +20,107 @@ const props = defineProps<{
 const market = useMarketStore();
 const drawingsStore = useDrawingsStore();
 const replay = useReplayStore();
+const demo = useDemoStore();
+
+/* ── Demo trading: chart lines for pending/open positions ───────────── */
+interface DemoLinePx {
+  id: string;
+  level: "entry" | "sl" | "tp";
+  y: number;
+  color: string;
+  dashed: boolean;
+  direction: DemoSide;
+  status: DemoStatus;
+  lot: number;
+}
+const demoLines = ref<DemoLinePx[]>([]);
+let demoLineDrag: { id: string; level: "entry" | "sl" | "tp" } | null = null;
+/** Armed limit placement: the next chart click places the order. */
+const demoArm = ref<{ side: DemoSide; kind: DemoKind } | null>(null);
+const demoTab = ref<"positions" | "history" | "stats">("positions");
+const demoPeriod = ref<"day" | "week" | "month" | "all">("week");
+const placingDemo = ref(false);
+
+function demoLevelY(price: number): number | null {
+  return adapter ? adapter.getPriceY(price) : null;
+}
+
+function rebuildDemoLines(): void {
+  const out: DemoLinePx[] = [];
+  if (!demo.active) { demoLines.value = out; return; }
+  const prec = instrumentPrecision(market.instrument);
+  for (const p of demo.openPositions) {
+    if (p.symbol !== market.instrument) continue;
+    if (p.sl !== null) {
+      const y = demoLevelY(p.sl);
+      if (y !== null) out.push({ id: p.id, level: "sl", y, color: "#ef5350", dashed: false, direction: p.direction, status: "open", lot: p.lot });
+    }
+    if (p.tp !== null) {
+      const y = demoLevelY(p.tp);
+      if (y !== null) out.push({ id: p.id, level: "tp", y, color: "#26a69a", dashed: false, direction: p.direction, status: "open", lot: p.lot });
+    }
+  }
+  for (const p of demo.positions) {
+    if (p.symbol !== market.instrument || p.status !== "pending") continue;
+    const y = demoLevelY(p.entry);
+    if (y !== null) out.push({ id: p.id, level: "entry", y, color: "#2962ff", dashed: true, direction: p.direction, status: "pending", lot: p.lot });
+  }
+  demoLines.value = out;
+}
+
+function onDemoLineDragStart(e: MouseEvent, id: string, level: "entry" | "sl" | "tp"): void {
+  if (e.button !== 0 || !adapter || !containerRef.value) return;
+  e.preventDefault();
+  e.stopPropagation();
+  demoLineDrag = { id, level };
+  const move = (ev: MouseEvent) => {
+    if (!demoLineDrag || !adapter || !containerRef.value) return;
+    const r = containerRef.value.getBoundingClientRect();
+    const p = adapter.yToPrice(ev.clientY - r.top);
+    if (p === null) return;
+    demo.updateLevel(id, level, p);
+  };
+  const up = () => {
+    demoLineDrag = null;
+    window.removeEventListener("mousemove", move);
+    window.removeEventListener("mouseup", up);
+  };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+}
+
+function placeDemoMarket(side: DemoSide): void {
+  const c = market.candles;
+  const entry = c.length ? c[c.length - 1]!.close : null;
+  if (entry === null) return;
+  const dirMult = side === "long" ? 1 : -1;
+  const sl = demo.riskUsd > 0 && demo.lot > 0 ? entry - dirMult * (demo.riskUsd / demo.lot) : null;
+  const tp = demo.rewardUsd > 0 && demo.lot > 0 ? entry + dirMult * (demo.rewardUsd / demo.lot) : null;
+  demo.placeOrder(market.instrument, side, "market", entry, sl, tp);
+}
+
+function armDemoLimit(side: DemoSide): void {
+  demoArm.value = { side, kind: "limit" };
+  placingDemo.value = true;
+}
+
+function placeDemoLimitAt(price: number): void {
+  if (!demoArm.value) return;
+  const dirMult = demoArm.value.side === "long" ? 1 : -1;
+  const sl = demo.riskUsd > 0 && demo.lot > 0 ? price - dirMult * (demo.riskUsd / demo.lot) : null;
+  const tp = demo.rewardUsd > 0 && demo.lot > 0 ? price + dirMult * (demo.rewardUsd / demo.lot) : null;
+  demo.placeOrder(market.instrument, demoArm.value.side, "limit", price, sl, tp);
+  demoArm.value = null;
+  placingDemo.value = false;
+}
+
+const demoSummary = computed(() => demo.summaryFor(demoPeriod.value));
+function pnlClass(v: number | undefined): string {
+  return (v ?? 0) >= 0 ? "pos" : "neg";
+}
+function fmtMoney(v: number): string {
+  return (v >= 0 ? "$" : "-$") + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 
 const themeStore = useThemeStore();
 const containerRef = ref<HTMLElement | null>(null);
@@ -1086,6 +1188,8 @@ const buildPolyPixel = (
     }
   }
   singlePixels.value = singleOut;
+
+  rebuildDemoLines();
 
   // Replay vertical line position
   const replayT = replay.picking ? pickTime.value : replay.cutoff;
@@ -2569,6 +2673,16 @@ onMounted(async () => {
   // tool is active. In cursor mode this handler does nothing and the chart
   // behaves normally.
   const onChartMouseDown = (e: MouseEvent) => {
+    // Demo limit placement: a click places the pending order at that price
+    if (demo.active && demoArm.value) {
+      if (e.button !== 0 || !isInChartArea(e) || !adapter || !containerRef.value) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const r = containerRef.value.getBoundingClientRect();
+      const p = adapter.yToPrice(e.clientY - r.top);
+      if (p !== null) placeDemoLimitAt(p);
+      return;
+    }
     // Replay picking: a click on the chart starts replay at that candle —
     // everything to the right of the line becomes hidden.
     if (replay.active && replay.picking) {
@@ -2766,6 +2880,7 @@ onBeforeUnmount(() => {
   if (countdownTimer) clearInterval(countdownTimer);
   stopHold();
   stopPickingListeners();
+  demoLineDrag = null;
   if (replayTimer) {
     clearInterval(replayTimer);
     replayTimer = null;
@@ -3501,6 +3616,125 @@ onBeforeUnmount(() => {
 
     <!-- Replay price tag: under the live price label on the price scale -->
     <div v-if="replayTag" class="replay-price-tag" :style="{ top: replayTag.y + 'px' }">{{ replayTag.text }}</div>
+
+    <!-- Demo trading: entry/SL/TP lines for the active symbol's positions
+         and pending orders, with drag strips and price tags on the scale -->
+    <template v-if="demo.active">
+      <div class="demo-lines drawing-clip" :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }">
+        <div
+          v-for="l in demoLines"
+          :key="l.id + l.level"
+          class="demo-line"
+          :class="[l.level, { dashed: l.dashed }]"
+          :style="{ top: l.y + 'px', background: l.color }"
+        ></div>
+      </div>
+      <div class="demo-hit-layer" :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }">
+        <div
+          v-for="l in demoLines"
+          :key="'dhit-' + l.id + l.level"
+          class="demo-line-hit"
+          :style="{ top: l.y - 4 + 'px' }"
+          @mousedown.stop.prevent="onDemoLineDragStart($event, l.id, l.level)"
+        ></div>
+      </div>
+      <div class="demo-tag-layer">
+        <template v-for="l in demoLines" :key="'tag-' + l.id + l.level">
+          <div
+            v-if="l.level !== 'entry' || l.status === 'pending'"
+            class="demo-axis-tag"
+            :class="l.level"
+            :style="{ top: l.y - 9 + 'px' }"
+          >{{ l.level === "entry" ? "ENTRY" : l.level === "sl" ? "SL" : "TP" }}</div>
+        </template>
+      </div>
+    </template>
+
+    <!-- Demo trading toolbar (lot size / $ risk / $ reward + order buttons) -->
+    <div v-if="demo.active" class="demo-toolbar">
+      <span class="demo-tb-title">DEMO</span>
+      <label class="demo-inp"><span>Lot</span><input type="number" min="0.01" step="0.01" v-model.number="demo.lot" /></label>
+      <label class="demo-inp"><span>Risk $</span><input type="number" min="1" step="1" v-model.number="demo.riskUsd" /></label>
+      <label class="demo-inp"><span>Reward $</span><input type="number" min="1" step="1" v-model.number="demo.rewardUsd" /></label>
+      <span class="rp-sep" />
+      <button class="demo-tb-btn buy" :class="{ armed: demoArm?.side === 'long' && demoArm?.kind === 'limit' }" title="Buy Limit — click a price on the chart" @click.stop="armDemoLimit('long')">Buy Limit</button>
+      <button class="demo-tb-btn sell" :class="{ armed: demoArm?.side === 'short' && demoArm?.kind === 'limit' }" title="Sell Limit — click a price on the chart" @click.stop="armDemoLimit('short')">Sell Limit</button>
+      <span class="rp-sep" />
+      <button class="demo-tb-btn buy" title="Market buy — opens instantly" @click.stop="placeDemoMarket('long')">Buy</button>
+      <button class="demo-tb-btn sell" title="Market sell — opens instantly" @click.stop="placeDemoMarket('short')">Sell</button>
+      <span v-if="demo.error" class="demo-err">{{ demo.error }}</span>
+    </div>
+
+    <!-- Demo positions / history / stats panel (under the chart) -->
+    <div v-if="demo.active" class="demo-bottom">
+      <div class="demo-bottom-head">
+        <span class="demo-badge">DEMO</span>
+        <span class="demo-stat">Balance <b>{{ fmtMoney(demo.balance) }}</b></span>
+        <span class="demo-stat">Equity <b>{{ fmtMoney(demo.equity) }}</b></span>
+        <span class="demo-stat">Open P/L <b :class="pnlClass(demo.unrealized)">{{ fmtMoney(demo.unrealized) }}</b></span>
+        <span class="demo-flex" />
+        <button class="demo-reset" title="Reset demo account to $100,000" @click="demo.resetAccount()">Reset</button>
+      </div>
+      <div class="demo-tabs">
+        <button class="demo-tab" :class="{ active: demoTab === 'positions' }" @click="demoTab = 'positions'">Positions ({{ demo.openPositions.length }})</button>
+        <button class="demo-tab" :class="{ active: demoTab === 'history' }" @click="demoTab = 'history'">History ({{ demo.closedPositions.length }})</button>
+        <button class="demo-tab" :class="{ active: demoTab === 'stats' }" @click="demoTab = 'stats'">Stats</button>
+        <span class="demo-flex" />
+        <template v-if="demoTab === 'stats'">
+          <button v-for="p in ['day', 'week', 'month', 'all']" :key="p" class="demo-period" :class="{ active: demoPeriod === p }" @click="demoPeriod = p as any">{{ p === 'day' ? 'Day' : p === 'week' ? 'Week' : p === 'month' ? 'Month' : 'All' }}</button>
+        </template>
+      </div>
+      <div v-if="demoTab === 'positions'" class="demo-table">
+        <div v-if="!demo.openPositions.length" class="demo-empty">No open positions — place a trade from the toolbar above the chart.</div>
+        <table v-else>
+          <thead><tr><th>Symbol</th><th>Side</th><th>Lot</th><th>Entry</th><th>SL</th><th>TP</th><th>P/L $</th><th>P/L %</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="p in demo.openPositions" :key="p.id">
+              <td>{{ p.symbol.replace('_', '/') }}</td>
+              <td :class="p.direction === 'long' ? 'pos' : 'neg'">{{ p.direction === 'long' ? 'LONG' : 'SHORT' }}</td>
+              <td>{{ p.lot }}</td>
+              <td>{{ p.entry }}</td>
+              <td>{{ p.sl ?? '-' }}</td>
+              <td>{{ p.tp ?? '-' }}</td>
+              <td :class="pnlClass(((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1))">{{ fmtMoney(((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1) * p.lot) }}</td>
+              <td :class="pnlClass(((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1))">{{ (((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1) * 100 / p.entry).toFixed(2) }}%</td>
+              <td><button class="demo-close" title="Close position" @click="demo.closeAtMarket(p.id)">✕</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-else-if="demoTab === 'history'" class="demo-table">
+        <div v-if="!demo.closedPositions.length" class="demo-empty">No closed trades yet.</div>
+        <table v-else>
+          <thead><tr><th>Symbol</th><th>Side</th><th>Lot</th><th>Entry</th><th>Exit</th><th>Reason</th><th>P/L $</th><th>P/L %</th><th>Closed</th></tr></thead>
+          <tbody>
+            <tr v-for="p in [...demo.closedPositions].reverse()" :key="p.id">
+              <td>{{ p.symbol.replace('_', '/') }}</td>
+              <td :class="p.direction === 'long' ? 'pos' : 'neg'">{{ p.direction === 'long' ? 'LONG' : 'SHORT' }}</td>
+              <td>{{ p.lot }}</td>
+              <td>{{ p.entry }}</td>
+              <td>{{ p.closePrice }}</td>
+              <td>{{ (p.closeReason ?? '').toUpperCase() }}</td>
+              <td :class="pnlClass(p.pnl)">{{ fmtMoney(p.pnl ?? 0) }}</td>
+              <td :class="pnlClass(p.pnlPct)">{{ (p.pnlPct ?? 0) >= 0 ? '+' : '' }}{{ (p.pnlPct ?? 0).toFixed(2) }}%</td>
+              <td>{{ p.closeTime ? new Date(p.closeTime * 1000).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-else class="demo-table">
+        <div class="demo-stats">
+          <div class="demo-stat-card"><span>Trades</span><b>{{ demoSummary.trades }}</b></div>
+          <div class="demo-stat-card"><span>Wins</span><b>{{ demoSummary.wins }}</b></div>
+          <div class="demo-stat-card"><span>Winrate</span><b>{{ demoSummary.winrate }}%</b></div>
+          <div class="demo-stat-card"><span>Profit factor</span><b>{{ demoSummary.profitFactor ?? '-' }}</b></div>
+          <div class="demo-stat-card"><span :class="pnlClass(demoSummary.profit)">P/L</span><b :class="pnlClass(demoSummary.profit)">{{ fmtMoney(demoSummary.profit) }}</b></div>
+          <div class="demo-stat-card"><span>Gross profit</span><b class="pos">{{ fmtMoney(demoSummary.grossProfit) }}</b></div>
+          <div class="demo-stat-card"><span>Gross loss</span><b class="neg">{{ fmtMoney(demoSummary.grossLoss) }}</b></div>
+          <div class="demo-stat-card"><span>Symbols</span><b>{{ demo.tradedSymbols.length }}</b></div>
+        </div>
+      </div>
+    </div>
 
     <!-- Replay control panel -->
     <div v-if="replay.active" class="replay-panel">
@@ -4561,6 +4795,315 @@ onBeforeUnmount(() => {
   padding: 2px 6px;
   border-radius: 3px 0 0 3px;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* ── Demo trading (paper trading) ── */
+.demo-lines,
+.demo-hit-layer,
+.demo-tag-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.demo-lines,
+.demo-tag-layer {
+  z-index: 5;
+}
+.demo-hit-layer {
+  z-index: 7;
+}
+.demo-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1.5px;
+  pointer-events: none;
+}
+.demo-line.dashed {
+  background: repeating-linear-gradient(90deg, currentColor 0 6px, transparent 6px 11px);
+}
+.demo-line-hit {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 9px;
+  pointer-events: auto;
+  cursor: ns-resize;
+}
+.demo-tag-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+}
+.demo-axis-tag {
+  position: absolute;
+  right: 0;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 3px 0 0 3px;
+  white-space: nowrap;
+}
+.demo-axis-tag.entry {
+  background: #2962ff;
+}
+.demo-axis-tag.sl {
+  background: #ef5350;
+}
+.demo-axis-tag.tp {
+  background: #26a69a;
+}
+.demo-toolbar {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  flex-wrap: wrap;
+}
+.demo-tb-title {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #26a69a;
+  margin-right: 2px;
+}
+.demo-inp {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.demo-inp input {
+  width: 62px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  outline: none;
+}
+.demo-inp input:focus {
+  border-color: var(--accent);
+}
+.demo-tb-btn {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--btn-bg);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 140ms;
+}
+.demo-tb-btn.buy:hover {
+  color: #26a69a;
+  border-color: #26a69a;
+}
+.demo-tb-btn.sell:hover {
+  color: #ef5350;
+  border-color: #ef5350;
+}
+.demo-tb-btn.buy.armed,
+.demo-tb-btn.sell.armed {
+  background: var(--accent-gradient);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 2px 10px rgba(41, 98, 255, 0.35);
+}
+.demo-err {
+  font-size: 10px;
+  color: #ef5350;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.demo-bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 26px; /* above the time axis */
+  z-index: 22;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+  max-height: 240px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.25);
+}
+.demo-bottom-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px 4px;
+  flex-wrap: wrap;
+}
+.demo-badge {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #fff;
+  background: #26a69a;
+  border-radius: 5px;
+  padding: 3px 8px;
+}
+.demo-stat {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.demo-stat b {
+  color: var(--text);
+  font-weight: 800;
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.demo-flex {
+  flex: 1;
+}
+.demo-reset {
+  border: 1px solid var(--border);
+  background: var(--btn-bg);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.demo-reset:hover {
+  color: #ef5350;
+  border-color: rgba(239, 83, 80, 0.5);
+}
+.demo-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 12px 6px;
+}
+.demo-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.demo-tab.active {
+  background: var(--btn-bg);
+  color: var(--text);
+}
+.demo-period {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+.demo-period.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.demo-table {
+  overflow: auto;
+  padding: 0 12px 10px;
+}
+.demo-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 8px 4px;
+}
+.demo-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.demo-table th {
+  text-align: left;
+  color: var(--text-muted);
+  font-weight: 700;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg-panel);
+}
+.demo-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.demo-table .pos {
+  color: #26a69a;
+}
+.demo-table .neg {
+  color: #ef5350;
+}
+.demo-close {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.demo-close:hover {
+  color: #ef5350;
+  background: rgba(239, 83, 80, 0.1);
+}
+.demo-stats {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 0 2px;
+}
+.demo-stat-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  min-width: 90px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.demo-stat-card span {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.demo-stat-card b {
+  font-size: 13px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.demo-stat-card .pos {
+  color: #26a69a;
+}
+.demo-stat-card .neg {
+  color: #ef5350;
 }
 .rp-sep {
   width: 1px;
