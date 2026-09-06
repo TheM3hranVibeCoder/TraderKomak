@@ -349,11 +349,14 @@ function onPickingMove(ev: MouseEvent): void {
 }
 
 function stopPickingListeners(): void {
-  if (pickingMove && containerRef.value) {
-    // CAPTURE phase: LWC's canvas listeners stopPropagation on real mouse
-    // moves, which would kill a bubble-phase listener — capture runs first
-    // and always fires.
-    containerRef.value.removeEventListener("mousemove", pickingMove, { capture: true });
+  if (pickingMove) {
+    // CAPTURE phase on the pane root (common ancestor of the LWC container
+    // AND the drawing/demo hit layers): LWC's canvas stops propagation on
+    // mouse moves and the hit layers are siblings of the chart container,
+    // so a listener on the container itself would freeze while the cursor
+    // is over any drawing — capture on the ancestor always fires.
+    const root = (document.querySelector(".chart-pane") ?? containerRef.value) as HTMLElement;
+    root.removeEventListener("mousemove", pickingMove, { capture: true });
   }
   pickingMove = null;
 }
@@ -375,7 +378,8 @@ watch(
       idx = Math.min(Math.max(idx, 0), displayCandles.value.length - 1);
       pickTime.value = displayCandles.value[idx]!.time;
       pickingMove = onPickingMove;
-      containerRef.value.addEventListener("mousemove", pickingMove, { capture: true });
+      const pickRoot = (document.querySelector(".chart-pane") ?? containerRef.value) as HTMLElement;
+      pickRoot.addEventListener("mousemove", pickingMove, { capture: true });
       recalcRects();
     }
   }
@@ -990,9 +994,29 @@ function updateAxisSizes(): void {
     }
     return;
   }
-  axisRetry = 0;
-  axisRightW.value = Math.max(0, Math.round(c.clientWidth - r.width));
-  axisBottomH.value = Math.max(0, Math.round(c.clientHeight - r.height));
+  const rightW = Math.max(0, Math.round(c.clientWidth - r.width));
+  const bottomH = Math.max(0, Math.round(c.clientHeight - r.height));
+  const changed = rightW !== axisRightW.value || bottomH !== axisBottomH.value;
+  axisRightW.value = rightW;
+  axisBottomH.value = bottomH;
+  if (changed) {
+    // The LWC canvas resizes ASYNC after a container layout change (e.g.
+    // the watchlist slide) — the first measurement can still see the old
+    // canvas size, yielding a wildly wrong axis width (382px instead of
+    // 62px) that would permanently clip the overlays. Keep re-measuring
+    // every frame until the value settles, then re-project the overlays.
+    recalcRects();
+    if (axisRetry < 60) {
+      axisRetry += 1;
+      requestAnimationFrame(() => {
+        updateAxisSizes();
+        updateBadgePosition();
+        recalcRects();
+      });
+    }
+  } else {
+    axisRetry = 0;
+  }
 }
 /** True when the event is inside the drawable chart area (not on an axis). */
 function isInChartArea(e: MouseEvent): boolean {
@@ -3221,7 +3245,7 @@ onBeforeUnmount(() => {
          selectable and resizable. -->
     <div
       class="drawing-hit-layer drawing-clip"
-      :class="{ 'drawing-mode': drawingToolActive }"
+      :class="{ 'drawing-mode': drawingToolActive || replay.picking }"
       :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }"
     >
       <div
@@ -3800,7 +3824,7 @@ onBeforeUnmount(() => {
           </div>
         </template>
       </div>
-      <div class="demo-hit-layer" :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }">
+      <div class="demo-hit-layer" :class="{ 'drawing-mode': replay.picking }" :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }">
         <div
           v-for="l in demoLines"
           :key="'dhit-' + l.id + l.level"
@@ -4360,6 +4384,11 @@ onBeforeUnmount(() => {
 .drawing-hit-layer.drawing-mode .pos-handle,
 .drawing-hit-layer.drawing-mode .single-hit,
 .drawing-hit-layer.drawing-mode .single-handle {
+  pointer-events: none;
+}
+/* Replay pick mode: the click must cut the chart, never select a drawing
+   or grab a demo line — all hit targets go click-transparent. */
+.demo-hit-layer.drawing-mode .demo-line-hit {
   pointer-events: none;
 }
 .chart-container.rect-mode,
