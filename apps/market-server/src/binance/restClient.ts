@@ -49,7 +49,7 @@ function planFor(tf: Timeframe): { interval: string; factor: number } {
   }
   const map: Record<number, string> = {
     60: "1m", 300: "5m", 900: "15m", 1800: "30m",
-    3600: "1h", 86400: "1d",
+    3600: "1h", 14400: "4h", 86400: "1d", 604800: "1w", 2592000: "1M",
   };
   return { interval: map[sec] ?? "1m", factor: 1 };
 }

@@ -17,7 +17,7 @@ import {
   NATIVE_HISTORY_GRANULARITY,
   TIMEFRAME_SECONDS,
   bucketStart,
-  oandaDailyBucketStart,
+  oandaAlignedBucketStart,
   isInstrument,
   isTimeframe,
   nativeCandlesNeeded,
@@ -307,9 +307,7 @@ export class CandleFeed extends EventEmitter {
         seedSource = aggregateCandles(native, seconds);
       }
 
-      const nowBucketSec = seconds === 86400
-        ? oandaDailyBucketStart(Date.now()) / 1000
-        : bucketStart(Date.now(), seconds) / 1000;
+      const nowBucketSec = oandaAlignedBucketStart(Date.now(), seconds) / 1000;
       // Seed the ACTIVE bucket from native history so a freshly created
       // session continues OANDA's in-progress candle instead of building one
       // from zero. `>=` tolerates minor clock skew between us and OANDA.

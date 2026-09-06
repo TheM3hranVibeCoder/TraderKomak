@@ -6,7 +6,7 @@
  * availability per timeframe is documented in the market server's
  * history-resolution logic (see apps/market-server/src/routes/candles.ts).
  */
-export const TIMEFRAMES = ["1s", "5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "1d"] as const;
+export const TIMEFRAMES = ["1s", "5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M"] as const;
 
 export type Timeframe = (typeof TIMEFRAMES)[number];
 
@@ -24,7 +24,10 @@ export const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
   "15m": 900,
   "30m": 1800,
   "1h": 3600,
+  "4h": 14400,
   "1d": 86400,
+  "1w": 604800,
+  "1M": 2592000,
 };
 
 /**
@@ -38,7 +41,10 @@ export const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
  * derived by aggregating S5 candles with the same engine used live.
  * `5m`+ are native, no derivation needed.
  */
-export const NATIVE_HISTORY_GRANULARITY: Record<Timeframe, "S5" | "M1" | "M5" | "M15" | "M30" | "H1" | "D" | null> = {
+export const NATIVE_HISTORY_GRANULARITY: Record<
+  Timeframe,
+  "S5" | "M1" | "M5" | "M15" | "M30" | "H1" | "H4" | "D" | "W" | "M" | null
+> = {
   "1s": null,
   "5s": "S5",
   "10s": "S5",
@@ -49,7 +55,28 @@ export const NATIVE_HISTORY_GRANULARITY: Record<Timeframe, "S5" | "M1" | "M5" | 
   "15m": "M15",
   "30m": "M30",
   "1h": "H1",
+  "4h": "H4",
   "1d": "D",
+  "1w": "W",
+  "1M": "M",
+};
+
+/** Display labels — 1d/1w/1M are shown as D/W/M (TradingView-style). */
+export const TIMEFRAME_LABELS: Record<Timeframe, string> = {
+  "1s": "1s",
+  "5s": "5s",
+  "10s": "10s",
+  "15s": "15s",
+  "30s": "30s",
+  "1m": "1m",
+  "5m": "5m",
+  "15m": "15m",
+  "30m": "30m",
+  "1h": "1h",
+  "4h": "4h",
+  "1d": "D",
+  "1w": "W",
+  "1M": "M",
 };
 
 /** How many native-granularity candles are needed to build N tf-candles. */
@@ -88,18 +115,54 @@ function usDstRangeUTC(year: number): { start: number; end: number } {
  * The live daily aggregation must match the native D history boundaries or
  * the 1d chart shows stray overlapping candles.
  */
+/** The OANDA daily-candle open time (5pm New York) for the UTC day that
+ *  contains `dayNoonMs` (noon of that UTC day — the DST state at noon
+ *  matches the state at the 17:00-NY boundary later that day). */
+function dailyOpenFor(dayNoonMs: number): number {
+  const { start, end } = usDstRangeUTC(new Date(dayNoonMs).getUTCFullYear());
+  return dayNoonMs >= start && dayNoonMs < end ? 21 * 3600000 : 22 * 3600000;
+}
+
 export function oandaDailyBucketStart(timestampMs: number): number {
   const DAY = 86400000;
-  const EDT_OPEN = 21 * 3600000;
-  const EST_OPEN = 22 * 3600000;
-  let best = -Infinity;
-  for (let d = -2; d <= 1; d++) {
-    const dayStart = Math.floor(timestampMs / DAY) * DAY + d * DAY;
-    const noon = dayStart + 12 * 3600000;
-    const { start, end } = usDstRangeUTC(new Date(noon).getUTCFullYear());
-    const open = noon >= start && noon < end ? EDT_OPEN : EST_OPEN;
-    const candidate = dayStart + open;
-    if (candidate <= timestampMs && candidate > best) best = candidate;
+  const dayMidnight = Math.floor(timestampMs / DAY) * DAY;
+  let cand = dayMidnight + dailyOpenFor(dayMidnight + 12 * 3600000);
+  if (cand > timestampMs) {
+    const prevDay = dayMidnight - DAY;
+    cand = prevDay + dailyOpenFor(prevDay + 12 * 3600000);
   }
-  return best === -Infinity ? Math.floor((timestampMs - EST_OPEN) / DAY) * DAY + EST_OPEN : best;
+  return cand;
+}
+
+/** Start of the WEEKLY bucket (OANDA W candles open Sunday 5pm New York). */
+export function oandaWeeklyBucketStart(timestampMs: number): number {
+  const DAY = 86400000;
+  const dayMidnight = Math.floor(timestampMs / DAY) * DAY;
+  const sunday = dayMidnight - new Date(dayMidnight).getUTCDay() * DAY;
+  let cand = sunday + dailyOpenFor(sunday + 12 * 3600000);
+  if (cand > timestampMs) {
+    const prevSunday = sunday - 7 * DAY;
+    cand = prevSunday + dailyOpenFor(prevSunday + 12 * 3600000);
+  }
+  return cand;
+}
+
+/** Start of the MONTHLY bucket (OANDA M candles open on the 1st, 5pm NY). */
+export function oandaMonthlyBucketStart(timestampMs: number): number {
+  const d = new Date(timestampMs);
+  for (let m = d.getUTCMonth() + 1; m >= d.getUTCMonth() - 1; m--) {
+    const monthStart = Date.UTC(d.getUTCFullYear() + Math.floor(m / 12), ((m % 12) + 12) % 12, 1);
+    const cand = monthStart + dailyOpenFor(monthStart + 12 * 3600000);
+    if (cand <= timestampMs) return cand;
+  }
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+}
+
+/** Bucket start honoring OANDA session conventions for the large
+ *  timeframes (D/W/M align to 5pm-NY boundaries, not UTC midnight). */
+export function oandaAlignedBucketStart(timestampMs: number, timeframeSeconds: number): number {
+  if (timeframeSeconds === 86400) return oandaDailyBucketStart(timestampMs);
+  if (timeframeSeconds === 604800) return oandaWeeklyBucketStart(timestampMs);
+  if (timeframeSeconds === 2592000) return oandaMonthlyBucketStart(timestampMs);
+  return bucketStart(timestampMs, timeframeSeconds);
 }

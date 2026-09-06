@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { TIMEFRAMES, TIMEFRAME_SECONDS, type Timeframe } from "@traderkomak/shared";
+import { TIMEFRAMES, TIMEFRAME_SECONDS, TIMEFRAME_LABELS, type Timeframe } from "@traderkomak/shared";
 import { useThemeStore } from "@/stores/theme";
 import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 
@@ -11,7 +11,7 @@ const open = ref(false);
 const dropdownRef = ref<HTMLElement | null>(null);
 
 function label(tf: Timeframe): string {
-  return tf;
+  return TIMEFRAME_LABELS[tf] ?? tf;
 }
 
 const favs = computed(() =>
