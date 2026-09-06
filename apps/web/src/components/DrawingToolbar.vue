@@ -87,7 +87,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
         <span class="tool-ic" v-html="ICONS[lastLineTool]"></span>
       </button>
       <button class="split-arrow" title="Line tools" @click.stop="openFlyout">
-        <svg viewBox="0 0 8 6" width="7" height="6" aria-hidden="true"><path d="M0 0l4 5 4-5z" fill="currentColor"/></svg>
+        <svg viewBox="0 0 6 8" width="6" height="8" aria-hidden="true"><path d="M0 0l5 4-5 4z" fill="currentColor"/></svg>
       </button>
     </div>
 
@@ -169,16 +169,19 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
 .tool-split {
   width: 32px;
   height: 32px;
-  border: 1px solid transparent;
   border-radius: 7px;
   display: flex;
-  overflow: hidden;
+  position: relative;
   transition: all 150ms;
   flex-shrink: 0;
 }
 .tool-split.active {
-  border-color: rgba(41, 98, 255, 0.55);
-  box-shadow: 0 0 0 1px rgba(41, 98, 255, 0.25);
+  background: var(--accent-gradient);
+  box-shadow: 0 2px 8px rgba(41, 98, 255, 0.3);
+}
+.tool-split.active .split-main,
+.tool-split.active .split-arrow {
+  color: #fff;
 }
 .split-main {
   flex: 1;
@@ -188,28 +191,31 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  padding: 0 0 0 3px;
+  padding: 0;
 }
 .split-arrow {
-  width: 11px;
+  position: absolute;
+  right: 1px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 12px;
   display: grid;
   place-items: center;
   border: none;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  padding: 0 0 2px 0;
-  font-size: 8px;
+  padding: 0;
+  /* invisible until the mouse is over the button */
+  opacity: 0;
+  transition: opacity 150ms;
 }
-.tool-split:hover .split-main,
 .tool-split:hover .split-arrow {
-  color: var(--text);
-  background: var(--btn-bg);
+  opacity: 1;
 }
-.tool-split.active .split-main,
-.tool-split.active .split-arrow {
-  color: var(--accent);
-  background: rgba(41, 98, 255, 0.12);
+.split-arrow svg {
+  transform: rotate(-90deg); /* points right — where the flyout opens */
 }
 .line-flyout {
   position: fixed;
@@ -223,6 +229,10 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
   padding: 6px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
   z-index: 50;
+}
+.flyout-btn {
+  background: transparent;
+  border: none;
 }
 
 </style>
