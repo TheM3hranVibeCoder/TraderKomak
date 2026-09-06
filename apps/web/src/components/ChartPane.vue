@@ -6,6 +6,7 @@ import { useMarketStore } from "@/stores/market";
 import { useDrawingsStore, type DrawingRect, type DrawingTrend, type DrawingPoly, type DrawingPosition, type DrawingHLine, type DrawingHRay, type DrawingVLine, type SingleKind, type SingleDrawing, type DashStyle } from "@/stores/drawings";
 import { useReplayStore } from "@/stores/replay";
 import { useDemoStore, type DemoSide, type DemoStatus, type DemoKind } from "@/stores/demo";
+import DemoPanel from "./DemoPanel.vue";
 import type { Candle } from "@traderkomak/shared";
 import { currencyFlagUrl, commodityIcon } from "@/utils/flags";
 import { TIMEFRAME_SECONDS, instrumentPrecision, instrumentPipSize, providerOf } from "@traderkomak/shared";
@@ -32,6 +33,9 @@ interface DemoLinePx {
   direction: DemoSide;
   status: DemoStatus;
   lot: number;
+  /** $ values for the line labels */
+  money: number;
+  rr: number | null;
 }
 const demoLines = ref<DemoLinePx[]>([]);
 let demoLineDrag: { id: string; level: "entry" | "sl" | "tp" } | null = null;
@@ -51,19 +55,22 @@ function rebuildDemoLines(): void {
   const prec = instrumentPrecision(market.instrument);
   for (const p of demo.openPositions) {
     if (p.symbol !== market.instrument) continue;
+    const risk = p.sl !== null ? Math.abs(p.entry - p.sl) * p.lot : 0;
+    const reward = p.tp !== null ? Math.abs(p.tp - p.entry) * p.lot : 0;
+    const rr = risk > 0 ? +(reward / risk).toFixed(2) : null;
     if (p.sl !== null) {
       const y = demoLevelY(p.sl);
-      if (y !== null) out.push({ id: p.id, level: "sl", y, color: "#ef5350", dashed: false, direction: p.direction, status: "open", lot: p.lot });
+      if (y !== null) out.push({ id: p.id, level: "sl", y, color: "#ef5350", dashed: false, direction: p.direction, status: "open", lot: p.lot, money: +risk.toFixed(2), rr: null });
     }
     if (p.tp !== null) {
       const y = demoLevelY(p.tp);
-      if (y !== null) out.push({ id: p.id, level: "tp", y, color: "#26a69a", dashed: false, direction: p.direction, status: "open", lot: p.lot });
+      if (y !== null) out.push({ id: p.id, level: "tp", y, color: "#26a69a", dashed: false, direction: p.direction, status: "open", lot: p.lot, money: +reward.toFixed(2), rr });
     }
   }
   for (const p of demo.positions) {
     if (p.symbol !== market.instrument || p.status !== "pending") continue;
     const y = demoLevelY(p.entry);
-    if (y !== null) out.push({ id: p.id, level: "entry", y, color: "#2962ff", dashed: true, direction: p.direction, status: "pending", lot: p.lot });
+    if (y !== null) out.push({ id: p.id, level: "entry", y, color: "#2962ff", dashed: true, direction: p.direction, status: "pending", lot: p.lot, money: 0, rr: null });
   }
   demoLines.value = out;
 }
@@ -94,7 +101,8 @@ function placeDemoMarket(side: DemoSide): void {
   const entry = c.length ? c[c.length - 1]!.close : null;
   if (entry === null) return;
   const dirMult = side === "long" ? 1 : -1;
-  const sl = demo.riskUsd > 0 && demo.lot > 0 ? entry - dirMult * (demo.riskUsd / demo.lot) : null;
+  const risk = demo.riskAmount();
+  const sl = risk > 0 && demo.lot > 0 ? entry - dirMult * (risk / demo.lot) : null;
   const tp = demo.rewardUsd > 0 && demo.lot > 0 ? entry + dirMult * (demo.rewardUsd / demo.lot) : null;
   demo.placeOrder(market.instrument, side, "market", entry, sl, tp);
 }
@@ -107,7 +115,8 @@ function armDemoLimit(side: DemoSide): void {
 function placeDemoLimitAt(price: number): void {
   if (!demoArm.value) return;
   const dirMult = demoArm.value.side === "long" ? 1 : -1;
-  const sl = demo.riskUsd > 0 && demo.lot > 0 ? price - dirMult * (demo.riskUsd / demo.lot) : null;
+  const risk = demo.riskAmount();
+  const sl = risk > 0 && demo.lot > 0 ? price - dirMult * (risk / demo.lot) : null;
   const tp = demo.rewardUsd > 0 && demo.lot > 0 ? price + dirMult * (demo.rewardUsd / demo.lot) : null;
   demo.placeOrder(market.instrument, demoArm.value.side, "limit", price, sl, tp);
   demoArm.value = null;
@@ -286,7 +295,13 @@ watch(
     // free space; it only follows once the newest candle reaches the right
     // edge — panning by the current view WIDTH (no dependence on the
     // adapter's capped data length).
-    if (!replay.active || cutoff === null || prev === null || cutoff <= prev) return;
+    if (!replay.active || cutoff === null || prev === null) return;
+    // Demo positions track the price AT the replay boundary
+    const lastShown = displayCandles.value[displayCandles.value.length - 1];
+    if (lastShown) demo.processReplayPrice(lastShown.close, market.instrument);
+    // Stepping backward past a trade's entry deletes the whole trade
+    if (cutoff < prev) demo.deleteBeyond(cutoff, market.instrument);
+    if (cutoff <= prev) return;
     const idx = displayCandles.value.length - 1;
     const r = adapter?.getLogicalRange();
     const ad = adapter;
@@ -3628,6 +3643,20 @@ onBeforeUnmount(() => {
           :class="[l.level, { dashed: l.dashed }]"
           :style="{ top: l.y + 'px', background: l.color }"
         ></div>
+        <!-- Left-edge labels: lot size + $ loss on the SL line, $ reward and
+             R:R on the TP line (per position) -->
+        <template v-for="p in demo.openPositions" :key="'lbl-' + p.id">
+          <div
+            v-for="l in demoLines.filter((x) => x.id === p.id)"
+            :key="'lbl-' + l.level"
+            class="demo-line-label"
+            :class="l.level"
+            :style="{ top: l.y - 10 + 'px' }"
+          >
+            <template v-if="l.level === 'sl'">SL {{ p.lot }} lot &#183; -${{ l.money }}</template>
+            <template v-else-if="l.level === 'tp'">TP ${{ l.money }} &#183; R:R {{ l.rr }}</template>
+          </div>
+        </template>
       </div>
       <div class="demo-hit-layer" :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }">
         <div
@@ -3653,8 +3682,14 @@ onBeforeUnmount(() => {
     <!-- Demo trading toolbar (lot size / $ risk / $ reward + order buttons) -->
     <div v-if="demo.active" class="demo-toolbar">
       <span class="demo-tb-title">DEMO</span>
-      <label class="demo-inp"><span>Lot</span><input type="number" min="0.01" step="0.01" v-model.number="demo.lot" /></label>
-      <label class="demo-inp"><span>Risk $</span><input type="number" min="1" step="1" v-model.number="demo.riskUsd" /></label>
+      <div class="demo-size-modes">
+        <button class="demo-mode" :class="{ active: demo.sizeMode === 'lot' }" title="Size by lot (risk $ per SL)" @click.stop="demo.sizeMode = 'lot'">Lot</button>
+        <button class="demo-mode" :class="{ active: demo.sizeMode === 'percent' }" title="Risk = % of balance" @click.stop="demo.sizeMode = 'percent'">%</button>
+        <button class="demo-mode" :class="{ active: demo.sizeMode === 'usd' }" title="Risk = entered $ amount" @click.stop="demo.sizeMode = 'usd'">$</button>
+      </div>
+      <label v-if="demo.sizeMode === 'lot'" class="demo-inp"><span>Lot</span><input type="number" min="0.01" step="0.01" v-model.number="demo.lot" /></label>
+      <label v-if="demo.sizeMode === 'lot' || demo.sizeMode === 'usd'" class="demo-inp"><span>Risk $</span><input type="number" min="1" step="1" v-model.number="demo.riskUsd" /></label>
+      <label v-if="demo.sizeMode === 'percent'" class="demo-inp"><span>Risk %</span><input type="number" min="0.1" step="0.1" v-model.number="demo.riskPct" /></label>
       <label class="demo-inp"><span>Reward $</span><input type="number" min="1" step="1" v-model.number="demo.rewardUsd" /></label>
       <span class="rp-sep" />
       <button class="demo-tb-btn buy" :class="{ armed: demoArm?.side === 'long' && demoArm?.kind === 'limit' }" title="Buy Limit — click a price on the chart" @click.stop="armDemoLimit('long')">Buy Limit</button>
@@ -3663,77 +3698,6 @@ onBeforeUnmount(() => {
       <button class="demo-tb-btn buy" title="Market buy — opens instantly" @click.stop="placeDemoMarket('long')">Buy</button>
       <button class="demo-tb-btn sell" title="Market sell — opens instantly" @click.stop="placeDemoMarket('short')">Sell</button>
       <span v-if="demo.error" class="demo-err">{{ demo.error }}</span>
-    </div>
-
-    <!-- Demo positions / history / stats panel (under the chart) -->
-    <div v-if="demo.active" class="demo-bottom">
-      <div class="demo-bottom-head">
-        <span class="demo-badge">DEMO</span>
-        <span class="demo-stat">Balance <b>{{ fmtMoney(demo.balance) }}</b></span>
-        <span class="demo-stat">Equity <b>{{ fmtMoney(demo.equity) }}</b></span>
-        <span class="demo-stat">Open P/L <b :class="pnlClass(demo.unrealized)">{{ fmtMoney(demo.unrealized) }}</b></span>
-        <span class="demo-flex" />
-        <button class="demo-reset" title="Reset demo account to $100,000" @click="demo.resetAccount()">Reset</button>
-      </div>
-      <div class="demo-tabs">
-        <button class="demo-tab" :class="{ active: demoTab === 'positions' }" @click="demoTab = 'positions'">Positions ({{ demo.openPositions.length }})</button>
-        <button class="demo-tab" :class="{ active: demoTab === 'history' }" @click="demoTab = 'history'">History ({{ demo.closedPositions.length }})</button>
-        <button class="demo-tab" :class="{ active: demoTab === 'stats' }" @click="demoTab = 'stats'">Stats</button>
-        <span class="demo-flex" />
-        <template v-if="demoTab === 'stats'">
-          <button v-for="p in ['day', 'week', 'month', 'all']" :key="p" class="demo-period" :class="{ active: demoPeriod === p }" @click="demoPeriod = p as any">{{ p === 'day' ? 'Day' : p === 'week' ? 'Week' : p === 'month' ? 'Month' : 'All' }}</button>
-        </template>
-      </div>
-      <div v-if="demoTab === 'positions'" class="demo-table">
-        <div v-if="!demo.openPositions.length" class="demo-empty">No open positions — place a trade from the toolbar above the chart.</div>
-        <table v-else>
-          <thead><tr><th>Symbol</th><th>Side</th><th>Lot</th><th>Entry</th><th>SL</th><th>TP</th><th>P/L $</th><th>P/L %</th><th></th></tr></thead>
-          <tbody>
-            <tr v-for="p in demo.openPositions" :key="p.id">
-              <td>{{ p.symbol.replace('_', '/') }}</td>
-              <td :class="p.direction === 'long' ? 'pos' : 'neg'">{{ p.direction === 'long' ? 'LONG' : 'SHORT' }}</td>
-              <td>{{ p.lot }}</td>
-              <td>{{ p.entry }}</td>
-              <td>{{ p.sl ?? '-' }}</td>
-              <td>{{ p.tp ?? '-' }}</td>
-              <td :class="pnlClass(((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1))">{{ fmtMoney(((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1) * p.lot) }}</td>
-              <td :class="pnlClass(((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1))">{{ (((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1) * 100 / p.entry).toFixed(2) }}%</td>
-              <td><button class="demo-close" title="Close position" @click="demo.closeAtMarket(p.id)">✕</button></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-else-if="demoTab === 'history'" class="demo-table">
-        <div v-if="!demo.closedPositions.length" class="demo-empty">No closed trades yet.</div>
-        <table v-else>
-          <thead><tr><th>Symbol</th><th>Side</th><th>Lot</th><th>Entry</th><th>Exit</th><th>Reason</th><th>P/L $</th><th>P/L %</th><th>Closed</th></tr></thead>
-          <tbody>
-            <tr v-for="p in [...demo.closedPositions].reverse()" :key="p.id">
-              <td>{{ p.symbol.replace('_', '/') }}</td>
-              <td :class="p.direction === 'long' ? 'pos' : 'neg'">{{ p.direction === 'long' ? 'LONG' : 'SHORT' }}</td>
-              <td>{{ p.lot }}</td>
-              <td>{{ p.entry }}</td>
-              <td>{{ p.closePrice }}</td>
-              <td>{{ (p.closeReason ?? '').toUpperCase() }}</td>
-              <td :class="pnlClass(p.pnl)">{{ fmtMoney(p.pnl ?? 0) }}</td>
-              <td :class="pnlClass(p.pnlPct)">{{ (p.pnlPct ?? 0) >= 0 ? '+' : '' }}{{ (p.pnlPct ?? 0).toFixed(2) }}%</td>
-              <td>{{ p.closeTime ? new Date(p.closeTime * 1000).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '' }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-else class="demo-table">
-        <div class="demo-stats">
-          <div class="demo-stat-card"><span>Trades</span><b>{{ demoSummary.trades }}</b></div>
-          <div class="demo-stat-card"><span>Wins</span><b>{{ demoSummary.wins }}</b></div>
-          <div class="demo-stat-card"><span>Winrate</span><b>{{ demoSummary.winrate }}%</b></div>
-          <div class="demo-stat-card"><span>Profit factor</span><b>{{ demoSummary.profitFactor ?? '-' }}</b></div>
-          <div class="demo-stat-card"><span :class="pnlClass(demoSummary.profit)">P/L</span><b :class="pnlClass(demoSummary.profit)">{{ fmtMoney(demoSummary.profit) }}</b></div>
-          <div class="demo-stat-card"><span>Gross profit</span><b class="pos">{{ fmtMoney(demoSummary.grossProfit) }}</b></div>
-          <div class="demo-stat-card"><span>Gross loss</span><b class="neg">{{ fmtMoney(demoSummary.grossLoss) }}</b></div>
-          <div class="demo-stat-card"><span>Symbols</span><b>{{ demo.tradedSymbols.length }}</b></div>
-        </div>
-      </div>
     </div>
 
     <!-- Replay control panel -->
@@ -3925,6 +3889,77 @@ onBeforeUnmount(() => {
       :class="{ 'rect-mode': drawingToolActive }"
       @click="onChartClick"
     />
+
+    <!-- Demo positions / history / stats panel (under the chart) -->
+    <div v-if="demo.active" class="demo-bottom">
+      <div class="demo-bottom-head">
+        <span class="demo-badge">DEMO</span>
+        <span class="demo-stat">Balance <b>{{ fmtMoney(demo.balance) }}</b></span>
+        <span class="demo-stat">Equity <b>{{ fmtMoney(demo.equity) }}</b></span>
+        <span class="demo-stat">Open P/L <b :class="pnlClass(demo.unrealized)">{{ fmtMoney(demo.unrealized) }}</b></span>
+        <span class="demo-flex" />
+        <button class="demo-reset" title="Reset demo account to $100,000" @click="demo.resetAccount()">Reset</button>
+      </div>
+      <div class="demo-tabs">
+        <button class="demo-tab" :class="{ active: demoTab === 'positions' }" @click="demoTab = 'positions'">Positions ({{ demo.openPositions.length }})</button>
+        <button class="demo-tab" :class="{ active: demoTab === 'history' }" @click="demoTab = 'history'">History ({{ demo.closedPositions.length }})</button>
+        <button class="demo-tab" :class="{ active: demoTab === 'stats' }" @click="demoTab = 'stats'">Stats</button>
+        <span class="demo-flex" />
+        <template v-if="demoTab === 'stats'">
+          <button v-for="p in ['day', 'week', 'month', 'all']" :key="p" class="demo-period" :class="{ active: demoPeriod === p }" @click="demoPeriod = p as any">{{ p === 'day' ? 'Day' : p === 'week' ? 'Week' : p === 'month' ? 'Month' : 'All' }}</button>
+        </template>
+      </div>
+      <div v-if="demoTab === 'positions'" class="demo-table">
+        <div v-if="!demo.openPositions.length" class="demo-empty">No open positions — place a trade from the toolbar above the chart.</div>
+        <table v-else>
+          <thead><tr><th>Symbol</th><th>Side</th><th>Lot</th><th>Entry</th><th>SL</th><th>TP</th><th>P/L $</th><th>P/L %</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="p in demo.openPositions" :key="p.id">
+              <td>{{ p.symbol.replace('_', '/') }}</td>
+              <td :class="p.direction === 'long' ? 'pos' : 'neg'">{{ p.direction === 'long' ? 'LONG' : 'SHORT' }}</td>
+              <td>{{ p.lot }}</td>
+              <td>{{ p.entry }}</td>
+              <td>{{ p.sl ?? '-' }}</td>
+              <td>{{ p.tp ?? '-' }}</td>
+              <td :class="pnlClass(((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1))">{{ fmtMoney(((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1) * p.lot) }}</td>
+              <td :class="pnlClass(((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1))">{{ (((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1) * 100 / p.entry).toFixed(2) }}%</td>
+              <td><button class="demo-close" title="Close position" @click="demo.closeAtMarket(p.id)">✕</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-else-if="demoTab === 'history'" class="demo-table">
+        <div v-if="!demo.closedPositions.length" class="demo-empty">No closed trades yet.</div>
+        <table v-else>
+          <thead><tr><th>Symbol</th><th>Side</th><th>Lot</th><th>Entry</th><th>Exit</th><th>Reason</th><th>P/L $</th><th>P/L %</th><th>Closed</th></tr></thead>
+          <tbody>
+            <tr v-for="p in [...demo.closedPositions].reverse()" :key="p.id">
+              <td>{{ p.symbol.replace('_', '/') }}</td>
+              <td :class="p.direction === 'long' ? 'pos' : 'neg'">{{ p.direction === 'long' ? 'LONG' : 'SHORT' }}</td>
+              <td>{{ p.lot }}</td>
+              <td>{{ p.entry }}</td>
+              <td>{{ p.closePrice }}</td>
+              <td>{{ (p.closeReason ?? '').toUpperCase() }}</td>
+              <td :class="pnlClass(p.pnl)">{{ fmtMoney(p.pnl ?? 0) }}</td>
+              <td :class="pnlClass(p.pnlPct)">{{ (p.pnlPct ?? 0) >= 0 ? '+' : '' }}{{ (p.pnlPct ?? 0).toFixed(2) }}%</td>
+              <td>{{ p.closeTime ? new Date(p.closeTime * 1000).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-else class="demo-table">
+        <div class="demo-stats">
+          <div class="demo-stat-card"><span>Trades</span><b>{{ demoSummary.trades }}</b></div>
+          <div class="demo-stat-card"><span>Wins</span><b>{{ demoSummary.wins }}</b></div>
+          <div class="demo-stat-card"><span>Winrate</span><b>{{ demoSummary.winrate }}%</b></div>
+          <div class="demo-stat-card"><span>Profit factor</span><b>{{ demoSummary.profitFactor ?? '-' }}</b></div>
+          <div class="demo-stat-card"><span :class="pnlClass(demoSummary.profit)">P/L</span><b :class="pnlClass(demoSummary.profit)">{{ fmtMoney(demoSummary.profit) }}</b></div>
+          <div class="demo-stat-card"><span>Gross profit</span><b class="pos">{{ fmtMoney(demoSummary.grossProfit) }}</b></div>
+          <div class="demo-stat-card"><span>Gross loss</span><b class="neg">{{ fmtMoney(demoSummary.grossLoss) }}</b></div>
+          <div class="demo-stat-card"><span>Symbols</span><b>{{ demo.tradedSymbols.length }}</b></div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -4856,6 +4891,53 @@ onBeforeUnmount(() => {
 .demo-axis-tag.tp {
   background: #26a69a;
 }
+/* Left-edge line labels: lot + $ loss on SL, $ reward + R:R on TP */
+.demo-line-label {
+  position: absolute;
+  left: 56px;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.demo-line-label.sl {
+  color: #ef5350;
+}
+.demo-line-label.tp {
+  color: #26a69a;
+}
+.demo-size-modes {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--btn-bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 2px;
+}
+.demo-mode {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
+  padding: 3px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.demo-mode.active {
+  background: var(--accent-gradient);
+  color: #fff;
+}
+.demo-err {
+  font-size: 10px;
+  color: #ef5350;
+  font-weight: 700;
+  white-space: nowrap;
+}
 .demo-toolbar {
   position: absolute;
   top: 14px;
@@ -4934,17 +5016,14 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 .demo-bottom {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 26px; /* above the time axis */
-  z-index: 22;
+  /* in-flow section UNDER the chart (flex column sibling) — never covers
+     the candles */
   border-top: 1px solid var(--border);
   background: var(--bg-panel);
   max-height: 240px;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.25);
+  flex-shrink: 0;
 }
 .demo-bottom-head {
   display: flex;

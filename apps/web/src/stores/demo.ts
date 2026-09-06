@@ -2,19 +2,26 @@
  * Demo trading (paper trading) store.
  *
  * The account starts at $100,000. Trades are placed on the active chart
- * (market or limit), sized by lot with $-risk (stop distance) and
- * $-reward (target distance). Fills and TP/SL exits are processed against
- * the live price of the ACTIVE symbol (other symbols' positions update
- * the next time their symbol becomes active).
+ * (market or limit), sized in one of three modes:
+ *   - "lot":     manual lot size; SL distance from the entered $ risk
+ *   - "percent": risk = % of balance; lot derives from the SL distance
+ *   - "usd":     risk = entered $ amount; lot derives from the SL distance
+ * Fills and TP/SL exits are processed against the live price of the ACTIVE
+ * symbol (other symbols' positions update the next time their symbol
+ * becomes active). In replay mode the ChartPane feeds the replay price via
+ * processReplayPrice(), and stepping backward past a trade's entry deletes
+ * the whole trade.
  */
 import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
 import { useMarketStore } from "@/stores/market";
+import { useReplayStore } from "@/stores/replay";
 import { instrumentPrecision } from "@traderkomak/shared";
 
 export type DemoSide = "long" | "short";
 export type DemoStatus = "pending" | "open" | "closed";
 export type DemoKind = "market" | "limit";
+export type DemoSizeMode = "lot" | "percent" | "usd";
 
 export interface DemoPosition {
   id: string;
@@ -67,6 +74,8 @@ export const useDemoStore = defineStore("demo", () => {
   const lot = ref(0.1);
   const riskUsd = ref(100);
   const rewardUsd = ref(200);
+  const sizeMode = ref<DemoSizeMode>("lot");
+  const riskPct = ref(1);
 
   const error = ref<string | null>(null);
 
@@ -86,6 +95,12 @@ export const useDemoStore = defineStore("demo", () => {
 
   const nowSec = () => Math.floor(Date.now() / 1000);
 
+  /** The $ risk for the stop loss, per the selected sizing mode. */
+  function riskAmount(): number {
+    if (sizeMode.value === "percent") return +((balance.value * riskPct.value) / 100).toFixed(2);
+    return riskUsd.value;
+  }
+
   function placeOrder(
     symbol: string,
     direction: DemoSide,
@@ -95,17 +110,25 @@ export const useDemoStore = defineStore("demo", () => {
     tp: number | null
   ): DemoPosition | null {
     error.value = null;
-    if (!(lot.value > 0)) {
-      error.value = "Lot size must be positive";
-      return null;
-    }
     const long = direction === "long";
+    const market = useMarketStore();
     if (kind === "market") {
       // market order: fill immediately at the current price
-      const market = useMarketStore();
       const c = market.candles;
       const px = c.length ? c[c.length - 1]!.close : entry;
       entry = px;
+    }
+    // Position size: in lot mode the manual lot is used as-is; in percent/usd
+    // modes the lot derives from the $ risk and the SL distance.
+    let lotEff = lot.value;
+    const risk = riskAmount();
+    if (sizeMode.value !== "lot" && sl !== null) {
+      const dist = Math.abs(entry - sl);
+      lotEff = dist > 0 ? Math.max(0.01, +(risk / dist).toFixed(2)) : lot.value;
+    }
+    if (!(lotEff > 0)) {
+      error.value = "Position size must be positive";
+      return null;
     }
     if (sl !== null && ((long && sl >= entry) || (!long && sl <= entry))) {
       error.value = long ? "SL must be below entry for a long" : "SL must be above entry for a short";
@@ -120,7 +143,7 @@ export const useDemoStore = defineStore("demo", () => {
       symbol,
       direction,
       kind,
-      lot: lot.value,
+      lot: lotEff,
       entry: +entry.toFixed(precisionOf(symbol)),
       sl: sl !== null ? +sl.toFixed(precisionOf(symbol)) : null,
       tp: tp !== null ? +tp.toFixed(precisionOf(symbol)) : null,
@@ -151,6 +174,12 @@ export const useDemoStore = defineStore("demo", () => {
     if (!p) return;
     const prec = precisionOf(p.symbol);
     p[level] = +price.toFixed(prec);
+    // In percent/usd sizing modes the lot derives from the SL distance —
+    // recompute it when the SL line is dragged.
+    if (level === "sl" && sizeMode.value !== "lot" && p.entry) {
+      const dist = p.sl !== null ? Math.abs(p.entry - p.sl) : 0;
+      p.lot = dist > 0 ? Math.max(0.01, +(riskAmount() / dist).toFixed(2)) : p.lot;
+    }
     persist();
   }
 
@@ -170,13 +199,14 @@ export const useDemoStore = defineStore("demo", () => {
   /* ── Live processing: fills + TP/SL exits against the current price ── */
 
   const market = useMarketStore();
+  const replay = useReplayStore();
   const lastPrice = computed(() => {
     const c = market.candles;
     return c.length ? c[c.length - 1]!.close : null;
   });
 
-  function processPrice(price: number, symbol: string): void {
-    if (!active.value) return;
+  function processPrice(price: number, symbol: string, force = false): void {
+    if (!force && (!active.value || replay.active)) return;
     const prec = precisionOf(symbol);
     const px = +price.toFixed(prec);
     let changed = false;
@@ -211,8 +241,23 @@ export const useDemoStore = defineStore("demo", () => {
     if (changed) persist();
   }
 
+  /** Replay mode: process the price at the replay boundary. */
+  function processReplayPrice(price: number, symbol: string): void {
+    processPrice(price, symbol, true);
+  }
+
+  /** Replay backward past a trade's entry → the whole trade is deleted. */
+  function deleteBeyond(cutoff: number, symbol: string): void {
+    const before = positions.value.length;
+    const kept = positions.value.filter((p) => p.symbol !== symbol || p.entry <= cutoff);
+    if (kept.length !== before) {
+      positions.value = kept;
+      persist();
+    }
+  }
+
   watch(lastPrice, (price) => {
-    if (price === null) return;
+    if (price === null || replay.active) return;
     processPrice(price, market.instrument);
   });
   watch(
@@ -229,10 +274,9 @@ export const useDemoStore = defineStore("demo", () => {
   const closedPositions = computed(() => positions.value.filter((p) => p.status === "closed"));
 
   const unrealized = computed(() => {
-    const market = useMarketStore();
     const px = lastPrice.value;
-    let total = 0;
     if (px === null) return 0;
+    let total = 0;
     for (const p of openPositions.value) {
       const price = p.symbol === market.instrument ? px : (p.lastPrice ?? p.entry);
       total += (price - p.entry) * (p.direction === "long" ? 1 : -1) * p.lot;
@@ -282,13 +326,18 @@ export const useDemoStore = defineStore("demo", () => {
     lot,
     riskUsd,
     rewardUsd,
+    sizeMode,
+    riskPct,
     error,
     lastPrice,
+    riskAmount,
     placeOrder,
     closeAtMarket,
     removePending,
     updateLevel,
     processPrice,
+    processReplayPrice,
+    deleteBeyond,
     summaryFor,
     resetAccount,
     persist,
