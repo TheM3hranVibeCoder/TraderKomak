@@ -9,7 +9,7 @@ import { useDemoStore, demoValuePerPrice, type DemoSide, type DemoStatus, type D
 import DemoPanel from "./DemoPanel.vue";
 import type { Candle } from "@traderkomak/shared";
 import { currencyFlagUrl, commodityIcon } from "@/utils/flags";
-import { TIMEFRAME_SECONDS, instrumentPrecision, instrumentPipSize, providerOf } from "@traderkomak/shared";
+import { TIMEFRAME_SECONDS, instrumentPrecision, instrumentPipSize, providerOf, oandaDailyBucketStart, oandaH4BucketStart, oandaWeeklyBucketStart, oandaMonthlyBucketStart } from "@traderkomak/shared";
 
 const props = defineProps<{
   candles: Candle[];
@@ -680,14 +680,35 @@ function updateCountdown() {
   const tf = market.timeframe;
   const sec = TIMEFRAME_SECONDS[tf as keyof typeof TIMEFRAME_SECONDS] ?? 5;
   const now = Date.now();
-  const bucket = Math.floor(now / (sec * 1000)) * sec * 1000;
-  const next = bucket + sec * 1000;
+  const DAY = 86400000;
+  // Next boundary on the candle grid OANDA actually uses — the large
+  // timeframes align to 5pm-New-York sessions, NOT UTC multiples, so a
+  // plain modulo would count down to a time no candle ever opens at.
+  let next: number;
+  if (sec === 14400) next = oandaH4BucketStart(now + 4 * 3600000);
+  else if (sec === 86400) {
+    // session start of a later moment — step further while it lands back
+    // in the CURRENT session (e.g. right after a candle opens)
+    next = oandaDailyBucketStart(now + 12 * 3600000);
+    if (next <= now) next = oandaDailyBucketStart(now + 36 * 3600000);
+  }
+  else if (sec === 604800) next = oandaWeeklyBucketStart(oandaWeeklyBucketStart(now) + 7 * DAY + 1000);
+  else if (sec === 2592000) next = oandaMonthlyBucketStart(oandaMonthlyBucketStart(now) + 32 * DAY);
+  else next = Math.floor(now / (sec * 1000)) * sec * 1000 + sec * 1000;
   const rem = Math.max(0, next - now);
 
   const pad2 = (n: number) => String(n).padStart(2, "0");
 
-  if (sec >= 86400) {
-    // Daily candles → HH:MM:SS
+  if (sec >= 604800) {
+    // Weekly / monthly candles → Dd HH:MM:SS
+    const total = Math.floor(rem / 1000);
+    const dd = Math.floor(total / 86400);
+    const hh = Math.floor((total % 86400) / 3600);
+    const mm = Math.floor((total % 3600) / 60);
+    const ss = total % 60;
+    countdown.value = `${dd}d ${pad2(hh)}:${pad2(mm)}:${pad2(ss)}`;
+  } else if (sec >= 14400) {
+    // 4h / daily candles → HH:MM:SS
     const total = Math.floor(rem / 1000);
     const hh = Math.floor(total / 3600);
     const mm = Math.floor((total % 3600) / 60);
