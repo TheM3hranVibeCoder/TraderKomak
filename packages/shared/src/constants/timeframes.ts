@@ -128,33 +128,53 @@ export function oandaDailyBucketStart(timestampMs: number): number {
   return cand;
 }
 
-/** Start of the WEEKLY bucket (OANDA W candles open Sunday 5pm New York). */
+/** Start of the WEEKLY bucket. Native OANDA W candles open at 5pm New York
+ *  on FRIDAY (verified against the W history — candles anchor to Fridays,
+ *  e.g. 2026-08-14/21/28 21:00 UTC, NOT to Sundays). */
 export function oandaWeeklyBucketStart(timestampMs: number): number {
   const DAY = 86400000;
   const dayMidnight = Math.floor(timestampMs / DAY) * DAY;
-  const sunday = dayMidnight - new Date(dayMidnight).getUTCDay() * DAY;
-  let cand = sunday + dailyOpenFor(sunday + 12 * 3600000);
+  const dow = new Date(dayMidnight).getUTCDay();
+  const daysSinceFriday = (dow - 5 + 7) % 7;
+  const friday = dayMidnight - daysSinceFriday * DAY;
+  let cand = friday + dailyOpenFor(friday + 12 * 3600000);
   if (cand > timestampMs) {
-    const prevSunday = sunday - 7 * DAY;
-    cand = prevSunday + dailyOpenFor(prevSunday + 12 * 3600000);
+    const prevFriday = friday - 7 * DAY;
+    cand = prevFriday + dailyOpenFor(prevFriday + 12 * 3600000);
   }
   return cand;
 }
 
-/** Start of the MONTHLY bucket (OANDA M candles open on the 1st, 5pm NY). */
+/** Start of the MONTHLY bucket. Native OANDA M candles open at 5pm New York
+ *  on the LAST day of the previous month (the session that contains the new
+ *  month — e.g. September's candle opens 2026-08-31 21:00 UTC). */
 export function oandaMonthlyBucketStart(timestampMs: number): number {
+  const DAY = 86400000;
   const d = new Date(timestampMs);
   for (let m = d.getUTCMonth() + 1; m >= d.getUTCMonth() - 1; m--) {
     const monthStart = Date.UTC(d.getUTCFullYear() + Math.floor(m / 12), ((m % 12) + 12) % 12, 1);
-    const cand = monthStart + dailyOpenFor(monthStart + 12 * 3600000);
+    const lastDayPrev = monthStart - DAY;
+    const cand = lastDayPrev + dailyOpenFor(lastDayPrev + 12 * 3600000);
     if (cand <= timestampMs) return cand;
   }
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
 }
 
+/** Start of the 4-HOUR bucket. Native OANDA H4 candles are offset from the
+ *  5pm-New-York session start (21/01/05/09/13/17 UTC in DST), NOT aligned
+ *  to UTC midnight — so the grid anchors to the daily open and steps 4h. */
+export function oandaH4BucketStart(timestampMs: number): number {
+  const H4 = 4 * 3600000;
+  const DAY = 86400000;
+  let session = oandaDailyBucketStart(timestampMs);
+  if (session > timestampMs) session = oandaDailyBucketStart(timestampMs - DAY);
+  return session + Math.floor((timestampMs - session) / H4) * H4;
+}
+
 /** Bucket start honoring OANDA session conventions for the large
- *  timeframes (D/W/M align to 5pm-NY boundaries, not UTC midnight). */
+ *  timeframes (4h/D/W/M align to 5pm-NY boundaries, not UTC midnight). */
 export function oandaAlignedBucketStart(timestampMs: number, timeframeSeconds: number): number {
+  if (timeframeSeconds === 14400) return oandaH4BucketStart(timestampMs);
   if (timeframeSeconds === 86400) return oandaDailyBucketStart(timestampMs);
   if (timeframeSeconds === 604800) return oandaWeeklyBucketStart(timestampMs);
   if (timeframeSeconds === 2592000) return oandaMonthlyBucketStart(timestampMs);

@@ -600,17 +600,12 @@ const smallTagH = ref(19); // base (1×) label height
 let countdownTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
- * Forex market hours (approximate, UTC): closed Fri ≥ 21:00 UTC through
- * Sun < 22:00 UTC. OANDA practice follows roughly this schedule; exact
- * open/close shifts ±1h with DST — good enough to hide the countdown.
+ * Market-hours gate (DST-aware, per instrument) — shared with the demo
+ * store so the countdown, order buttons and notes all agree. Forex runs
+ * Sunday 5pm NY → Friday 5pm NY; metals additionally break 5–6pm NY daily.
  */
-function isForexClosed(d = new Date()): boolean {
-  const day = d.getUTCDay(); // 0=Sun … 6=Sat
-  const h = d.getUTCHours();
-  if (day === 6) return true;
-  if (day === 5 && h >= 21) return true;
-  if (day === 0 && h < 22) return true;
-  return false;
+function isForexClosed(): boolean {
+  return demo.isClosed(market.instrument);
 }
 
 /**

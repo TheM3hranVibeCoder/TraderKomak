@@ -16,7 +16,7 @@ import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
 import { useMarketStore } from "@/stores/market";
 import { useReplayStore } from "@/stores/replay";
-import { instrumentPrecision } from "@traderkomak/shared";
+import { instrumentPrecision, oandaDailyBucketStart } from "@traderkomak/shared";
 
 export type DemoSide = "long" | "short";
 export type DemoStatus = "pending" | "open" | "closed";
@@ -269,14 +269,23 @@ export const useDemoStore = defineStore("demo", () => {
     if (changed) persist();
   }
 
-  /** Live market closed (weekend/holiday) — order buttons go inert. */
-  function isClosed(): boolean {
-    const d = new Date();
-    const day = d.getUTCDay();
-    const h = d.getUTCHours() + d.getUTCMinutes() / 60;
-    if (day === 6) return true; // Saturday
-    if (day === 0 && h < 21.5) return true; // Sunday before 21:30 UTC
-    if (day === 5 && h >= 21.2) return true; // Friday after 21:00 UTC
+  /** Live market closed (weekend / daily break) — order buttons go inert.
+   *  DST-aware: the FX week runs Sunday 5pm New York → Friday 5pm New York
+   *  (oandaDailyBucketStart yields those boundaries). Metals (XAU/XAG) also
+   *  take a 1-hour break right after each session open (5–6pm NY), which is
+   *  why gold opens an hour later than forex on Sunday evenings. */
+  function isClosed(symbol = market.instrument): boolean {
+    const now = Date.now();
+    const DAY = 86400000;
+    const mid = Math.floor(now / DAY) * DAY;
+    const sundayMid = mid - new Date(mid).getUTCDay() * DAY;
+    const weekOpen = oandaDailyBucketStart(sundayMid + 12 * 3600000);
+    const weekClose = oandaDailyBucketStart(sundayMid + 5 * DAY + 12 * 3600000);
+    if (now < weekOpen || now >= weekClose) return true;
+    const norm = symbol.toUpperCase();
+    if (norm === "XAU_USD" || norm === "XAG_USD") {
+      if (now - oandaDailyBucketStart(now) < 3600000) return true; // 5–6pm NY break
+    }
     return false;
   }
 
