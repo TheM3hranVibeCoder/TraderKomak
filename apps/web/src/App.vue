@@ -43,18 +43,31 @@ function onTimeframeChange(next: Timeframe): void {
       <DrawingToolbar />
       <ChartPane :candles="market.candles" :is-loading="market.isLoading" :error="market.error" :instrument="market.instrument" />
       <WatchlistPanel />
-      <!-- Right column hamburger for watchlist -->
-      <button
-        class="watchlist-rail"
-        :class="{ open: watchlist.isOpen }"
-        @click="watchlist.toggle()"
-        :title="watchlist.isOpen ? 'Close watchlist' : 'Open watchlist'"
-        aria-label="Toggle watchlist"
-      >
-        <span class="rail-lines">
-          <span></span><span></span><span></span>
-        </span>
-      </button>
+      <!-- Right column: theme toggle above the watchlist rail -->
+      <div class="right-rail">
+        <button
+          class="theme-btn"
+          type="button"
+          :class="theme.theme"
+          @click="theme.toggle()"
+          :title="`Switch to ${theme.theme === 'dark' ? 'light' : 'dark'} mode`"
+          aria-label="Toggle theme"
+        >
+          <span v-if="theme.theme === 'dark'" class="theme-icon">☀️</span>
+          <span v-else class="theme-icon">🌙</span>
+        </button>
+        <button
+          class="watchlist-rail"
+          :class="{ open: watchlist.isOpen }"
+          @click="watchlist.toggle()"
+          :title="watchlist.isOpen ? 'Close watchlist' : 'Open watchlist'"
+          aria-label="Toggle watchlist"
+        >
+          <span class="rail-lines">
+            <span></span><span></span><span></span>
+          </span>
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -73,14 +86,35 @@ function onTimeframeChange(next: Timeframe): void {
   min-height: 0;
   overflow: hidden;
 }
-.watchlist-rail {
+.right-rail {
   width: 36px;
   min-width: 36px;
-  background: var(--bg-panel);
   border-left: 1px solid var(--border);
-  border-top: none;
-  border-right: none;
-  border-bottom: none;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+.theme-btn {
+  width: 36px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  background: var(--bg-panel);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 200ms;
+  flex-shrink: 0;
+}
+.theme-btn:hover {
+  background: var(--btn-bg);
+}
+.watchlist-rail {
+  flex: 1;
+  background: var(--bg-panel);
+  border: none;
   display: flex;
   align-items: flex-start;
   justify-content: center;

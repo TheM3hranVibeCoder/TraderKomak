@@ -17,8 +17,6 @@ const ICONS: Record<string, string> = {
 };
 
 const tools: Array<{ id: string; title: string }> = [
-  { id: "cursor", title: "Cursor / Select" },
-  { id: "trendline", title: "Trend Line & Lines" },
   { id: "position", title: "Long / Short Position — click entry, then click SL (below = long, above = short)" },
   { id: "polyline", title: "Draw Polyline (double-click to finish)" },
   { id: "rectangle", title: "Draw Rectangle" },
@@ -56,7 +54,10 @@ function pickLineTool(id: string): void {
   flyoutOpen.value = false;
 }
 function onDocClick(e: MouseEvent): void {
-  if (flyoutOpen.value && flyoutEl.value && !flyoutEl.value.contains(e.target as Node)) {
+  const t = e.target as HTMLElement;
+  // clicks on the split button itself are handled by openFlyout's toggle
+  if (t.closest?.(".tool-split")) return;
+  if (flyoutOpen.value && flyoutEl.value && !flyoutEl.value.contains(t)) {
     flyoutOpen.value = false;
   }
 }
@@ -67,14 +68,12 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
 <template>
   <aside class="drawing-toolbar">
     <button
-      v-for="tool in tools"
-      :key="tool.id"
       class="tool-btn"
-      :class="{ active: drawings.activeTool === tool.id }"
-      :title="tool.title"
-      @click="drawings.activeTool = tool.id as any"
+      :class="{ active: drawings.activeTool === 'cursor' }"
+      title="Cursor / Select"
+      @click="drawings.activeTool = 'cursor'"
     >
-      <span class="tool-ic" v-html="ICONS[tool.id]"></span>
+      <span class="tool-ic" v-html="ICONS.cursor"></span>
     </button>
 
     <!-- Line tools split button: main = last used, arrow = flyout -->
@@ -90,6 +89,17 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
         <svg viewBox="0 0 6 8" width="6" height="8" aria-hidden="true"><path d="M0 0l5 4-5 4z" fill="currentColor"/></svg>
       </button>
     </div>
+
+    <button
+      v-for="tool in tools"
+      :key="tool.id"
+      class="tool-btn"
+      :class="{ active: drawings.activeTool === tool.id }"
+      :title="tool.title"
+      @click="drawings.activeTool = tool.id as any"
+    >
+      <span class="tool-ic" v-html="ICONS[tool.id]"></span>
+    </button>
 
     <!-- Line tools flyout: trend line / horizontal line / ray / vertical -->
     <div v-if="flyoutOpen" ref="flyoutEl" class="line-flyout" :style="{ top: flyoutTop + 'px' }">
@@ -195,7 +205,8 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
 }
 .split-arrow {
   position: absolute;
-  right: 1px;
+  /* at the right edge of the toolbar column, straddling its border */
+  right: -5px;
   top: 50%;
   transform: translateY(-50%);
   width: 12px;
@@ -214,9 +225,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
 .tool-split:hover .split-arrow {
   opacity: 1;
 }
-.split-arrow svg {
-  transform: rotate(-90deg); /* points right — where the flyout opens */
-}
+/* the arrow SVG path points right — toward the flyout */
 .line-flyout {
   position: fixed;
   left: 46px;
@@ -231,8 +240,25 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
   z-index: 50;
 }
 .flyout-btn {
-  background: transparent;
-  border: none;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--text-muted);
+  cursor: grab;
+  transition: all 150ms;
+}
+.flyout-btn:hover {
+  background: var(--btn-bg);
+  color: var(--text);
+}
+.flyout-btn.active {
+  background: var(--accent-gradient);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 2px 8px rgba(41, 98, 255, 0.3);
 }
 
 </style>

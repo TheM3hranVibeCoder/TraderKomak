@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import TimeframeSelector from "./TimeframeSelector.vue";
-import { useThemeStore } from "@/stores/theme";
 import { useReplayStore } from "@/stores/replay";
 import { useDemoStore } from "@/stores/demo";
 import { SUPPORTED_INSTRUMENTS, normalizeInstrument } from "@traderkomak/shared";
@@ -17,7 +16,6 @@ const emit = defineEmits<{
   (e: "update:timeframe", value: Timeframe): void;
 }>();
 
-const themeStore = useThemeStore();
 const replay = useReplayStore();
 const demo = useDemoStore();
 
@@ -105,19 +103,7 @@ function onSearchBlur() {
       </button>
     </div>
 
-    <div class="right">
-      <button
-        class="theme-btn"
-        type="button"
-        :class="themeStore.theme"
-        @click="themeStore.toggle()"
-        :title="`Switch to ${themeStore.theme === 'dark' ? 'light' : 'dark'} mode`"
-        aria-label="Toggle theme"
-      >
-        <span v-if="themeStore.theme === 'dark'" class="theme-icon">☀️</span>
-        <span v-else class="theme-icon">🌙</span>
-      </button>
-    </div>
+    <div class="right"></div>
   </header>
 </template>
 
@@ -236,25 +222,6 @@ function onSearchBlur() {
   color: var(--text-muted);
   cursor: pointer;
   font-size: 9px;
-}
-.theme-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
-  cursor: pointer;
-  box-shadow: var(--card-shadow);
-  transition: all 200ms;
-  font-size: 14px;
-  flex-shrink: 0;
-}
-.theme-btn:hover {
-  transform: translateY(-1px);
-  border-color: var(--border-strong);
 }
 .demo-btn {
   display: inline-flex;
