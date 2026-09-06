@@ -66,8 +66,8 @@ function rebuildDemoLines(): void {
     const risk = p.sl !== null ? Math.abs(p.entry - p.sl) * p.lot * vpp : 0;
     const reward = p.tp !== null ? Math.abs(p.tp - p.entry) * p.lot * vpp : 0;
     const rr = risk > 0 ? +(reward / risk).toFixed(2) : null;
-    // blue entry line at the filled price
-    if (p.kind === "market") {
+    // blue entry line at the filled price (market and filled limits alike)
+    {
       const y = demoLevelY(p.entry);
       if (y !== null) out.push({ id: p.id, level: "entry", y, price: p.entry, color: "#2962ff", dashed: false, direction: p.direction, status: "open", lot: p.lot, money: 0, rr: null });
     }
