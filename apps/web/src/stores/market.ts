@@ -15,6 +15,7 @@ import {
   isInstrument,
   isTimeframe,
   normalizeInstrument,
+  TIMEFRAME_SECONDS,
 } from "@traderkomak/shared";
 import { fetchCandles } from "@/services/api";
 import { useReplayStore } from "@/stores/replay";
@@ -198,14 +199,16 @@ export const useMarketStore = defineStore("market", () => {
     error.value = null;
     hasMore.value = true;
 
-    // Replay mode: load history ENDING at the replay boundary so lower
-    // timeframes show the chart around the cut point (their near-now data
-    // would otherwise be entirely after the cutoff → empty chart).
+    // Replay mode: load a window AROUND the replay boundary — ~85% before
+    // the cut and ~15% after it, so lower timeframes show the chart around
+    // the cut AND forward stepping has candles to reveal. The server caps
+    // the fetch at "now".
     const replay = useReplayStore();
-    // The replay boundary is the fetch target: `to` is in SECONDS (same
-    // unit as candle times / the lazy-load param).
-    const replayTo =
-      replay.active && replay.cutoff !== null ? replay.cutoff : undefined;
+    let replayTo: number | undefined;
+    if (replay.active && replay.cutoff !== null) {
+      const barSec = TIMEFRAME_SECONDS[wantTimeframe as keyof typeof TIMEFRAME_SECONDS] ?? 60;
+      replayTo = Math.min(replay.cutoff + HISTORY_COUNT * barSec * 0.15, Math.floor(Date.now() / 1000));
+    }
 
     // Up to 3 attempts — the very first request after server start can hit a
     // cold upstream connection; retrying transparently avoids a false error.

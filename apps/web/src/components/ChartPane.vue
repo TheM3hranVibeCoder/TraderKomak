@@ -2951,7 +2951,7 @@ onBeforeUnmount(() => {
         v-for="rect in hitRects"
         :key="rect.id"
         class="drawing-hit-rect"
-        :class="{ selected: rect.selected }"
+        :class="{ selected: rect.selected, 'border-only': rect.filled === false }"
         :data-rect-id="rect.id === '__preview' ? null : rect.id"
         :style="{
           left: rect.left + 'px',
@@ -2962,6 +2962,14 @@ onBeforeUnmount(() => {
         @mousedown.stop="onRectDragStart($event, rect.id)"
         @click.stop="onRectClick(rect.id, $event)"
       >
+        <!-- Border-only rectangles: the body is click-transparent (clicks
+             pass to the chart), only the 4 edge strips select/drag. -->
+        <template v-if="rect.filled === false">
+          <div class="rect-edge-hit top" @mousedown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
+          <div class="rect-edge-hit bottom" @mousedown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
+          <div class="rect-edge-hit left" @mousedown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
+          <div class="rect-edge-hit right" @mousedown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
+        </template>
         <template v-if="rect.selected">
           <div class="resize-handle nw" @mousedown.stop.prevent="onResizeStart($event, 'nw')"></div>
           <div class="resize-handle ne" @mousedown.stop.prevent="onResizeStart($event, 'ne')"></div>
@@ -3896,6 +3904,7 @@ onBeforeUnmount(() => {
 /* While a drawing tool is active, existing drawings must not swallow
    the press, and the live preview is never interactive. */
 .drawing-hit-layer.drawing-mode .drawing-hit-rect,
+.drawing-hit-layer.drawing-mode .rect-edge-hit,
 .drawing-hit-layer.drawing-mode .trend-hit,
 .drawing-hit-layer.drawing-mode .trend-handle,
 .drawing-hit-layer.drawing-mode .pos-hit,
@@ -3921,6 +3930,40 @@ onBeforeUnmount(() => {
   position: absolute;
   pointer-events: auto;
   cursor: pointer;
+}
+/* Border-only rectangles: the body passes clicks through to the chart —
+   only the 4 edge strips (the visible border area) select/drag. */
+.drawing-hit-rect.border-only {
+  pointer-events: none;
+}
+.rect-edge-hit {
+  position: absolute;
+  pointer-events: auto;
+  cursor: move;
+}
+.rect-edge-hit.top {
+  top: -4px;
+  left: 0;
+  right: 0;
+  height: 8px;
+}
+.rect-edge-hit.bottom {
+  bottom: -4px;
+  left: 0;
+  right: 0;
+  height: 8px;
+}
+.rect-edge-hit.left {
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+}
+.rect-edge-hit.right {
+  right: -4px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
 }
 .drawing-hit-rect.selected {
   cursor: move;
