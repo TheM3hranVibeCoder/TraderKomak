@@ -8,6 +8,9 @@ services:
     plan: free
     region: frankfurt
     buildCommand: npm run build:shared && npm run build:server
+    # Render sets NODE_ENV=production, which makes npm skip devDependencies
+    # (@types/node, typescript) — force them in so tsc can compile.
+    installCommand: npm install --include=dev
     startCommand: npm run start:server
     healthCheckPath: /health
     autoDeploy: true
