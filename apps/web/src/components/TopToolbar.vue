@@ -60,15 +60,24 @@ function onSearchBlur() {
         <span class="brand-name">TraderKomak</span>
       </div>
       <div class="search-box">
-        <span class="search-icon">⌕</span>
+        <span class="search-icon">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" />
+            <path d="M20 20l-3.5-3.5" />
+          </svg>
+        </span>
         <input
           v-model="search"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="Search symbol"
           @keydown.enter="onSearchEnter"
           @blur="onSearchBlur"
           :placeholder="props.instrument.replace('_', '').toLowerCase()"
           class="search-input"
         />
-        <button v-if="search" class="search-clear" @click="search = ''">✕</button>
+        <button v-if="search" class="search-clear" type="button" aria-label="Clear search" @click="search = ''">✕</button>
       </div>
       <TimeframeSelector :model-value="timeframe" @update:model-value="emit('update:timeframe', $event)" />
       <!-- Replay mode: pick a point on the chart, hide the right side, then
@@ -115,8 +124,19 @@ function onSearchBlur() {
         :title="`Switch to ${themeStore.theme === 'dark' ? 'light' : 'dark'} mode`"
         aria-label="Toggle theme"
       >
-        <span v-if="themeStore.theme === 'dark'" class="theme-icon">☀️</span>
-        <span v-else class="theme-icon">🌙</span>
+        <!-- SVG instead of emoji: matches the toolbar's stroke-icon family
+             and renders identically on every platform -->
+        <span v-if="themeStore.theme === 'dark'" class="theme-icon">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8" />
+          </svg>
+        </span>
+        <span v-else class="theme-icon">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11z" />
+          </svg>
+        </span>
       </button>
     </div>
   </header>
@@ -196,8 +216,18 @@ function onSearchBlur() {
   top: 50%;
   transform: translateY(-50%);
   color: var(--text-muted);
-  font-size: 13px;
+  display: grid;
+  place-items: center;
   pointer-events: none;
+}
+.search-icon svg {
+  display: block;
+}
+.theme-icon {
+  display: grid;
+  place-items: center;
+  line-height: 0;
+  color: var(--text);
 }
 .search-input {
   width: 100%;
@@ -238,6 +268,13 @@ function onSearchBlur() {
   cursor: pointer;
   font-size: 9px;
 }
+/* extend the 18px visual dot to a 26px+ hit target */
+.search-clear::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+}
 .theme-btn {
   display: inline-flex;
   align-items: center;
@@ -257,6 +294,18 @@ function onSearchBlur() {
 .theme-btn:hover {
   border-color: var(--border-strong);
   background: var(--btn-bg);
+}
+/* Dark mode: panel-colored bg + hairline border vanish against the
+   toolbar gradient — brighten the border and lift the surface so the
+   button stays visible */
+.theme-btn.dark {
+  border-color: #3a4155;
+  background: #1c2233;
+  color: #f1c40f;
+}
+.theme-btn.dark:hover {
+  border-color: #4a5470;
+  background: #232b40;
 }
 .demo-btn {
   display: inline-flex;

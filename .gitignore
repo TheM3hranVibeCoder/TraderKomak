@@ -10,3 +10,7 @@ coverage/
 
 # Candle history persistence (market-server)
 .data/
+
+# Local agent tooling (installed skills)
+.agents/
+.claude/

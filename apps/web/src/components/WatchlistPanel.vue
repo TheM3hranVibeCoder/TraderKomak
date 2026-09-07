@@ -339,14 +339,23 @@ onBeforeUnmount(() => {
   <aside class="watchlist" :class="{ open: watchlist.isOpen, 'is-dragging': listDragging }">
     <div class="watchlist-inner">
       <div class="search-wrap">
-        <span class="search-icon">⌕</span>
+        <span class="search-icon">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" />
+            <path d="M20 20l-3.5-3.5" />
+          </svg>
+        </span>
         <input
           v-model="search"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="Search symbols to add to watchlist"
           @keydown.enter="onSearchEnter"
           placeholder="Search xauusd, eurusd…"
           class="search-input"
         />
-        <span v-if="search" class="search-clear" @click="search = ''">✕</span>
+        <button v-if="search" class="search-clear" type="button" aria-label="Clear search" @click="search = ''">✕</button>
       </div>
 
       <TransitionGroup ref="listRef" name="wl" tag="div" class="watchlist-list">
@@ -370,6 +379,11 @@ onBeforeUnmount(() => {
           "
           @pointerdown="onRowPointerDown($event, idx)"
           @click="onClickRow(inst)"
+          role="button"
+          tabindex="0"
+          :aria-label="`Switch chart to ${inst.replace('_', '')}`"
+          @keydown.enter.prevent="onClickRow(inst)"
+          @keydown.space.prevent="onClickRow(inst)"
         >
           <span class="drag-handle" title="Drag to reorder">
             <svg width="8" height="14" viewBox="0 0 8 14" fill="currentColor" aria-hidden="true">
@@ -457,8 +471,12 @@ onBeforeUnmount(() => {
   top: 50%;
   transform: translateY(-50%);
   color: var(--text-muted);
-  font-size: 13px;
+  display: grid;
+  place-items: center;
   pointer-events: none;
+}
+.search-icon svg {
+  display: block;
 }
 .search-input {
   width: 100%;

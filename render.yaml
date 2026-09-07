@@ -1,0 +1,32 @@
+# Render blueprint for the persistent market-server.
+# The web frontend deploys to Vercel (vercel.json); this service hosts the
+# OANDA/Binance streams, candle aggregation, and the WebSocket hub.
+services:
+  - type: web
+    name: traderkomak-market-server
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm run build:shared && npm run build:server
+    startCommand: npm run start:server
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Secrets — set these in the Render dashboard (sync: false):
+      - key: OANDA_API_TOKEN
+        sync: false
+      - key: OANDA_ACCOUNT_ID
+        sync: false
+      # Comma-separated list of allowed frontend origins (your Vercel URL).
+      # Use * only for testing.
+      - key: CORS_ORIGIN
+        sync: false
+      # Optional overrides — defaults match apps/market-server/src/config/env.ts
+      - key: OANDA_API_URL
+        value: https://api-fxpractice.oanda.com
+      - key: OANDA_STREAM_URL
+        value: https://stream-fxpractice.oanda.com
+      - key: LOG_LEVEL
+        value: info

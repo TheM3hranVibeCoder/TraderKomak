@@ -61,8 +61,17 @@ function onDocClick(e: MouseEvent): void {
     flyoutOpen.value = false;
   }
 }
-onMounted(() => document.addEventListener("mousedown", onDocClick));
-onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
+function onDocKeydown(e: KeyboardEvent): void {
+  if (e.key === "Escape") flyoutOpen.value = false;
+}
+onMounted(() => {
+  document.addEventListener("mousedown", onDocClick);
+  document.addEventListener("keydown", onDocKeydown);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener("mousedown", onDocClick);
+  document.removeEventListener("keydown", onDocKeydown);
+});
 </script>
 
 <template>
@@ -71,6 +80,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
       class="tool-btn"
       :class="{ active: drawings.activeTool === 'cursor' }"
       title="Cursor / Select"
+      aria-label="Cursor / Select"
       @click="drawings.activeTool = 'cursor'"
     >
       <span class="tool-ic" v-html="ICONS.cursor"></span>
@@ -81,11 +91,12 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
       <button
         class="split-main"
         :title="'Line tools — ' + (lineTools.find((t) => t.id === lastLineTool)?.title ?? '')"
+        :aria-label="'Line tools — ' + (lineTools.find((t) => t.id === lastLineTool)?.title ?? '')"
         @click="activateLineTool"
       >
         <span class="tool-ic" v-html="ICONS[lastLineTool]"></span>
       </button>
-      <button class="split-arrow" title="Line tools" @click.stop="openFlyout">
+      <button class="split-arrow" title="Line tools" aria-label="More line tools" @click.stop="openFlyout">
         <svg viewBox="0 0 6 8" width="6" height="8" aria-hidden="true"><path d="M0 0l5 4-5 4z" fill="currentColor"/></svg>
       </button>
     </div>
@@ -96,6 +107,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
       class="tool-btn"
       :class="{ active: drawings.activeTool === tool.id }"
       :title="tool.title"
+      :aria-label="tool.title"
       @click="drawings.activeTool = tool.id as any"
     >
       <span class="tool-ic" v-html="ICONS[tool.id]"></span>
@@ -109,6 +121,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
         class="flyout-btn"
         :class="{ active: drawings.activeTool === t.id }"
         :title="t.title"
+        :aria-label="t.title"
         @click.stop="pickLineTool(t.id)"
       >
         <span class="tool-ic" v-html="ICONS[t.id]"></span>

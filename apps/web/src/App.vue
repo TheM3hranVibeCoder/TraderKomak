@@ -89,7 +89,10 @@ function onTimeframeChange(next: Timeframe): void {
   flex-shrink: 0;
 }
 .watchlist-rail:hover {
-  background: var(--btn-bg);
+  /* layer the hover tint OVER the panel gradient — replacing the
+     background outright exposed the near-black app backdrop underneath
+     and read as a dark shadow band on the rail */
+  background-image: linear-gradient(var(--btn-bg), var(--btn-bg)), var(--bg-watchlist);
 }
 .rail-lines {
   display: flex;

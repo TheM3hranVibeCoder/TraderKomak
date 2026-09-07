@@ -53,12 +53,22 @@ onBeforeUnmount(() => document.removeEventListener("click", onClickOutside));
 
     <!-- Dropdown for all timeframes sorted small→big -->
     <div class="dropdown" ref="dropdownRef">
-      <button class="dropdown-trigger" @click.stop="open = !open" :aria-expanded="open">
+      <button
+        class="dropdown-trigger"
+        @click.stop="open = !open"
+        @keydown.esc.stop="open = false"
+        :aria-expanded="open"
+        aria-haspopup="listbox"
+      >
         <span class="trigger-label">{{ label(modelValue) }}</span>
-        <span class="trigger-caret" :class="{ open }">▾</span>
+        <span class="trigger-caret" :class="{ open }">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </span>
       </button>
 
-      <div v-if="open" class="dropdown-menu">
+      <div v-if="open" class="dropdown-menu" @keydown.esc.stop="open = false">
         <div class="menu-header">Timeframes</div>
         <button
           v-for="tf in TIMEFRAMES"
@@ -67,14 +77,21 @@ onBeforeUnmount(() => document.removeEventListener("click", onClickOutside));
           @click="select(tf as Timeframe)"
         >
           <span class="menu-label">{{ label(tf as Timeframe) }}</span>
-          <button
+          <!-- span, not button: a nested <button> is invalid HTML and the
+               parser splits the menu-item row in half -->
+          <span
             class="menu-star"
             :class="{ starred: isFav(tf) }"
+            role="button"
+            tabindex="0"
+            :aria-pressed="isFav(tf)"
+            :aria-label="isFav(tf) ? `Remove ${tf} from favorites` : `Add ${tf} to favorites`"
             @click.stop="themeStore.toggleFavorite(tf)"
-            :title="isFav(tf) ? 'Remove from favorites' : 'Add to favorites'"
+            @keydown.enter.stop.prevent="themeStore.toggleFavorite(tf)"
+            @keydown.space.stop.prevent="themeStore.toggleFavorite(tf)"
           >
             {{ isFav(tf) ? "★" : "☆" }}
-          </button>
+          </span>
         </button>
       </div>
     </div>
@@ -142,9 +159,14 @@ onBeforeUnmount(() => document.removeEventListener("click", onClickOutside));
   transform: translateY(-1px);
 }
 .trigger-caret {
-  font-size: 10px;
+  display: grid;
+  place-items: center;
+  line-height: 0;
   transition: transform 200ms;
   opacity: 0.7;
+}
+.trigger-caret svg {
+  display: block;
 }
 .trigger-caret.open {
   transform: rotate(180deg);

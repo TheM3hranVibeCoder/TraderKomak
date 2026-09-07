@@ -120,6 +120,26 @@ body {
   background: var(--text-muted);
 }
 
+/* Keyboard focus ring: one visible ring for every control, only for
+   keyboard focus (mouse clicks stay ring-free) */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Respect users who opt out of motion: kill animations/transitions
+   (status dot pulse, menu entrances, theme smears) entirely */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* Utility for gradient text */
 .gradient-text {
   background: var(--accent-gradient);

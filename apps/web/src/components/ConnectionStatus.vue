@@ -34,7 +34,7 @@ const dotClass = computed(() => {
 </script>
 
 <template>
-  <span class="status" :class="dotClass" :title="`Connection status: ${label}`">
+  <span class="status" :class="dotClass" role="status" :title="`Connection status: ${label}`">
     <span class="dot" />
     {{ label }}
   </span>
