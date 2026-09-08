@@ -57,11 +57,6 @@ export interface ChartAdapter {
    *  callers re-project price-anchored overlays (drawings) after this. */
   subscribeDataChanged(cb: () => void): void;
   unsubscribeDataChanged(cb: () => void): void;
-  /** Attach a series primitive that paints inside the chart's own canvas
-   *  render pass (frame-locked drawings — no DOM-overlay lag). The
-   *  primitive's own `requestUpdate()` asks the chart for a repaint after a
-   *  drawing-only change. */
-  attachRectsPrimitive(primitive: Parameters<ISeriesApi<"Candlestick">["attachPrimitive"]>[0]): void;
 }
 
 function toLW(c: Candle): CandlestickData<Time> {
@@ -388,10 +383,6 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
           pinch: !on,
         },
       });
-    },
-
-    attachRectsPrimitive(primitive: Parameters<ISeriesApi<"Candlestick">["attachPrimitive"]>[0]): void {
-      series.attachPrimitive(primitive);
     },
 
     resize(width: number, height: number): void {
