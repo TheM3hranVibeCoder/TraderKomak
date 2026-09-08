@@ -84,7 +84,8 @@ function onTimeframeChange(next: Timeframe): void {
   /* same background as the watchlist panel so the rail blends in — a
      flat panel color here read as a dark strip beside the gradient */
   background: var(--bg-watchlist);
-  border-left: none;
+  border: none;
+  outline: none;
   display: flex;
   align-items: flex-start;
   justify-content: center;
