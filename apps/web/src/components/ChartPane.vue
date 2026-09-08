@@ -590,6 +590,7 @@ let paneCtxCb: ((e: MouseEvent) => void) | null = null;
 let escCb: ((e: KeyboardEvent) => void) | null = null;
 let magnetKeyCb: ((e: KeyboardEvent) => void) | null = null;
 let magnetBlurCb: (() => void) | null = null;
+let magnetAnyMoveCb: ((e: PointerEvent) => void) | null = null;
 let xhairMoveEl: HTMLElement | null = null;
 let xhairMoveCb: ((e: MouseEvent) => void) | null = null;
 let xhairLeaveCb: (() => void) | null = null;
@@ -901,6 +902,9 @@ watch(magnetActive, (on) => {
         posCursor.value = { time: cs.time, price: cs.price };
       }
     }
+    // Resize handles snap per-move — replay the last cursor position so a
+    // stationary resize re-applies the snap the instant Ctrl is pressed.
+    replayPointerAt(lastPtrClient);
     recalcRects();
     return;
   }
@@ -921,16 +925,21 @@ watch(magnetActive, (on) => {
   }
   // Replay the raw cursor position so cursor-driven corners/levels return
   // to exactly where the pointer is.
-  const p = lastPtrClient;
-  if (p) {
-    window.dispatchEvent(new PointerEvent("pointermove", {
-      bubbles: true, cancelable: true,
-      clientX: p.clientX, clientY: p.clientY,
-      pointerId: 1, pointerType: "mouse", isPrimary: true, button: -1, buttons: 1,
-    }));
-  }
+  replayPointerAt(lastPtrClient);
   recalcRects();
 });
+
+/** Replays the last pointer position through every active move handler
+ *  (drawing preview, resize handles) so a magnet toggle applies instantly
+ *  even when the cursor is stationary. */
+function replayPointerAt(p: { clientX: number; clientY: number } | null): void {
+  if (!p) return;
+  window.dispatchEvent(new PointerEvent("pointermove", {
+    bubbles: true, cancelable: true,
+    clientX: p.clientX, clientY: p.clientY,
+    pointerId: 1, pointerType: "mouse", isPrimary: true, button: -1, buttons: 1,
+  }));
+}
 // While a shape tool is active the chart must not pan under the finger —
 // touch drawing starts from pointerdown, and LWC's own touch handlers would
 // otherwise treat the same gesture as a pan and swallow the drawing.
@@ -3230,6 +3239,15 @@ onMounted(async () => {
   magnetKeyCb = onMagnetKey;
   magnetBlurCb = onMagnetBlur;
 
+  // Track the cursor globally (not just over the chart) so the magnet
+  // toggle replay always uses the CURRENT pointer position, even when it
+  // last passed over the edit panel or a toolbar.
+  const onAnyMove = (e: PointerEvent) => {
+    lastPtrClient = { clientX: e.clientX, clientY: e.clientY };
+  };
+  window.addEventListener("pointermove", onAnyMove, { passive: true });
+  magnetAnyMoveCb = onAnyMove;
+
   // Snapping crosshair tracking: while a drawing tool + magnet are active,
   // the native crosshair is hidden and this one sticks to candle high/low.
   // The last pointer position is kept so the snapped crosshair appears the
@@ -3358,6 +3376,9 @@ onBeforeUnmount(() => {
   }
   if (magnetBlurCb) {
     window.removeEventListener("blur", magnetBlurCb);
+  }
+  if (magnetAnyMoveCb) {
+    window.removeEventListener("pointermove", magnetAnyMoveCb);
   }
   if (xhairMoveEl && xhairMoveCb) {
     xhairMoveEl.removeEventListener("pointermove", xhairMoveCb);
