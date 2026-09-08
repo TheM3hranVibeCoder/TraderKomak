@@ -397,13 +397,33 @@ function onSearchBlur() {
   color: #fff;
   box-shadow: 0 3px 12px rgba(41, 98, 255, 0.35);
 }
-@media (max-width: 720px) {
+@media (max-width: 860px) {
   .toolbar {
     padding: 6px 8px;
     gap: 8px;
   }
+  .left {
+    gap: 8px;
+  }
+  /* search flexes into the freed space instead of a fixed width */
   .search-box {
-    width: 120px;
+    flex: 1;
+    min-width: 90px;
+    width: auto;
+  }
+}
+@media (max-width: 640px) {
+  /* brand mark keeps the identity, the name frees the row */
+  .brand-name {
+    display: none;
+  }
+  .demo-btn span,
+  .replay-btn span {
+    display: none;
+  }
+  .demo-btn,
+  .replay-btn {
+    padding: 0 9px;
   }
 }
 </style>

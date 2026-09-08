@@ -274,4 +274,15 @@ onBeforeUnmount(() => {
   box-shadow: 0 2px 8px rgba(41, 98, 255, 0.3);
 }
 
+/* Phones: slim the rail so the chart keeps its width */
+@media (max-width: 640px) {
+  .drawing-toolbar {
+    width: 36px;
+    min-width: 36px;
+  }
+  .tool-btn {
+    width: 28px;
+    height: 28px;
+  }
+}
 </style>

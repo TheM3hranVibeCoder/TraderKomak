@@ -447,8 +447,7 @@ onBeforeUnmount(() => {
 .watchlist-inner {
   flex: 1;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
+  display: flex;  flex-direction: column;
   opacity: 0;
   transform: translateX(-18px);
   transition:
@@ -754,5 +753,21 @@ onBeforeUnmount(() => {
   background: rgba(239, 83, 80, 0.1);
   color: #ef5350;
   border-color: rgba(239, 83, 80, 0.2);
+}
+
+/* Phones/tablets: the 320px panel would crush the chart — open it as an
+   overlay anchored to the rail instead of shrinking the chart column */
+@media (max-width: 768px) {
+  .watchlist.open {
+    position: absolute;
+    top: 0;
+    right: 36px; /* clears the always-visible watchlist rail */
+    bottom: 0;
+    width: min(320px, calc(100vw - 60px));
+    min-width: min(320px, calc(100vw - 60px));
+    z-index: 30;
+    border-left: 1px solid var(--border);
+    box-shadow: -12px 0 28px rgba(0, 0, 0, 0.28);
+  }
 }
 </style>

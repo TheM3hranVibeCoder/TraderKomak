@@ -258,4 +258,11 @@ onBeforeUnmount(() => document.removeEventListener("click", onClickOutside));
 .menu-star.starred {
   color: #f59e0b;
 }
+/* Phones/tablets: the favorites bar alone is wider than the viewport —
+   the dropdown below still carries every timeframe */
+@media (max-width: 860px) {
+  .fav-bar {
+    display: none;
+  }
+}
 </style>

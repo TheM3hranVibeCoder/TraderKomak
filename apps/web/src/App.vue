@@ -64,6 +64,9 @@ function onTimeframeChange(next: Timeframe): void {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* mobile browsers: 100vh includes the URL-bar area — dvh tracks the
+     real viewport so the bottom axis isn't hidden behind browser chrome */
+  height: 100dvh;
   background: var(--bg-app);
   transition: background 600ms cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -72,6 +75,8 @@ function onTimeframeChange(next: Timeframe): void {
   display: flex;
   min-height: 0;
   overflow: hidden;
+  /* anchor for the watchlist overlay on mobile/tablet */
+  position: relative;
 }
 .watchlist-rail {
   width: 36px;
