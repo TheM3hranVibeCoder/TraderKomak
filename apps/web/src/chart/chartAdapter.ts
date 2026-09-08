@@ -57,6 +57,9 @@ export interface ChartAdapter {
    *  callers re-project price-anchored overlays (drawings) after this. */
   subscribeDataChanged(cb: () => void): void;
   unsubscribeDataChanged(cb: () => void): void;
+  /** Show / hide the library's own crosshair (magnet mode replaces it with
+   *  a snapping crosshair while a drawing tool is active). */
+  setCrosshairVisible(on: boolean): void;
 }
 
 function toLW(c: Candle): CandlestickData<Time> {
@@ -381,6 +384,15 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
           axisPressedMouseMove: !on,
           mouseWheel: true, // unchanged for desktop — wheel zoom worked in drawing mode
           pinch: !on,
+        },
+      });
+    },
+
+    setCrosshairVisible(on: boolean): void {
+      chart.applyOptions({
+        crosshair: {
+          vertLine: { visible: on },
+          horzLine: { visible: on },
         },
       });
     },

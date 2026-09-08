@@ -51,7 +51,7 @@ export type BinanceSymbol = (typeof SUPPORTED_BINANCE)[number];
 export type AnyInstrument = Instrument | BinanceSymbol;
 
 /** Default instrument used on first load. Configuration, not hard-coding. */
-export const DEFAULT_INSTRUMENT: Instrument = "EUR_USD";
+export const DEFAULT_INSTRUMENT: Instrument = "XAU_USD";
 
 export type ProviderId = "oanda" | "binance";
 

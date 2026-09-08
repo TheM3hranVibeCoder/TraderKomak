@@ -14,6 +14,7 @@ const ICONS: Record<string, string> = {
   position: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="12" x2="21" y2="12"/><path d="M12 9V3.5M12 3.5L9.5 6M12 3.5L14.5 6"/><path d="M12 15v5.5M12 20.5L9.5 18M12 20.5l2.5-2.5"/></svg>`,
   polyline: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-10 5 6 7-9"/></svg>`,
   rectangle: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="6.5" width="18" height="11" rx="2"/></svg>`,
+  magnet: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h4v8a2 2 0 0 0 4 0V3h4v8a6 6 0 0 1-12 0V3z"/><path d="M6 3h4v4.5H6z" fill="currentColor" stroke="none"/><path d="M14 3h4v4.5h-4z" fill="currentColor" stroke="none"/><path d="M9.5 20.5l2.5-2 2.5 2" stroke-width="1.4"/></svg>`,
 };
 
 const tools: Array<{ id: string; title: string }> = [
@@ -111,6 +112,20 @@ onBeforeUnmount(() => {
       @click="drawings.activeTool = tool.id as any"
     >
       <span class="tool-ic" v-html="ICONS[tool.id]"></span>
+    </button>
+
+    <!-- Magnet mode (below the shape tools): latched on/off; Ctrl
+         temporarily forces it while held — the button lights up whenever
+         snapping is effectively active. Anchors stick to the nearest
+         candle's high/low and the crosshair follows. -->
+    <button
+      class="tool-btn"
+      :class="{ active: drawings.magnetActive }"
+      :title="drawings.magnet ? 'Magnet ON — drawings snap to candle high/low (click to turn off)' : 'Magnet OFF — hold Ctrl to snap to candle high/low (click to turn on)'"
+      aria-label="Magnet mode"
+      @click="drawings.toggleMagnet()"
+    >
+      <span class="tool-ic" v-html="ICONS.magnet"></span>
     </button>
 
     <!-- Line tools flyout: trend line / horizontal line / ray / vertical -->

@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 
 export interface DrawingRect {
   id: string;
@@ -279,6 +279,20 @@ export const useDrawingsStore = defineStore("drawings", () => {
   const positions = ref<Record<string, DrawingPosition[]>>(loadPositions());
   const singles = ref<Record<SingleKind, Record<string, SingleDrawing[]>>>(loadSingles());
   const activeTool = ref<"cursor" | "position" | "rectangle" | "trendline" | "polyline" | "hline" | "hray" | "vline">("cursor");
+  /** Magnet mode: snap drawing points to the nearest candle's high/low.
+   *  Latched by the toolbar button; Ctrl temporarily forces it either way. */
+  const magnet = ref(localStorage.getItem("tk-magnet") === "1");
+  function toggleMagnet(): void {
+    magnet.value = !magnet.value;
+    try { localStorage.setItem("tk-magnet", magnet.value ? "1" : "0"); } catch {}
+  }
+  /** True while Ctrl is physically held (ChartPane key listeners feed this). */
+  const ctrlHeld = ref(false);
+  function setCtrlHeld(v: boolean): void {
+    ctrlHeld.value = v;
+  }
+  /** Effective magnet state — drives snapping AND the toolbar highlight. */
+  const magnetActive = computed(() => magnet.value || ctrlHeld.value);
   const selectedId = ref<string | null>(null);
   const selectedLineId = ref<string | null>(null);
   const selectedPolyId = ref<string | null>(null);
@@ -621,6 +635,11 @@ export const useDrawingsStore = defineStore("drawings", () => {
     positions,
     singles,
     activeTool,
+    magnet,
+    toggleMagnet,
+    ctrlHeld,
+    setCtrlHeld,
+    magnetActive,
     selectedId,
     selectedLineId,
     selectedPolyId,

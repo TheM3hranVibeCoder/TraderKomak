@@ -588,6 +588,12 @@ let chartDblClickCb: ((e: MouseEvent) => void) | null = null;
 let paneCtxEl: HTMLElement | null = null;
 let paneCtxCb: ((e: MouseEvent) => void) | null = null;
 let escCb: ((e: KeyboardEvent) => void) | null = null;
+let magnetKeyCb: ((e: KeyboardEvent) => void) | null = null;
+let magnetBlurCb: (() => void) | null = null;
+let xhairMoveEl: HTMLElement | null = null;
+let xhairMoveCb: ((e: MouseEvent) => void) | null = null;
+let xhairLeaveCb: (() => void) | null = null;
+let crosshairModeStop: (() => void) | null = null;
 let windowLostCb: (() => void) | null = null;
 // addEventListener requires EventListener, not a specific MouseEvent handler
 type AnyListener = EventListener;
@@ -838,6 +844,15 @@ const linePanelPos = ref<{ x: number; y: number } | null>(null);
 const linePanelEl = ref<HTMLElement | null>(null);
 const linePaletteOpen = ref(false);
 const drawingToolActive = computed(() => drawingsStore.activeTool !== "cursor");
+
+/* ── Magnet mode ──────────────────────────────────────────────────────
+   Latched by the toolbar magnet button; holding Ctrl temporarily forces
+   snapping (TradingView-style modifier hold). The store owns the effective
+   state so the toolbar highlight and the snapping crosshair stay in sync. */
+const magnetActive = computed(() => drawingsStore.magnetActive);
+/** Snapping crosshair: when a drawing tool + magnet are active the native
+ *  crosshair hides and this one draws stuck to the snapped candle level. */
+const snapXhair = ref<{ x: number; y: number; priceText: string; timeText: string } | null>(null);
 // While a shape tool is active the chart must not pan under the finger —
 // touch drawing starts from pointerdown, and LWC's own touch handlers would
 // otherwise treat the same gesture as a pan and swallow the drawing.
@@ -947,8 +962,13 @@ function getSingle(kind: SingleKind, id: string): SingleDrawing | null {
   return drawingsStore.getSingles(kind, market.instrument).find((i) => i.id === id) ?? null;
 }
 
-/** With CTRL held, snap the cursor to the high/low of the nearest candle
- *  (whichever is closer in pixels). */
+/**
+ * Magnet mode: snap the cursor to the high/low of the nearest candle
+ * (whichever is closer in pixels). When the magnet is active it ALWAYS
+ * attracts — TradingView-style — so the anchor lands exactly on the level
+ * no matter how far the cursor sits from it vertically. The candle is
+ * chosen by time (the bar under the cursor).
+ */
 function snapToCandle(time: number, price: number, snap: boolean): { time: number; price: number } {
   if (!snap || !adapter || !displayCandles.value.length) return { time, price };
   const arr = displayCandles.value;
@@ -964,10 +984,7 @@ function snapToCandle(time: number, price: number, snap: boolean): { time: numbe
   const yH = adapter.getPriceY(c.high);
   const yL = adapter.getPriceY(c.low);
   if (yP === null || yH === null || yL === null) return { time, price };
-  const dH = Math.abs(yP - yH);
-  const dL = Math.abs(yP - yL);
-  if (Math.min(dH, dL) <= 8) return { time: c.time, price: dH <= dL ? c.high : c.low };
-  return { time, price };
+  return { time: c.time, price: Math.abs(yP - yH) <= Math.abs(yP - yL) ? c.high : c.low };
 }
 
 /** Format a time for the vertical-line tag on the time scale. Lightweight
@@ -1472,7 +1489,7 @@ function beginDraw(e: MouseEvent): void {
   if (time === null || price === null) return;
 
   // CTRL: snap the anchor to the high/low of the nearest candle
-  const s1 = snapToCandle(time, price, e.ctrlKey);
+  const s1 = snapToCandle(time, price, magnetActive.value);
   drawingState.value = { time1: s1.time, price1: s1.price, time2: s1.time, price2: s1.price };
   const startX = e.clientX;
   const startY = e.clientY;
@@ -1488,7 +1505,7 @@ function beginDraw(e: MouseEvent): void {
     const p = adapter.yToPrice(my);
     if (t !== null && p !== null) {
       // CTRL: snap the free end to the nearest candle high/low
-      const s2 = snapToCandle(t, p, ev.ctrlKey);
+      const s2 = snapToCandle(t, p, magnetActive.value);
       drawingState.value.time2 = s2.time;
       drawingState.value.price2 = s2.price;
     }
@@ -2601,9 +2618,9 @@ function createSingle(e: MouseEvent, kind: SingleKind): void {
   if (t === null || p === null) return;
   let item: Record<string, unknown>;
   if (kind === "vline") {
-    item = { time: snapToCandle(t, p, e.ctrlKey).time };
+    item = { time: snapToCandle(t, p, magnetActive.value).time };
   } else {
-    const s = snapToCandle(t, p, e.ctrlKey);
+    const s = snapToCandle(t, p, magnetActive.value);
     item = kind === "hray" ? { time: s.time, price: s.price } : { price: s.price };
   }
   const full = drawingsStore.addSingle(kind, market.instrument, item);
@@ -2736,11 +2753,11 @@ function onSingleDragStart(e: MouseEvent, kind: SingleKind, id: string): void {
     const p = adapter.yToPrice(ev.clientY - r.top);
     if (t === null || p === null) return;
     if (kind === "hline") {
-      drawingsStore.updateSingle(kind, market.instrument, id, { price: snapToCandle(t, p, ev.ctrlKey).price });
+      drawingsStore.updateSingle(kind, market.instrument, id, { price: snapToCandle(t, p, magnetActive.value).price });
     } else if (kind === "vline") {
-      drawingsStore.updateSingle(kind, market.instrument, id, { time: snapToCandle(t, p, ev.ctrlKey).time });
+      drawingsStore.updateSingle(kind, market.instrument, id, { time: snapToCandle(t, p, magnetActive.value).time });
     } else {
-      const s = snapToCandle(t, p, ev.ctrlKey);
+      const s = snapToCandle(t, p, magnetActive.value);
       drawingsStore.updateSingle(kind, market.instrument, id, { time: s.time, price: s.price });
     }
     recalcRects();
@@ -2936,7 +2953,7 @@ onMounted(async () => {
         const t = adapter.xToTime(e.clientX - r.left);
         const p = adapter.yToPrice(e.clientY - r.top);
         if (t !== null && p !== null) {
-          const s2 = snapToCandle(t, p, e.ctrlKey);
+          const s2 = snapToCandle(t, p, magnetActive.value);
           drawingState.value.time2 = s2.time;
           drawingState.value.price2 = s2.price;
         }
@@ -3088,6 +3105,61 @@ onMounted(async () => {
   window.addEventListener("keydown", onKey as AnyListener);
   escCb = onKey;
 
+  // Magnet modifier: holding Ctrl forces snap-to-candle while held (the
+  // toolbar magnet button latches it — the store's magnetActive drives both
+  // the button highlight and the snapping crosshair). Blur clears the held
+  // state so Ctrl released outside the window can't stick on.
+  const onMagnetKey = (e: KeyboardEvent) => {
+    if (e.key === "Control") {
+      drawingsStore.setCtrlHeld(e.type === "keydown");
+      if (e.type === "keyup") snapXhair.value = null;
+    }
+  };
+  const onMagnetBlur = () => {
+    drawingsStore.setCtrlHeld(false);
+    snapXhair.value = null;
+  };
+  window.addEventListener("keydown", onMagnetKey);
+  window.addEventListener("keyup", onMagnetKey);
+  window.addEventListener("blur", onMagnetBlur);
+  magnetKeyCb = onMagnetKey;
+  magnetBlurCb = onMagnetBlur;
+
+  // Snapping crosshair tracking: while a drawing tool + magnet are active,
+  // the native crosshair is hidden and this one sticks to candle high/low.
+  const onXhairMove = (e: MouseEvent) => {
+    if (!drawingToolActive.value || !magnetActive.value || !adapter || !containerRef.value || !isInChartArea(e)) {
+      snapXhair.value = null;
+      return;
+    }
+    const r = containerRef.value.getBoundingClientRect();
+    const t = adapter.xToTime(e.clientX - r.left);
+    const p = adapter.yToPrice(e.clientY - r.top);
+    const s = t !== null && p !== null ? snapToCandle(t, p, true) : null;
+    const x = s ? adapter.timeToX(s.time) : null;
+    const y = s ? adapter.getPriceY(s.price) : null;
+    snapXhair.value = x !== null && y !== null && s
+      ? { x, y, priceText: fmtPrice(s.price, instrumentPrecision(market.instrument)), timeText: fmtAxisTime(s.time) }
+      : null;
+  };
+  const onXhairLeave = () => {
+    snapXhair.value = null;
+  };
+  el.addEventListener("pointermove", onXhairMove);
+  el.addEventListener("pointerleave", onXhairLeave);
+  xhairMoveEl = el;
+  xhairMoveCb = onXhairMove;
+  xhairLeaveCb = onXhairLeave;
+
+  // Swap the native crosshair for the snapping one only while needed
+  const syncCrosshairMode = () => {
+    const custom = drawingToolActive.value && magnetActive.value;
+    adapter?.setCrosshairVisible(!custom);
+    if (!custom) snapXhair.value = null;
+  };
+  syncCrosshairMode();
+  crosshairModeStop = watch([drawingToolActive, magnetActive], syncCrosshairMode);
+
   // A mouseup released OUTSIDE the browser window never reaches us — without
   // this, the half-drawn preview stays alive and the next chart click
   // finalizes it as a duplicate rectangle.
@@ -3162,6 +3234,19 @@ onBeforeUnmount(() => {
   if (escCb) {
     window.removeEventListener("keydown", escCb as AnyListener);
   }
+  if (magnetKeyCb) {
+    window.removeEventListener("keydown", magnetKeyCb);
+    window.removeEventListener("keyup", magnetKeyCb);
+  }
+  if (magnetBlurCb) {
+    window.removeEventListener("blur", magnetBlurCb);
+  }
+  if (xhairMoveEl && xhairMoveCb) {
+    xhairMoveEl.removeEventListener("pointermove", xhairMoveCb);
+    xhairMoveEl.removeEventListener("pointerleave", xhairLeaveCb!);
+  }
+  crosshairModeStop?.();
+  adapter?.setCrosshairVisible(true);
   if (windowLostCb) {
     window.removeEventListener("blur", windowLostCb);
     window.removeEventListener("pointercancel", windowLostCb as AnyListener);
@@ -3568,6 +3653,28 @@ onBeforeUnmount(() => {
         >{{ fmtPrice(s.price, instrumentPrecision(market.instrument)) }}</div>
       </template>
     </div>
+
+    <!-- Magnet snapping crosshair: replaces the native crosshair while a
+         drawing tool + magnet are active — sticks to candle high/low and
+         shows the snapped price/time on the axes. -->
+    <template v-if="snapXhair && drawingToolActive && magnetActive">
+      <div
+        class="xhair-line v"
+        :style="{ left: snapXhair.x + 'px', bottom: axisBottomH + 'px' }"
+      ></div>
+      <div
+        class="xhair-line h"
+        :style="{ top: snapXhair.y + 'px', right: axisRightW + 'px' }"
+      ></div>
+      <div
+        class="single-price-tag"
+        :style="{ top: snapXhair.y - 9 + 'px', background: '#2962ff' }"
+      >{{ snapXhair.priceText }}</div>
+      <div
+        class="single-time-tag"
+        :style="{ left: snapXhair.x + 'px', bottom: Math.max(2, axisBottomH / 2 - 9) + 'px' }"
+      >{{ snapXhair.timeText }}</div>
+    </template>
 
     <!-- Edit panel for selected rectangle -->
     <div
@@ -5023,6 +5130,22 @@ onBeforeUnmount(() => {
 .single-price-tag {
   right: 0;
   border-radius: 3px 0 0 3px;
+}
+/* ── Magnet snapping crosshair ───────────────────────────────────────── */
+.xhair-line {
+  position: absolute;
+  z-index: 6;
+  pointer-events: none;
+}
+.xhair-line.v {
+  top: 0;
+  width: 0;
+  border-left: 1px dashed rgba(117, 134, 150, 0.75);
+}
+.xhair-line.h {
+  left: 0;
+  height: 0;
+  border-top: 1px dashed rgba(117, 134, 150, 0.75);
 }
 .single-time-tag {
   transform: translateX(-50%);
