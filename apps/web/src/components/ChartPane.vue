@@ -4443,8 +4443,6 @@ onBeforeUnmount(() => {
 }
 .drawing-hit-rect.selected {
   cursor: move;
-  outline: 1px dashed rgba(41, 98, 255, 0.7);
-  outline-offset: 2px;
 }
 .drawing-rect:hover {
   box-shadow: 0 0 0 1px rgba(41, 98, 255, 0.4);
