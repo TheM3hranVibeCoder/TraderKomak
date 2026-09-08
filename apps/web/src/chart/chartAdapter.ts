@@ -31,6 +31,9 @@ export interface ChartAdapter {
   /** Show / hide the series' own last-value label on the price scale
    *  (replay mode hides it and shows the replay price tag instead). */
   setLastValueVisible(on: boolean): void;
+  /** Disable chart pan/zoom while a drawing tool is active — without this,
+   *  touch drawing pans the chart and the shape never lands. */
+  setDrawingMode(on: boolean): void;
   resize(width: number, height: number): void;
   destroy(): void;
   setTheme(isDark: boolean): void;
@@ -157,10 +160,11 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       mouseWheel: true,
       pressedMouseMove: true,
       horzTouchDrag: true,
-      vertTouchDrag: false,
+      // touch users scale the price by dragging inside the pane
+      vertTouchDrag: true,
     },
     handleScale: {
-      axisPressedMouseMove: true,
+      axisPressedMouseMove: true, // applies to mouse AND touch drags on the axes
       mouseWheel: true,
       pinch: true,
     },
@@ -363,6 +367,22 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
 
     setLastValueVisible(on: boolean): void {
       series.applyOptions({ lastValueVisible: on });
+    },
+
+    setDrawingMode(on: boolean): void {
+      chart.applyOptions({
+        handleScroll: {
+          pressedMouseMove: !on,
+          horzTouchDrag: !on,
+          vertTouchDrag: !on,
+          mouseWheel: !on,
+        },
+        handleScale: {
+          axisPressedMouseMove: !on,
+          mouseWheel: true, // unchanged for desktop — wheel zoom worked in drawing mode
+          pinch: !on,
+        },
+      });
     },
 
     resize(width: number, height: number): void {

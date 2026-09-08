@@ -164,11 +164,11 @@ function onDemoLineDragStart(e: MouseEvent, id: string, level: "entry" | "sl" | 
   };
   const up = () => {
     demoLineDrag = null;
-    window.removeEventListener("mousemove", move);
-    window.removeEventListener("mouseup", up);
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
   };
-  window.addEventListener("mousemove", move);
-  window.addEventListener("mouseup", up);
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
 }
 
 /** Draft order: lines draw on the chart (entry/SL/TP), adjustable by
@@ -824,6 +824,10 @@ const linePanelPos = ref<{ x: number; y: number } | null>(null);
 const linePanelEl = ref<HTMLElement | null>(null);
 const linePaletteOpen = ref(false);
 const drawingToolActive = computed(() => drawingsStore.activeTool !== "cursor");
+// While a shape tool is active the chart must not pan under the finger —
+// touch drawing starts from pointerdown, and LWC's own touch handlers would
+// otherwise treat the same gesture as a pan and swallow the drawing.
+watch(drawingToolActive, (on) => adapter?.setDrawingMode(on));
 
 /* ── Polyline drawing (multi-click; double-click finishes) ──────────── */
 
@@ -847,7 +851,7 @@ const polyPanelEl = ref<HTMLElement | null>(null);
 const polyPaletteOpen = ref(false);
 /** In-progress polyline: confirmed vertices + the live cursor position. */
 const polyState = ref<{ points: { time: number; price: number }[]; cursor: { time: number; price: number } | null } | null>(null);
-let lastPolyClickAt: { x: number; y: number } | null = null;
+let lastPolyClickAt: { x: number; y: number; at: number } | null = null;
 let onPolyMoveRef: ((ev: MouseEvent) => void) | null = null;
 
 /* ── Long / Short position (TradingView-style) ──────────────────────── */
@@ -1478,12 +1482,12 @@ function beginDraw(e: MouseEvent): void {
   };
 
   function stopMove(): void {
-    window.removeEventListener("mousemove", move);
+    window.removeEventListener("pointermove", move);
     if (onMouseMoveRef === move) onMouseMoveRef = null;
   }
 
   const up = (ev: MouseEvent) => {
-    window.removeEventListener("mouseup", up);
+    window.removeEventListener("pointerup", up);
     // Press-drag-release finalizes immediately. Click-move-click keeps the
     // preview alive; the next left-press (capture handler) finalizes.
     if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > 4) {
@@ -1492,8 +1496,8 @@ function beginDraw(e: MouseEvent): void {
     }
   };
 
-  window.addEventListener("mousemove", move);
-  window.addEventListener("mouseup", up);
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
   onMouseMoveRef = move;
 }
 
@@ -1502,7 +1506,7 @@ function finalizeDraw(): void {
   const d = drawingState.value;
   drawingState.value = null;
   if (onMouseMoveRef) {
-    window.removeEventListener("mousemove", onMouseMoveRef);
+    window.removeEventListener("pointermove", onMouseMoveRef);
     onMouseMoveRef = null;
   }
   if (d && (Math.abs(d.time2 - d.time1) >= 1 || Math.abs(d.price2 - d.price1) > 0)) {
@@ -1537,7 +1541,7 @@ function cancelDraw(): void {
   stopPosCursor();
   stopPolyPreview();
   if (onMouseMoveRef) {
-    window.removeEventListener("mousemove", onMouseMoveRef);
+    window.removeEventListener("pointermove", onMouseMoveRef);
     onMouseMoveRef = null;
   }
   if (had) recalcRects();
@@ -1554,13 +1558,13 @@ function startPolyPreview(): void {
     if (t !== null && p !== null) polyState.value.cursor = { time: t, price: p };
     recalcRects();
   };
-  window.addEventListener("mousemove", move);
+  window.addEventListener("pointermove", move);
   onPolyMoveRef = move;
 }
 
 function stopPolyPreview(): void {
   if (onPolyMoveRef) {
-    window.removeEventListener("mousemove", onPolyMoveRef);
+    window.removeEventListener("pointermove", onPolyMoveRef);
     onPolyMoveRef = null;
   }
 }
@@ -1578,17 +1582,22 @@ function handlePolyClick(e: MouseEvent): void {
 
   if (!polyState.value) {
     polyState.value = { points: [pt], cursor: pt };
-    lastPolyClickAt = { x: e.clientX, y: e.clientY };
+    lastPolyClickAt = { x: e.clientX, y: e.clientY, at: performance.now() };
     startPolyPreview();
     recalcRects();
     return;
   }
-  // Same-spot click (the second press of a double-click) → ignore here;
-  // the dblclick handler finalizes the polyline.
+  // Same-spot click (the second press of a double-click) → finalize. The
+  // native dblclick event is unreliable on touch (double-TAP often doesn't
+  // produce one), so a same-spot press within 400ms finishes the polyline on
+  // desktop AND touch; the native dblclick handler then becomes a no-op.
   if (lastPolyClickAt && Math.hypot(e.clientX - lastPolyClickAt.x, e.clientY - lastPolyClickAt.y) < 6) {
+    if (performance.now() - lastPolyClickAt.at < 400) {
+      finalizePoly();
+    }
     return;
   }
-  lastPolyClickAt = { x: e.clientX, y: e.clientY };
+  lastPolyClickAt = { x: e.clientX, y: e.clientY, at: performance.now() };
   polyState.value.points.push(pt);
   polyState.value.cursor = pt;
   recalcRects();
@@ -1724,11 +1733,11 @@ function onRectDragStart(e: MouseEvent, id: string): void {
   };
 
   const onUp = () => {
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
   };
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup", onUp);
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
 }
 
 function onChartClick(): void {
@@ -1892,12 +1901,12 @@ function onResizeStart(e: MouseEvent, handle: string): void {
   };
 
   const onUp = () => {
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
   };
 
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup", onUp);
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
 }
 
 /* ── Trendline interaction ──────────────────────────────────────────── */
@@ -2003,11 +2012,11 @@ function onTrendDragStart(e: MouseEvent, id: string): void {
   };
 
   const onUp = () => {
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
   };
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup", onUp);
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
 }
 
 /** Drag an endpoint handle ("corner") to resize/redraw the line; the other
@@ -2033,11 +2042,11 @@ function onTrendHandleStart(e: MouseEvent, id: string, which: 1 | 2): void {
   };
 
   const onUp = () => {
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
   };
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup", onUp);
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
 }
 
 function deleteSelectedLine(): void {
@@ -2185,11 +2194,11 @@ function onPolyDragStart(e: MouseEvent, id: string): void {
     positionPolyPanel(id);
   };
   const onUp = () => {
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
   };
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup", onUp);
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
 }
 
 /** Drag one vertex ("corner") of the polyline; the other vertices stay. */
@@ -2216,11 +2225,11 @@ function onPolyVertexStart(e: MouseEvent, id: string, index: number): void {
     positionPolyPanel(id);
   };
   const onUp = () => {
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
   };
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup", onUp);
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
 }
 
 function deleteSelectedPoly(): void {
@@ -2283,13 +2292,13 @@ function beginPos(e: MouseEvent): void {
     if (ct !== null && cp !== null) posCursor.value = { time: ct, price: cp };
     recalcRects();
   };
-  window.addEventListener("mousemove", move);
+  window.addEventListener("pointermove", move);
   onPosMoveRef = move;
 }
 
 function stopPosCursor(): void {
   if (onPosMoveRef) {
-    window.removeEventListener("mousemove", onPosMoveRef);
+    window.removeEventListener("pointermove", onPosMoveRef);
     onPosMoveRef = null;
   }
 }
@@ -2433,11 +2442,11 @@ function onPosLevelStart(e: MouseEvent, id: string, which: "tp" | "entry" | "sl"
     positionPosPanel(id);
   };
   const onUp = () => {
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
   };
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup", onUp);
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
 }
 
 /** Drag a vertical time edge (left / right) horizontally. */
@@ -2460,11 +2469,11 @@ function onPosEdgeStart(e: MouseEvent, id: string, which: "time1" | "time2"): vo
     positionPosPanel(id);
   };
   const onUp = () => {
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
   };
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup", onUp);
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
 }
 
 /** Drag a corner handle of the position: vertical movement resizes that
@@ -2497,11 +2506,11 @@ function onPosCornerStart(
     positionPosPanel(id);
   };
   const onUp = () => {
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
   };
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup", onUp);
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
 }
 
 /** Drag the position body: everything (times + all three prices) moves. */
@@ -2541,11 +2550,11 @@ function onPosDragStart(e: MouseEvent, id: string): void {
     positionPosPanel(id);
   };
   const onUp = () => {
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
   };
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup", onUp);
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
 }
 
 function deleteSelectedPos(): void {
@@ -2724,11 +2733,11 @@ function onSingleDragStart(e: MouseEvent, kind: SingleKind, id: string): void {
     positionSinglePanel(kind, id);
   };
   const onUp = () => {
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
   };
-  window.addEventListener("mousemove", onMove);
-  window.addEventListener("mouseup", onUp);
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
 }
 
 function deleteSelectedSingle(): void {
@@ -2909,7 +2918,7 @@ onMounted(async () => {
       beginDraw(e);
     }
   };
-  el.addEventListener("mousedown", onChartMouseDown as AnyListener, true);
+  el.addEventListener("pointerdown", onChartMouseDown as AnyListener, true);
   chartMouseDownEl = el;
   chartMouseDownCb = onChartMouseDown;
 
@@ -3072,7 +3081,7 @@ onBeforeUnmount(() => {
     interactionEl.removeEventListener("touchmove", interactCb);
   }
   if (chartMouseDownEl && chartMouseDownCb) {
-    chartMouseDownEl.removeEventListener("mousedown", chartMouseDownCb as AnyListener, true);
+    chartMouseDownEl.removeEventListener("pointerdown", chartMouseDownCb as AnyListener, true);
   }
   if (chartDblClickEl && chartDblClickCb) {
     chartDblClickEl.removeEventListener("dblclick", chartDblClickCb as AnyListener);
@@ -3095,7 +3104,7 @@ onBeforeUnmount(() => {
     window.removeEventListener("pointercancel", windowLostCb as AnyListener);
   }
   if (onMouseMoveRef) {
-    window.removeEventListener("mousemove", onMouseMoveRef);
+    window.removeEventListener("pointermove", onMouseMoveRef);
   }
   ro?.disconnect();
   adapter?.destroy();
@@ -3260,26 +3269,26 @@ onBeforeUnmount(() => {
           width: rect.width + 'px',
           height: rect.height + 'px',
         }"
-        @mousedown.stop="onRectDragStart($event, rect.id)"
+        @pointerdown.stop="onRectDragStart($event, rect.id)"
         @click.stop="onRectClick(rect.id, $event)"
       >
         <!-- Border-only rectangles: the body is click-transparent (clicks
              pass to the chart), only the 4 edge strips select/drag. -->
         <template v-if="rect.filled === false">
-          <div class="rect-edge-hit top" @mousedown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
-          <div class="rect-edge-hit bottom" @mousedown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
-          <div class="rect-edge-hit left" @mousedown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
-          <div class="rect-edge-hit right" @mousedown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
+          <div class="rect-edge-hit top" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
+          <div class="rect-edge-hit bottom" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
+          <div class="rect-edge-hit left" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
+          <div class="rect-edge-hit right" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
         </template>
         <template v-if="rect.selected">
-          <div class="resize-handle nw" @mousedown.stop.prevent="onResizeStart($event, 'nw')"></div>
-          <div class="resize-handle ne" @mousedown.stop.prevent="onResizeStart($event, 'ne')"></div>
-          <div class="resize-handle sw" @mousedown.stop.prevent="onResizeStart($event, 'sw')"></div>
-          <div class="resize-handle se" @mousedown.stop.prevent="onResizeStart($event, 'se')"></div>
-          <div class="resize-handle n" @mousedown.stop.prevent="onResizeStart($event, 'n')"></div>
-          <div class="resize-handle s" @mousedown.stop.prevent="onResizeStart($event, 's')"></div>
-          <div class="resize-handle w" @mousedown.stop.prevent="onResizeStart($event, 'w')"></div>
-          <div class="resize-handle e" @mousedown.stop.prevent="onResizeStart($event, 'e')"></div>
+          <div class="resize-handle nw" @pointerdown.stop.prevent="onResizeStart($event, 'nw')"></div>
+          <div class="resize-handle ne" @pointerdown.stop.prevent="onResizeStart($event, 'ne')"></div>
+          <div class="resize-handle sw" @pointerdown.stop.prevent="onResizeStart($event, 'sw')"></div>
+          <div class="resize-handle se" @pointerdown.stop.prevent="onResizeStart($event, 'se')"></div>
+          <div class="resize-handle n" @pointerdown.stop.prevent="onResizeStart($event, 'n')"></div>
+          <div class="resize-handle s" @pointerdown.stop.prevent="onResizeStart($event, 's')"></div>
+          <div class="resize-handle w" @pointerdown.stop.prevent="onResizeStart($event, 'w')"></div>
+          <div class="resize-handle e" @pointerdown.stop.prevent="onResizeStart($event, 'e')"></div>
         </template>
       </div>
 
@@ -3295,19 +3304,19 @@ onBeforeUnmount(() => {
             stroke="transparent"
             stroke-width="14"
             stroke-linecap="round"
-            @mousedown.stop="onTrendDragStart($event, t.id)"
+            @pointerdown.stop="onTrendDragStart($event, t.id)"
             @click.stop="onTrendClick(t.id, $event)"
           />
           <template v-if="t.selected">
             <circle
               :cx="t.x1" :cy="t.y1" r="5"
               class="trend-handle"
-              @mousedown.stop.prevent="onTrendHandleStart($event, t.id, 1)"
+              @pointerdown.stop.prevent="onTrendHandleStart($event, t.id, 1)"
             />
             <circle
               :cx="t.x2" :cy="t.y2" r="5"
               class="trend-handle"
-              @mousedown.stop.prevent="onTrendHandleStart($event, t.id, 2)"
+              @pointerdown.stop.prevent="onTrendHandleStart($event, t.id, 2)"
             />
           </template>
         </g>
@@ -3325,7 +3334,7 @@ onBeforeUnmount(() => {
             stroke-width="14"
             stroke-linecap="round"
             stroke-linejoin="round"
-            @mousedown.stop="onPolyDragStart($event, p.id)"
+            @pointerdown.stop="onPolyDragStart($event, p.id)"
             @click.stop="onPolyClick(p.id, $event)"
           />
           <template v-if="p.selected">
@@ -3334,7 +3343,7 @@ onBeforeUnmount(() => {
               :key="q.src"
               :cx="q.x" :cy="q.y" r="5"
               class="trend-handle"
-              @mousedown.stop.prevent="onPolyVertexStart($event, p.id, q.src)"
+              @pointerdown.stop.prevent="onPolyVertexStart($event, p.id, q.src)"
             />
           </template>
         </g>
@@ -3355,34 +3364,34 @@ onBeforeUnmount(() => {
           width: p.width + 'px',
           height: Math.abs(p.slY - p.tpY) + 'px',
         }"
-        @mousedown.stop="onPosDragStart($event, p.id)"
+        @pointerdown.stop="onPosDragStart($event, p.id)"
         @click.stop="onPosClick(p.id, $event)"
       >
         <template v-if="p.selected">
           <div
             class="pos-level-hit"
             :style="{ top: p.tpY - Math.min(p.tpY, p.slY) - 4 + 'px' }"
-            @mousedown.stop.prevent="onPosLevelStart($event, p.id, 'tp')"
+            @pointerdown.stop.prevent="onPosLevelStart($event, p.id, 'tp')"
           ></div>
           <div
             class="pos-level-hit"
             :style="{ top: p.entryY - Math.min(p.tpY, p.slY) - 4 + 'px' }"
-            @mousedown.stop.prevent="onPosLevelStart($event, p.id, 'entry')"
+            @pointerdown.stop.prevent="onPosLevelStart($event, p.id, 'entry')"
           ></div>
           <div
             class="pos-level-hit"
             :style="{ top: p.slY - Math.min(p.tpY, p.slY) - 4 + 'px' }"
-            @mousedown.stop.prevent="onPosLevelStart($event, p.id, 'sl')"
+            @pointerdown.stop.prevent="onPosLevelStart($event, p.id, 'sl')"
           ></div>
           <div
             class="pos-edge-hit"
             :style="{ left: '-3px' }"
-            @mousedown.stop.prevent="onPosEdgeStart($event, p.id, 'time1')"
+            @pointerdown.stop.prevent="onPosEdgeStart($event, p.id, 'time1')"
           ></div>
           <div
             class="pos-edge-hit"
             :style="{ right: '-3px' }"
-            @mousedown.stop.prevent="onPosEdgeStart($event, p.id, 'time2')"
+            @pointerdown.stop.prevent="onPosEdgeStart($event, p.id, 'time2')"
           ></div>
           <!-- corner handles at both ends of each level line: vertical drag
                resizes the level's price, horizontal drag resizes the width -->
@@ -3397,12 +3406,12 @@ onBeforeUnmount(() => {
             <div
               class="resize-handle pos-handle"
               :style="{ top: lvl.y - 4 + 'px', left: '-4px' }"
-              @mousedown.stop.prevent="onPosCornerStart($event, p.id, lvl.kind as any, 'time1')"
+              @pointerdown.stop.prevent="onPosCornerStart($event, p.id, lvl.kind as any, 'time1')"
             ></div>
             <div
               class="resize-handle pos-handle"
               :style="{ top: lvl.y - 4 + 'px', right: '-4px' }"
-              @mousedown.stop.prevent="onPosCornerStart($event, p.id, lvl.kind as any, 'time2')"
+              @pointerdown.stop.prevent="onPosCornerStart($event, p.id, lvl.kind as any, 'time2')"
             ></div>
           </div>
         </template>
@@ -3419,7 +3428,7 @@ onBeforeUnmount(() => {
             ? { left: s.x - 4 + 'px' }
             : { top: s.y - 4 + 'px', left: s.kind === 'hray' ? s.x - 4 + 'px' : '0px' }
         "
-        @mousedown.stop="onSingleDragStart($event, s.kind, s.id)"
+        @pointerdown.stop="onSingleDragStart($event, s.kind, s.id)"
         @click.stop="onSingleClick(s.kind, s.id, $event)"
       ></div>
 
@@ -3431,7 +3440,7 @@ onBeforeUnmount(() => {
           class="resize-handle single-handle"
           :class="s.kind"
           :style="{ top: s.hy - 4 + 'px', left: s.hx - 4 + 'px' }"
-          @mousedown.stop.prevent="onSingleDragStart($event, s.kind, s.id)"
+          @pointerdown.stop.prevent="onSingleDragStart($event, s.kind, s.id)"
         ></div>
       </template>
     </div>
@@ -3830,7 +3839,7 @@ onBeforeUnmount(() => {
           :key="'dhit-' + l.id + l.level"
           class="demo-line-hit"
           :style="{ top: l.y - 4 + 'px' }"
-          @mousedown.stop.prevent="onDemoLineDragStart($event, l.id, l.level)"
+          @pointerdown.stop.prevent="onDemoLineDragStart($event, l.id, l.level)"
         ></div>
       </div>
       <div class="demo-tag-layer">
@@ -3891,7 +3900,7 @@ onBeforeUnmount(() => {
         <button
           class="rp-btn"
           title="Step back (hold to repeat)"
-          @mousedown.prevent="holdStep(-1)"
+          @pointerdown.prevent="holdStep(-1)"
           @mouseup="stopHold"
           @mouseleave="stopHold"
         >⏮</button>
@@ -3901,7 +3910,7 @@ onBeforeUnmount(() => {
         <button
           class="rp-btn"
           title="Step forward (hold to repeat)"
-          @mousedown.prevent="holdStep(1)"
+          @pointerdown.prevent="holdStep(1)"
           @mouseup="stopHold"
           @mouseleave="stopHold"
         >⏭</button>
@@ -4181,6 +4190,12 @@ onBeforeUnmount(() => {
   width: 100%;
   /* cross cursor over the chart at all times (TradingView-style) */
   cursor: crosshair;
+  /* Chart gestures (pan, pinch, price-axis drag, drawing drags) are handled
+     by Lightweight Charts and the drawing pointer handlers. With the default
+     `auto`, the phone/tablet browser claims the touch for scroll arbitration
+     and fires pointercancel mid-gesture — drawings never land and axis drags
+     die instantly. `none` keeps every gesture inside the chart handlers. */
+  touch-action: none;
 }
 .chart-symbol-label {
   position: absolute;
@@ -4371,6 +4386,20 @@ onBeforeUnmount(() => {
   inset: 0;
   z-index: 3;
   pointer-events: none;
+}
+/* Touch: a finger-drag on a drawing must move the drawing, not scroll the
+   page — without this the browser fires pointercancel mid-gesture */
+.drawing-hit-rect,
+.rect-edge-hit,
+.resize-handle,
+.trend-hit,
+.trend-handle,
+.pos-hit,
+.pos-level-hit,
+.pos-edge-hit,
+.single-hit,
+.demo-line-hit {
+  touch-action: none;
 }
 /* While a drawing tool is active, existing drawings must not swallow
    the press, and the live preview is never interactive. */
