@@ -16,11 +16,13 @@ import { EventEmitter } from "node:events";
 import {
   NATIVE_HISTORY_GRANULARITY,
   TIMEFRAME_SECONDS,
+  binanceBucketStart,
   bucketStart,
   oandaAlignedBucketStart,
   isInstrument,
   isTimeframe,
   nativeCandlesNeeded,
+  providerOf,
   type Candle,
   type MarketTick,
   type Timeframe,
@@ -225,7 +227,13 @@ export class CandleFeed extends EventEmitter {
     const session: Session = {
       instrument,
       timeframe,
-      aggregator: new CandleAggregator(timeframe),
+      // OANDA aligns the large timeframes to 5pm-NY; Binance is UTC-aligned
+      // (Monday weeks, calendar months). Live aggregation must follow the
+      // provider's convention or the active candle mismatches native history.
+      aggregator: new CandleAggregator(
+        timeframe,
+        providerOf(instrument) === "binance" ? binanceBucketStart : oandaAlignedBucketStart
+      ),
       buffer: [],
       subscribers: 0,
       pendingTicks: [],
@@ -307,7 +315,10 @@ export class CandleFeed extends EventEmitter {
         seedSource = aggregateCandles(native, seconds);
       }
 
-      const nowBucketSec = oandaAlignedBucketStart(Date.now(), seconds) / 1000;
+      const nowBucketSec =
+        (providerOf(session.instrument) === "binance"
+          ? binanceBucketStart(Date.now(), seconds)
+          : oandaAlignedBucketStart(Date.now(), seconds)) / 1000;
       // Seed the ACTIVE bucket from native history so a freshly created
       // session continues OANDA's in-progress candle instead of building one
       // from zero. `>=` tolerates minor clock skew between us and OANDA.

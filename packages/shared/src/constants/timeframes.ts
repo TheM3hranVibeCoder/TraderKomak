@@ -180,3 +180,25 @@ export function oandaAlignedBucketStart(timestampMs: number, timeframeSeconds: n
   if (timeframeSeconds === 2592000) return oandaMonthlyBucketStart(timestampMs);
   return bucketStart(timestampMs, timeframeSeconds);
 }
+
+/**
+ * Bucket start honoring Binance (UTC) conventions — used for Binance spot
+ * symbols so the LIVE aggregation matches their native kline history:
+ *   4h / 1d → plain UTC multiples (00:00, 04:00, 08:00 … UTC)
+ *   1w      → Monday 00:00 UTC (a plain modulo of the epoch anchors to
+ *             Thursday — Binance weeks start Monday)
+ *   1M      → 1st of the month, 00:00 UTC (a fixed 30d modulo drifts)
+ */
+export function binanceBucketStart(timestampMs: number, timeframeSeconds: number): number {
+  if (timeframeSeconds === 604800) {
+    const d = new Date(timestampMs);
+    const midnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+    const daysSinceMonday = (d.getUTCDay() + 6) % 7;
+    return midnight - daysSinceMonday * 86400000;
+  }
+  if (timeframeSeconds === 2592000) {
+    const d = new Date(timestampMs);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+  }
+  return bucketStart(timestampMs, timeframeSeconds);
+}

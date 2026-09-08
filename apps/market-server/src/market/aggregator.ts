@@ -36,7 +36,16 @@ export class CandleAggregator {
   private current: Candle | null = null;
   private staleTicksIgnored = 0;
 
-  constructor(public readonly timeframe: Timeframe) {}
+  /**
+   * Bucket-boundary rule for this feed. OANDA symbols align the large
+   * timeframes to 5pm-New-York; Binance symbols are UTC-aligned (Monday
+   * weeks, calendar months). Injected so the pure engine stays provider-
+   * agnostic and both providers share the same code.
+   */
+  constructor(
+    public readonly timeframe: Timeframe,
+    private readonly bucketStartAt: (timestampMs: number, timeframeSeconds: number) => number = oandaAlignedBucketStart
+  ) {}
 
   get timeframeSeconds(): number {
     return TIMEFRAME_SECONDS[this.timeframe];
@@ -54,7 +63,11 @@ export class CandleAggregator {
    */
   seed(candle: Candle): void {
     if (!Number.isFinite(candle.time) || !Number.isFinite(candle.close)) return;
-    const expectedBucket = Math.floor(candle.time / this.timeframeSeconds) * this.timeframeSeconds;
+    // Normalize to the feed's bucket grid (no-op for native candles, which
+    // are already aligned to their provider's convention).
+    const expectedBucket = Math.floor(
+      this.bucketStartAt(candle.time * 1000, this.timeframeSeconds) / 1000
+    );
     const normalized: Candle = { ...candle, time: expectedBucket };
     if (!this.current || normalized.time > this.current.time) {
       this.current = normalized;
@@ -75,11 +88,11 @@ export class CandleAggregator {
     const price = resolveCandlePrice(tick);
     if (price === null) return null; // no usable side — drop safely
 
-    // bucketStart() yields the bucket boundary in epoch ms; candle times
-    // are whole seconds, so convert once here. D/W/M buckets follow
-    // OANDA's 5pm-New-York convention so the live candles align with
-    // the native history.
-    const time = oandaAlignedBucketStart(tick.timestamp, this.timeframeSeconds) / 1000;
+    // bucketStartAt() yields the bucket boundary in epoch ms; candle times
+    // are whole seconds, so convert once here. D/W/M buckets follow the
+    // provider's convention (OANDA: 5pm-New-York · Binance: UTC) so the
+    // live candles align with the native history.
+    const time = this.bucketStartAt(tick.timestamp, this.timeframeSeconds) / 1000;
 
     if (this.current && time < this.current.time) {
       this.staleTicksIgnored++;

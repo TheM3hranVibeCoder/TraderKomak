@@ -9,7 +9,7 @@ import { useDemoStore, demoValuePerPrice, type DemoSide, type DemoStatus, type D
 import DemoPanel from "./DemoPanel.vue";
 import type { Candle } from "@traderkomak/shared";
 import { currencyFlagUrl, commodityIcon, symbolParts } from "@/utils/flags";
-import { TIMEFRAME_SECONDS, instrumentPrecision, instrumentPipSize, providerOf, oandaDailyBucketStart, oandaH4BucketStart, oandaWeeklyBucketStart, oandaMonthlyBucketStart } from "@traderkomak/shared";
+import { TIMEFRAME_SECONDS, instrumentPrecision, instrumentPipSize, providerOf, binanceBucketStart, oandaDailyBucketStart, oandaH4BucketStart, oandaWeeklyBucketStart, oandaMonthlyBucketStart } from "@traderkomak/shared";
 
 const props = defineProps<{
   candles: Candle[];
@@ -683,11 +683,27 @@ function updateCountdown() {
   const sec = TIMEFRAME_SECONDS[tf as keyof typeof TIMEFRAME_SECONDS] ?? 5;
   const now = Date.now();
   const DAY = 86400000;
-  // Next boundary on the candle grid OANDA actually uses — the large
-  // timeframes align to 5pm-New-York sessions, NOT UTC multiples, so a
-  // plain modulo would count down to a time no candle ever opens at.
+  // Next boundary on the candle grid the PROVIDER actually uses. OANDA
+  // aligns the large timeframes to 5pm-New-York sessions; Binance is
+  // UTC-aligned (Monday weeks, calendar months). Using the wrong convention
+  // counts down to a moment where no candle ever opens (e.g. a Binance 4h
+  // showing 1:37 instead of 0:37 — exactly one hour of NY-offset drift).
+  const isBinance = providerOf(market.instrument) === "binance";
   let next: number;
-  if (sec === 14400) next = oandaH4BucketStart(now + 4 * 3600000);
+  if (isBinance) {
+    if (sec === 2592000) {
+      // Next calendar month, 00:00 UTC
+      const d = new Date(now);
+      next = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+    } else if (sec === 604800) {
+      // Current week's Monday 00:00 UTC + 7d = the next Monday
+      next = binanceBucketStart(now, sec) + sec * 1000;
+    } else {
+      // 4h / 1d / minute / second TFs: plain UTC multiples
+      next = Math.floor(now / (sec * 1000)) * sec * 1000 + sec * 1000;
+    }
+  }
+  else if (sec === 14400) next = oandaH4BucketStart(now + 4 * 3600000);
   else if (sec === 86400) {
     // session start of a later moment — step further while it lands back
     // in the CURRENT session (e.g. right after a candle opens)
