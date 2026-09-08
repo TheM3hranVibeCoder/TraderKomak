@@ -585,6 +585,9 @@ let pointerDownCb: (() => void) | null = null;
 let pointerUpCb: (() => void) | null = null;
 let chartMouseDownEl: HTMLElement | null = null;
 let chartMouseDownCb: ((e: MouseEvent) => void) | null = null;
+let tapDownEl: HTMLElement | null = null;
+let tapDownCb: ((e: MouseEvent) => void) | null = null;
+let tapUpCb: ((e: MouseEvent) => void) | null = null;
 let chartDblClickEl: HTMLElement | null = null;
 let chartDblClickCb: ((e: MouseEvent) => void) | null = null;
 let paneCtxEl: HTMLElement | null = null;
@@ -2913,6 +2916,20 @@ onMounted(async () => {
     if (tool === "polyline") {
       handlePolyClick(e);
     } else if (drawingState.value) {
+      // Second press of click -> move -> click. Touch sends no pointermove
+      // between two taps, so the free corner must be moved to THIS press
+      // before finalizing — otherwise the shape has zero size and is
+      // discarded (mouse is unaffected: move already put it at the cursor).
+      if (adapter && containerRef.value) {
+        const r = containerRef.value.getBoundingClientRect();
+        const t = adapter.xToTime(e.clientX - r.left);
+        const p = adapter.yToPrice(e.clientY - r.top);
+        if (t !== null && p !== null) {
+          const s2 = snapToCandle(t, p, e.ctrlKey);
+          drawingState.value.time2 = s2.time;
+          drawingState.value.price2 = s2.price;
+        }
+      }
       finalizeDraw(); // second click of click -> move -> click
     } else {
       beginDraw(e);
@@ -2921,6 +2938,35 @@ onMounted(async () => {
   el.addEventListener("pointerdown", onChartMouseDown as AnyListener, true);
   chartMouseDownEl = el;
   chartMouseDownCb = onChartMouseDown;
+
+  // Touch deselect: LWC prevent-defaults touches on its canvas, so the
+  // browser never synthesizes a `click` there and the container's
+  // @click (desktop deselect) never fires. Detect a stationary touch tap
+  // with pointer events instead. Taps on drawing/demo hit targets are
+  // excluded — their own @click handlers select/deselect.
+  let tapPress: { x: number; y: number; onHit: boolean } | null = null;
+  const onTapDown = (e: MouseEvent) => {
+    if ((e as PointerEvent).pointerType === "mouse") return;
+    const target = e.target as HTMLElement | null;
+    tapPress = {
+      x: e.clientX,
+      y: e.clientY,
+      onHit: !!target?.closest?.(".drawing-hit-layer, .demo-hit-layer"),
+    };
+  };
+  const onTapUp = (e: MouseEvent) => {
+    const press = tapPress;
+    tapPress = null;
+    if (!press || (e as PointerEvent).pointerType === "mouse" || press.onHit) return;
+    if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > 8) return; // pan/scroll
+    if (!isInChartArea(e)) return;
+    onChartClick();
+  };
+  el.addEventListener("pointerdown", onTapDown as AnyListener, true);
+  window.addEventListener("pointerup", onTapUp as AnyListener);
+  tapDownEl = el;
+  tapDownCb = onTapDown;
+  tapUpCb = onTapUp;
 
   // Double-click finishes an in-progress polyline (TradingView-style);
   // the second press of the double-click adds no vertex (see handlePolyClick).
@@ -3082,6 +3128,12 @@ onBeforeUnmount(() => {
   }
   if (chartMouseDownEl && chartMouseDownCb) {
     chartMouseDownEl.removeEventListener("pointerdown", chartMouseDownCb as AnyListener, true);
+  }
+  if (tapDownEl && tapDownCb) {
+    tapDownEl.removeEventListener("pointerdown", tapDownCb as AnyListener, true);
+  }
+  if (tapUpCb) {
+    window.removeEventListener("pointerup", tapUpCb as AnyListener);
   }
   if (chartDblClickEl && chartDblClickCb) {
     chartDblClickEl.removeEventListener("dblclick", chartDblClickCb as AnyListener);
@@ -4594,6 +4646,25 @@ onBeforeUnmount(() => {
   padding: 6px 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
   pointer-events: auto;
+}
+/* Phones/tablets: the panel row is ~366px wide — on a small pane the delete
+   button would land off-chart (clipped by the pane). Let it wrap and cap it
+   to the viewport instead, with slightly larger touch targets. */
+@media (max-width: 640px) {
+  .rect-edit-panel {
+    max-width: calc(100vw - 24px);
+    flex-wrap: wrap;
+    row-gap: 6px;
+    padding: 5px 6px;
+  }
+  .edit-btn {
+    width: 30px;
+    height: 30px;
+  }
+  .color-swatch {
+    width: 20px;
+    height: 20px;
+  }
 }
 .edit-colors {
   display: flex;
