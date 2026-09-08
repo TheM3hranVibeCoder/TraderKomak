@@ -1578,7 +1578,8 @@ function cancelDraw(): void {
   if (had) recalcRects();
 }
 
-/** Live preview listener for the in-progress polyline: tracks the cursor. */
+/** Live preview listener for the in-progress polyline: tracks the cursor
+ *  (magnet-snapped, so the rubber band sticks to candle high/low too). */
 function startPolyPreview(): void {
   stopPolyPreview();
   const move = (ev: MouseEvent) => {
@@ -1586,7 +1587,10 @@ function startPolyPreview(): void {
     const r = containerRef.value.getBoundingClientRect();
     const t = adapter.xToTime(ev.clientX - r.left);
     const p = adapter.yToPrice(ev.clientY - r.top);
-    if (t !== null && p !== null) polyState.value.cursor = { time: t, price: p };
+    if (t !== null && p !== null) {
+      const s = snapToCandle(t, p, magnetActive.value);
+      polyState.value.cursor = { time: s.time, price: s.price };
+    }
     recalcRects();
   };
   window.addEventListener("pointermove", move);
@@ -1609,7 +1613,8 @@ function handlePolyClick(e: MouseEvent): void {
   const t = adapter.xToTime(e.clientX - r.left);
   const p = adapter.yToPrice(e.clientY - r.top);
   if (t === null || p === null) return;
-  const pt = { time: t, price: p };
+  const s = snapToCandle(t, p, magnetActive.value);
+  const pt = { time: s.time, price: s.price };
 
   if (!polyState.value) {
     polyState.value = { points: [pt], cursor: pt };
@@ -2311,8 +2316,9 @@ function beginPos(e: MouseEvent): void {
   const t = adapter.xToTime(e.clientX - r.left);
   const p = adapter.yToPrice(e.clientY - r.top);
   if (t === null || p === null) return;
-  posState.value = { time1: t, entry: p };
-  posCursor.value = { time: t, price: p };
+  const s = snapToCandle(t, p, magnetActive.value);
+  posState.value = { time1: s.time, entry: s.price };
+  posCursor.value = { time: s.time, price: s.price };
   recalcRects();
   stopPosCursor();
   const move = (ev: MouseEvent) => {
@@ -2320,7 +2326,10 @@ function beginPos(e: MouseEvent): void {
     const rr = containerRef.value.getBoundingClientRect();
     const ct = adapter.xToTime(ev.clientX - rr.left);
     const cp = adapter.yToPrice(ev.clientY - rr.top);
-    if (ct !== null && cp !== null) posCursor.value = { time: ct, price: cp };
+    if (ct !== null && cp !== null) {
+      const cs = snapToCandle(ct, cp, magnetActive.value);
+      posCursor.value = { time: cs.time, price: cs.price };
+    }
     recalcRects();
   };
   window.addEventListener("pointermove", move);
@@ -2347,17 +2356,21 @@ function finalizePos(e: MouseEvent): void {
     const r = containerRef.value.getBoundingClientRect();
     const t = adapter.xToTime(e.clientX - r.left);
     const p = adapter.yToPrice(e.clientY - r.top);
-    if (t !== null && p !== null && Math.abs(p - st.entry) > 0) {
-      const long = p < st.entry;
-      const risk = Math.abs(st.entry - p);
-      drawingsStore.addPosition(market.instrument, {
-        direction: long ? "long" : "short",
-        time1: st.time1,
-        time2: t,
-        entry: st.entry,
-        sl: p,
-        tp: st.entry + (long ? 1 : -1) * 2 * risk,
-      });
+    if (t !== null && p !== null) {
+      // Snap the SL anchor to the candle high/low under the magnet
+      const s = snapToCandle(t, p, magnetActive.value);
+      if (Math.abs(s.price - st.entry) > 0) {
+        const long = s.price < st.entry;
+        const risk = Math.abs(st.entry - s.price);
+        drawingsStore.addPosition(market.instrument, {
+          direction: long ? "long" : "short",
+          time1: st.time1,
+          time2: s.time,
+          entry: st.entry,
+          sl: s.price,
+          tp: st.entry + (long ? 1 : -1) * 2 * risk,
+        });
+      }
     }
   }
   drawingsStore.activeTool = "cursor";
@@ -3127,14 +3140,22 @@ onMounted(async () => {
 
   // Snapping crosshair tracking: while a drawing tool + magnet are active,
   // the native crosshair is hidden and this one sticks to candle high/low.
-  const onXhairMove = (e: MouseEvent) => {
-    if (!drawingToolActive.value || !magnetActive.value || !adapter || !containerRef.value || !isInChartArea(e)) {
+  // The last pointer position is kept so the snapped crosshair appears the
+  // INSTANT Ctrl is held / the magnet latches — before any mouse movement.
+  let lastPtr: { clientX: number; clientY: number } | null = null;
+  const computeSnapXhair = (clientX: number, clientY: number): void => {
+    if (!drawingToolActive.value || !magnetActive.value || !adapter || !containerRef.value) {
       snapXhair.value = null;
       return;
     }
     const r = containerRef.value.getBoundingClientRect();
-    const t = adapter.xToTime(e.clientX - r.left);
-    const p = adapter.yToPrice(e.clientY - r.top);
+    const fake = { clientX, clientY, button: 0, buttons: 0 } as MouseEvent;
+    if (!isInChartArea(fake)) {
+      snapXhair.value = null;
+      return;
+    }
+    const t = adapter.xToTime(clientX - r.left);
+    const p = adapter.yToPrice(clientY - r.top);
     const s = t !== null && p !== null ? snapToCandle(t, p, true) : null;
     const x = s ? adapter.timeToX(s.time) : null;
     const y = s ? adapter.getPriceY(s.price) : null;
@@ -3142,7 +3163,12 @@ onMounted(async () => {
       ? { x, y, priceText: fmtPrice(s.price, instrumentPrecision(market.instrument)), timeText: fmtAxisTime(s.time) }
       : null;
   };
+  const onXhairMove = (e: MouseEvent) => {
+    lastPtr = { clientX: e.clientX, clientY: e.clientY };
+    computeSnapXhair(e.clientX, e.clientY);
+  };
   const onXhairLeave = () => {
+    lastPtr = null;
     snapXhair.value = null;
   };
   el.addEventListener("pointermove", onXhairMove);
@@ -3155,7 +3181,8 @@ onMounted(async () => {
   const syncCrosshairMode = () => {
     const custom = drawingToolActive.value && magnetActive.value;
     adapter?.setCrosshairVisible(!custom);
-    if (!custom) snapXhair.value = null;
+    if (custom && lastPtr) computeSnapXhair(lastPtr.clientX, lastPtr.clientY);
+    else if (!custom) snapXhair.value = null;
   };
   syncCrosshairMode();
   crosshairModeStop = watch([drawingToolActive, magnetActive], syncCrosshairMode);
