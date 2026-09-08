@@ -5,7 +5,7 @@ import { useWatchlistStore } from "@/stores/watchlist";
 import { useMarketStore } from "@/stores/market";
 import { WatchWsClient } from "@/services/watchWs";
 import { fetchCandles } from "@/services/api";
-import { currencyFlagUrl, commodityIcon } from "@/utils/flags";
+import { currencyFlagUrl, commodityIcon, symbolParts } from "@/utils/flags";
 
 const watchlist = useWatchlistStore();
 const market = useMarketStore();
@@ -394,11 +394,11 @@ onBeforeUnmount(() => {
           </span>
           <div class="watch-left">
             <span class="watch-symbol">
-              <template v-for="part in [inst.split('_')[0]!, inst.split('_')[1]!]" :key="part">
+              <template v-for="(part, idx) in symbolParts(inst)" :key="part">
                 <img v-if="flagFor(part).type === 'flag'" :src="flagFor(part).value" :alt="part" class="flag-img" draggable="false" />
                 <span v-else class="flag-emoji">{{ flagFor(part).value }}</span>
                 {{ part }}
-                <span v-if="part === inst.split('_')[0]"> / </span>
+                <span v-if="idx === 0"> / </span>
               </template>
             </span>
             <span class="watch-sub">{{ providerOf(inst) === "binance" ? "BINANCE" : "OANDA" }}</span>

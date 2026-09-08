@@ -5,6 +5,14 @@
  *   metals    → inline SVG coin (gold / silver / platinum / palladium)
  * Returns null when nothing suitable exists; callers fall back to emoji.
  */
+import { displayInstrument } from "@traderkomak/shared";
+
+/** The two label halves of any instrument, provider-agnostic:
+ *  EUR_USD → ["EUR","USD"] · BTCUSDT → ["BTC","USDT"] · XAU_USD → ["XAU","USD"] */
+export function symbolParts(instrument: string): string[] {
+  return displayInstrument(instrument).split("/");
+}
+
 export function currencyFlagUrl(currency: string): string | null {
   // Fiat → country flags
   const flags: Record<string, string> = {

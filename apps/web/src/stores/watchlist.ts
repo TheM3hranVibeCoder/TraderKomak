@@ -3,14 +3,27 @@ import { ref, watch } from "vue";
 import { SEARCHABLE_INSTRUMENTS, displayInstrument, normalizeInstrument } from "@traderkomak/shared";
 
 const STORAGE_KEY = "tk-watchlist";
-const DEFAULT_WATCH = ["XAU_USD", "XAG_USD", "BTC_USD", "ETH_USD", "EUR_USD", "GBP_USD"];
+const DEFAULT_WATCH = ["XAU_USD", "XAG_USD", "BTCUSDT", "ETHUSDT", "EUR_USD", "GBP_USD"];
+
+/** Crypto rows moved from the OANDA pairs to the Binance spot pairs —
+ *  migrate stored lists once so existing users see the new rows too. */
+const MIGRATIONS: Record<string, string> = { BTC_USD: "BTCUSDT", ETH_USD: "ETHUSDT" };
 
 function loadWatch(): string[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed.filter((x) => typeof x === "string");
+      if (Array.isArray(parsed)) {
+        const migrated = parsed
+          .filter((x): x is string => typeof x === "string")
+          .map((x) => MIGRATIONS[x] ?? x);
+        // Keep the migration idempotent without rewriting history every load
+        if (parsed.some((x: string) => MIGRATIONS[x])) {
+          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated)); } catch {}
+        }
+        return migrated;
+      }
     }
   } catch {}
   return [...DEFAULT_WATCH];

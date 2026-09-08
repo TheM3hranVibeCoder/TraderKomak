@@ -8,7 +8,7 @@ import { useReplayStore } from "@/stores/replay";
 import { useDemoStore, demoValuePerPrice, type DemoSide, type DemoStatus, type DemoKind } from "@/stores/demo";
 import DemoPanel from "./DemoPanel.vue";
 import type { Candle } from "@traderkomak/shared";
-import { currencyFlagUrl, commodityIcon } from "@/utils/flags";
+import { currencyFlagUrl, commodityIcon, symbolParts } from "@/utils/flags";
 import { TIMEFRAME_SECONDS, instrumentPrecision, instrumentPipSize, providerOf, oandaDailyBucketStart, oandaH4BucketStart, oandaWeeklyBucketStart, oandaMonthlyBucketStart } from "@traderkomak/shared";
 
 const props = defineProps<{
@@ -461,11 +461,6 @@ function flagFor(currency: string): { type: "flag" | "icon"; value: string } {
   const icon = commodityIcon(currency);
   if (icon) return { type: "icon", value: icon };
   return { type: "icon", value: "◈" };
-}
-
-function displayWithSpaces(inst: string | undefined): string {
-  if (!inst) return "";
-  return inst.replace("_", " / ");
 }
 
 watch(
@@ -3169,7 +3164,7 @@ onBeforeUnmount(() => {
     <!-- Top-left symbol label like TradingView — transparent, only letters with flags -->
     <div v-if="instrument" class="chart-symbol-label">
       <span class="label-text">
-        <template v-for="(part, idx) in [instrument.split('_')[0]!, instrument.split('_')[1]!]" :key="part">
+        <template v-for="(part, idx) in symbolParts(instrument)" :key="part">
           <img v-if="flagFor(part).type === 'flag'" :src="flagFor(part).value" :alt="part" class="flag-img" />
           <span v-else class="flag-emoji">{{ flagFor(part).value }}</span>
           {{ part }}
