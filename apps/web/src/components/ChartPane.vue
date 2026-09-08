@@ -857,28 +857,77 @@ const snapXhair = ref<{ x: number; y: number; priceText: string; timeText: strin
 // When the magnet turns ON mid-drawing (e.g. Ctrl pressed while the cursor
 // is stationary), re-snap every in-progress anchor immediately — otherwise
 // the crosshair sticks but the half-drawn shape stays at its raw position
-// until the next mouse move.
+// until the next mouse move. When it turns OFF, the pre-snap positions are
+// restored and the raw cursor position is replayed through the active move
+// handlers, so the shape returns to the cursor exactly.
+let lastPtrClient: { clientX: number; clientY: number } | null = null;
+let preSnap: {
+  drawingObj: object | null;
+  drawing: { time1: number; price1: number; time2: number; price2: number } | null;
+  polyObj: object | null;
+  polyCursor: { time: number; price: number } | null;
+  posObj: object | null;
+  pos: { time1: number; entry: number } | null;
+} | null = null;
 watch(magnetActive, (on) => {
-  if (!on || !adapter) return;
-  if (drawingState.value) {
-    const d = drawingState.value;
-    const s1 = snapToCandle(d.time1, d.price1, true);
-    const s2 = snapToCandle(d.time2, d.price2, true);
-    drawingState.value = { time1: s1.time, price1: s1.price, time2: s2.time, price2: s2.price };
+  if (on) {
+    preSnap = null;
+    if (!adapter) return;
+    if (drawingState.value) {
+      const d = drawingState.value;
+      preSnap = { drawingObj: d, drawing: { ...d }, polyObj: null, polyCursor: null, posObj: null, pos: null };
+      // Mutate in place — the OFF branch restores via object identity
+      const s1 = snapToCandle(d.time1, d.price1, true);
+      const s2 = snapToCandle(d.time2, d.price2, true);
+      d.time1 = s1.time;
+      d.price1 = s1.price;
+      d.time2 = s2.time;
+      d.price2 = s2.price;
+    } else if (polyState.value) {
+      preSnap = { drawingObj: null, drawing: null, polyObj: polyState.value, polyCursor: polyState.value.cursor ? { ...polyState.value.cursor } : null, posObj: null, pos: null };
+      // Placed vertices stay as clicked; the moving cursor snaps.
+      const cur = polyState.value.cursor;
+      if (cur) {
+        const s = snapToCandle(cur.time, cur.price, true);
+        polyState.value.cursor = { time: s.time, price: s.price };
+      }
+    } else if (posState.value) {
+      preSnap = { drawingObj: null, drawing: null, polyObj: null, polyCursor: null, posObj: posState.value, pos: { ...posState.value } };
+      const s = snapToCandle(posState.value.time1, posState.value.entry, true);
+      posState.value.time1 = s.time;
+      posState.value.entry = s.price;
+      if (posCursor.value) {
+        const cs = snapToCandle(posCursor.value.time, posCursor.value.price, true);
+        posCursor.value = { time: cs.time, price: cs.price };
+      }
+    }
+    recalcRects();
+    return;
   }
-  if (polyState.value?.cursor) {
-    const cur = polyState.value.cursor;
-    const s = snapToCandle(cur.time, cur.price, true);
-    polyState.value.cursor = { time: s.time, price: s.price };
+  // ── Magnet OFF ──
+  snapXhair.value = null;
+  if (preSnap) {
+    // Restore only if it's still the same in-progress drawing session
+    if (preSnap.drawingObj && drawingState.value === preSnap.drawingObj && preSnap.drawing) {
+      drawingState.value = { ...preSnap.drawing };
+    }
+    if (preSnap.polyObj && polyState.value === preSnap.polyObj && preSnap.polyCursor) {
+      polyState.value.cursor = { ...preSnap.polyCursor };
+    }
+    if (preSnap.posObj && posState.value === preSnap.posObj && preSnap.pos) {
+      posState.value = { ...preSnap.pos };
+    }
+    preSnap = null;
   }
-  if (posState.value) {
-    const s = snapToCandle(posState.value.time1, posState.value.entry, true);
-    posState.value = { time1: s.time, entry: s.price };
-  }
-  if (posCursor.value) {
-    const cur = posCursor.value;
-    const cs = snapToCandle(cur.time, cur.price, true);
-    posCursor.value = { time: cs.time, price: cs.price };
+  // Replay the raw cursor position so cursor-driven corners/levels return
+  // to exactly where the pointer is.
+  const p = lastPtrClient;
+  if (p) {
+    window.dispatchEvent(new PointerEvent("pointermove", {
+      bubbles: true, cancelable: true,
+      clientX: p.clientX, clientY: p.clientY,
+      pointerId: 1, pointerType: "mouse", isPrimary: true, button: -1, buttons: 1,
+    }));
   }
   recalcRects();
 });
@@ -3185,7 +3234,6 @@ onMounted(async () => {
   // the native crosshair is hidden and this one sticks to candle high/low.
   // The last pointer position is kept so the snapped crosshair appears the
   // INSTANT Ctrl is held / the magnet latches — before any mouse movement.
-  let lastPtr: { clientX: number; clientY: number } | null = null;
   const computeSnapXhair = (clientX: number, clientY: number): void => {
     if (!drawingToolActive.value || !magnetActive.value || !adapter || !containerRef.value) {
       snapXhair.value = null;
@@ -3207,11 +3255,11 @@ onMounted(async () => {
       : null;
   };
   const onXhairMove = (e: MouseEvent) => {
-    lastPtr = { clientX: e.clientX, clientY: e.clientY };
+    lastPtrClient = { clientX: e.clientX, clientY: e.clientY };
     computeSnapXhair(e.clientX, e.clientY);
   };
   const onXhairLeave = () => {
-    lastPtr = null;
+    lastPtrClient = null;
     snapXhair.value = null;
   };
   el.addEventListener("pointermove", onXhairMove);
@@ -3224,7 +3272,7 @@ onMounted(async () => {
   const syncCrosshairMode = () => {
     const custom = drawingToolActive.value && magnetActive.value;
     adapter?.setCrosshairVisible(!custom);
-    if (custom && lastPtr) computeSnapXhair(lastPtr.clientX, lastPtr.clientY);
+    if (custom && lastPtrClient) computeSnapXhair(lastPtrClient.clientX, lastPtrClient.clientY);
     else if (!custom) snapXhair.value = null;
   };
   syncCrosshairMode();
