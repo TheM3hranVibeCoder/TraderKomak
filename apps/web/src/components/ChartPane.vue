@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onBeforeUnmount, nextTick, computed } from "vue";
 import { createChartAdapter, type ChartAdapter } from "@/chart/chartAdapter";
+import { createRectsPrimitive, type CanvasRect } from "@/chart/rectsPrimitive";
 import { useThemeStore } from "@/stores/theme";
 import { useMarketStore } from "@/stores/market";
 import { useDrawingsStore, type DrawingRect, type DrawingTrend, type DrawingPoly, type DrawingPosition, type DrawingHLine, type DrawingHRay, type DrawingVLine, type SingleKind, type SingleDrawing, type DashStyle } from "@/stores/drawings";
@@ -246,6 +247,7 @@ function fmtMoney(v: number): string {
 const themeStore = useThemeStore();
 const containerRef = ref<HTMLElement | null>(null);
 let adapter: ChartAdapter | null = null;
+let rectsPrimitive: ReturnType<typeof createRectsPrimitive> | null = null;
 let ro: ResizeObserver | null = null;
 
 /** Candles the chart actually shows: in replay mode everything after the
@@ -827,6 +829,10 @@ const linePanelPos = ref<{ x: number; y: number } | null>(null);
 const linePanelEl = ref<HTMLElement | null>(null);
 const linePaletteOpen = ref(false);
 const drawingToolActive = computed(() => drawingsStore.activeTool !== "cursor");
+/** Rectangles paint inside the chart's canvas via a series primitive
+ *  (frame-locked — no lag on slow machines). The DOM rect divs are skipped;
+ *  the invisible hit layer still handles all interaction. */
+const canvasRects = ref(true);
 // While a shape tool is active the chart must not pan under the finger —
 // touch drawing starts from pointerdown, and LWC's own touch handlers would
 // otherwise treat the same gesture as a pan and swallow the drawing.
@@ -1396,6 +1402,10 @@ const buildPolyPixel = (
   if (selectedPos.value && posPanelPos.value) positionPosPanel(selectedPos.value.id);
   const selS = drawingsStore.selectedSingle;
   if (selS && singlePanelPos.value) positionSinglePanel(selS.kind, selS.id);
+
+  // A drawing-only change (add/delete/color/opacity/select) may not otherwise
+  // trigger a canvas render — ask the chart to repaint the primitive.
+  rectsPrimitive?.requestUpdate();
 }
 
 /**
@@ -2783,6 +2793,45 @@ onMounted(async () => {
   adapter.setTheme(themeStore.theme === "dark");
   if (props.instrument) adapter.setInstrument(props.instrument);
   adapter.setData(displayCandles.value);
+
+  // Rectangles painted INSIDE the chart's render pass (see rectsPrimitive).
+  // Projections are injected and evaluated at draw time, so the canvas always
+  // shows the geometry of the frame being rendered — no overlay lag.
+  rectsPrimitive = createRectsPrimitive({
+    getRects: () => {
+      const out: CanvasRect[] = [];
+      for (const r of drawingsStore.getFor(market.instrument)) {
+        out.push({
+          time1: r.time1,
+          price1: r.price1,
+          time2: r.time2,
+          price2: r.price2,
+          color: r.color,
+          opacity: r.opacity,
+          filled: r.filled !== false,
+          selected: drawingsStore.selectedId === r.id,
+        });
+      }
+      // Live preview while drawing
+      const d = drawingState.value;
+      if (d && drawingsStore.activeTool === "rectangle") {
+        out.push({
+          time1: Math.min(d.time1, d.time2),
+          price1: Math.min(d.price1, d.price2),
+          time2: Math.max(d.time1, d.time2),
+          price2: Math.max(d.price1, d.price2),
+          color: "#2962ff",
+          opacity: 0.15,
+          filled: true,
+          selected: false,
+        });
+      }
+      return out;
+    },
+    timeToX: (t) => adapter?.timeToX(t) ?? null,
+    priceToY: (p) => adapter?.getPriceY(p) ?? null,
+  });
+  adapter.attachRectsPrimitive(rectsPrimitive);
   // Measure the price/time scales once LWC has laid out its panes
   requestAnimationFrame(updateAxisSizes);
   // Make sure drawings stored from a previous session render as soon as the
@@ -3209,21 +3258,23 @@ onBeforeUnmount(() => {
       :class="{ 'drawing-mode': drawingToolActive }"
       :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }"
     >
-      <div
-        v-for="rect in rectPixels"
-        :key="rect.id"
-        class="drawing-rect"
-        :class="{ preview: rect.id === '__preview', 'border-only': rect.filled === false }"
-        :style="{
-          left: rect.left + 'px',
-          top: rect.top + 'px',
-          width: rect.width + 'px',
-          height: rect.height + 'px',
-          backgroundColor: rect.filled ? rect.color : 'transparent',
-          opacity: rect.filled ? rect.opacity : 1,
-          borderColor: rect.color,
-        }"
-      ></div>
+      <template v-if="!canvasRects">
+        <div
+          v-for="rect in rectPixels"
+          :key="rect.id"
+          class="drawing-rect"
+          :class="{ preview: rect.id === '__preview', 'border-only': rect.filled === false }"
+          :style="{
+            left: rect.left + 'px',
+            top: rect.top + 'px',
+            width: rect.width + 'px',
+            height: rect.height + 'px',
+            backgroundColor: rect.filled ? rect.color : 'transparent',
+            opacity: rect.filled ? rect.opacity : 1,
+            borderColor: rect.color,
+          }"
+        ></div>
+      </template>
       <!-- Trendlines render as SVG so they can be any angle. They come AFTER
            the rectangles in DOM order so a line drawn over a rect body paints
            on top of it (TradingView-style). -->
