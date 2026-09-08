@@ -853,6 +853,35 @@ const magnetActive = computed(() => drawingsStore.magnetActive);
 /** Snapping crosshair: when a drawing tool + magnet are active the native
  *  crosshair hides and this one draws stuck to the snapped candle level. */
 const snapXhair = ref<{ x: number; y: number; priceText: string; timeText: string } | null>(null);
+
+// When the magnet turns ON mid-drawing (e.g. Ctrl pressed while the cursor
+// is stationary), re-snap every in-progress anchor immediately — otherwise
+// the crosshair sticks but the half-drawn shape stays at its raw position
+// until the next mouse move.
+watch(magnetActive, (on) => {
+  if (!on || !adapter) return;
+  if (drawingState.value) {
+    const d = drawingState.value;
+    const s1 = snapToCandle(d.time1, d.price1, true);
+    const s2 = snapToCandle(d.time2, d.price2, true);
+    drawingState.value = { time1: s1.time, price1: s1.price, time2: s2.time, price2: s2.price };
+  }
+  if (polyState.value?.cursor) {
+    const cur = polyState.value.cursor;
+    const s = snapToCandle(cur.time, cur.price, true);
+    polyState.value.cursor = { time: s.time, price: s.price };
+  }
+  if (posState.value) {
+    const s = snapToCandle(posState.value.time1, posState.value.entry, true);
+    posState.value = { time1: s.time, entry: s.price };
+  }
+  if (posCursor.value) {
+    const cur = posCursor.value;
+    const cs = snapToCandle(cur.time, cur.price, true);
+    posCursor.value = { time: cs.time, price: cs.price };
+  }
+  recalcRects();
+});
 // While a shape tool is active the chart must not pan under the finger —
 // touch drawing starts from pointerdown, and LWC's own touch handlers would
 // otherwise treat the same gesture as a pan and swallow the drawing.
@@ -1923,10 +1952,14 @@ function onResizeStart(e: MouseEvent, handle: string): void {
     const p = adapter.yToPrice(my);
     if (t === null || p === null) return;
 
+    // Magnet: snap the dragged anchor to the candle high/low (only the
+    // dragged axis is applied, so a vertical-edge drag stays vertical).
+    const s = snapToCandle(t, p, magnetActive.value);
+
     // Only the dragged edge moves; the opposite edge stays anchored.
     const newRect: Partial<DrawingRect> = {};
-    if (edgeTime) newRect[edgeTime] = t;
-    if (edgePrice) newRect[edgePrice] = p;
+    if (edgeTime) newRect[edgeTime] = s.time;
+    if (edgePrice) newRect[edgePrice] = s.price;
 
     drawingsStore.updateRect(market.instrument, rect.id, newRect);
     // Update selectedRect reference
@@ -2070,7 +2103,8 @@ function onTrendHandleStart(e: MouseEvent, id: string, which: 1 | 2): void {
     const t = adapter.xToTime(ev.clientX - r.left);
     const p = adapter.yToPrice(ev.clientY - r.top);
     if (t === null || p === null) return;
-    drawingsStore.updateLine(market.instrument, id, which === 1 ? { time1: t, price1: p } : { time2: t, price2: p });
+    const s = snapToCandle(t, p, magnetActive.value);
+    drawingsStore.updateLine(market.instrument, id, which === 1 ? { time1: s.time, price1: s.price } : { time2: s.time, price2: s.price });
     const updated = drawingsStore.getLinesFor(market.instrument).find((x) => x.id === id);
     if (updated) selectedLine.value = updated;
     recalcRects();
@@ -2251,9 +2285,10 @@ function onPolyVertexStart(e: MouseEvent, id: string, index: number): void {
     const t = adapter.xToTime(ev.clientX - r.left);
     const p = adapter.yToPrice(ev.clientY - r.top);
     if (t === null || p === null) return;
+    const s = snapToCandle(t, p, magnetActive.value);
     const poly = drawingsStore.getPolysFor(market.instrument).find((x) => x.id === id);
     if (!poly || !poly.points[index]) return;
-    const next = poly.points.map((pt, i) => (i === index ? { time: t, price: p } : { ...pt }));
+    const next = poly.points.map((pt, i) => (i === index ? { time: s.time, price: s.price } : { ...pt }));
     drawingsStore.updatePolyPoints(market.instrument, id, next);
     const updated = drawingsStore.getPolysFor(market.instrument).find((x) => x.id === id);
     if (updated) selectedPoly.value = updated;
@@ -2475,10 +2510,13 @@ function onPosLevelStart(e: MouseEvent, id: string, which: "tp" | "entry" | "sl"
   const onMove = (ev: MouseEvent) => {
     if (!adapter || !containerRef.value) return;
     const r = containerRef.value.getBoundingClientRect();
+    const t = adapter.xToTime(ev.clientX - r.left);
     const p = adapter.yToPrice(ev.clientY - r.top);
-    if (p === null) return;
+    if (t === null || p === null) return;
+    // Magnet: snap the level to the candle high/low under the cursor
+    const sp = snapToCandle(t, p, magnetActive.value).price;
     const cur = drawingsStore.getPositionsFor(market.instrument).find((x) => x.id === id);
-    const price = cur ? clampPosPrice(cur, which, p) : p;
+    const price = cur ? clampPosPrice(cur, which, sp) : sp;
     drawingsStore.updatePosition(market.instrument, id, { [which]: price });
     const updated = drawingsStore.getPositionsFor(market.instrument).find((x) => x.id === id);
     if (updated) selectedPos.value = updated;
@@ -2506,7 +2544,11 @@ function onPosEdgeStart(e: MouseEvent, id: string, which: "time1" | "time2"): vo
     const r = containerRef.value.getBoundingClientRect();
     const t = adapter.xToTime(ev.clientX - r.left);
     if (t === null) return;
-    drawingsStore.updatePosition(market.instrument, id, { [which]: t });
+    // Magnet: snap the edge to the candle under the cursor (needs a price
+    // for the snap lookup; only the snapped time is applied)
+    const p = adapter.yToPrice(ev.clientY - r.top);
+    const st = p !== null ? snapToCandle(t, p, magnetActive.value) : null;
+    drawingsStore.updatePosition(market.instrument, id, { [which]: st ? st.time : t });
     const updated = drawingsStore.getPositionsFor(market.instrument).find((x) => x.id === id);
     if (updated) selectedPos.value = updated;
     recalcRects();
@@ -2541,9 +2583,10 @@ function onPosCornerStart(
     const t = adapter.xToTime(ev.clientX - r.left);
     const p = adapter.yToPrice(ev.clientY - r.top);
     if (t === null || p === null) return;
+    const s = snapToCandle(t, p, magnetActive.value);
     const cur = drawingsStore.getPositionsFor(market.instrument).find((x) => x.id === id);
-    const price = cur ? clampPosPrice(cur, which, p) : p;
-    drawingsStore.updatePosition(market.instrument, id, { [which]: price, [side]: t });
+    const price = cur ? clampPosPrice(cur, which, s.price) : s.price;
+    drawingsStore.updatePosition(market.instrument, id, { [which]: price, [side]: s.time });
     const updated = drawingsStore.getPositionsFor(market.instrument).find((x) => x.id === id);
     if (updated) selectedPos.value = updated;
     recalcRects();
