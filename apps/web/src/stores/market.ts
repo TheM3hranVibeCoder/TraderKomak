@@ -12,7 +12,9 @@ import type { Candle, Timeframe } from "@traderkomak/shared";
 import {
   DEFAULT_INSTRUMENT,
   DEFAULT_TIMEFRAME,
+  isInstrument,
   isTimeframe,
+  normalizeInstrument,
   TIMEFRAME_SECONDS,
 } from "@traderkomak/shared";
 import { fetchCandles } from "@/services/api";
@@ -54,9 +56,12 @@ function saveCache(inst: string, tf: string, all: Candle[]): void {
 }
 
 function loadPersistedInstrument(): string {
-  // The site always opens on the default symbol (XAU/USD) — a refresh or a
-  // brand-new visit starts from the same chart. The last-used symbol is
-  // still persisted for anything that wants to read it, but not restored.
+  // Refresh restores the symbol the visitor was last viewing; a brand-new
+  // visitor (nothing saved yet) gets the default (XAU/USD).
+  try {
+    const v = localStorage.getItem("tk-instrument");
+    if (v && isInstrument(v)) return normalizeInstrument(v);
+  } catch {}
   return DEFAULT_INSTRUMENT;
 }
 function loadPersistedTimeframe(): typeof DEFAULT_TIMEFRAME {
