@@ -161,10 +161,11 @@ function onSearchBlur() {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   background: var(--bg-toolbar);
-  backdrop-filter: blur(16px) saturate(1.2);
-  border-bottom: none;
+  backdrop-filter: blur(22px) saturate(1.4);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  border-bottom: 1px solid var(--border);
   box-shadow: var(--toolbar-shadow);
   flex-shrink: 0;
   flex-wrap: wrap;
@@ -175,7 +176,7 @@ function onSearchBlur() {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent 0%, rgba(41, 98, 255, 0.03) 50%, transparent 100%);
+  background: linear-gradient(90deg, transparent 0%, rgba(99, 102, 241, 0.05) 50%, transparent 100%);
   pointer-events: none;
 }
 .left,
@@ -195,6 +196,9 @@ function onSearchBlur() {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  padding-right: 10px;
+  border-right: 1px solid var(--border);
+  margin-right: 2px;
 }
 .brand-mark {
   width: 30px;
@@ -205,22 +209,25 @@ function onSearchBlur() {
   color: #fff;
   font-weight: 900;
   font-size: 12px;
-  border-radius: 8px;
+  border-radius: 9px;
   letter-spacing: 0.04em;
   box-shadow:
-    0 3px 12px rgba(41, 98, 255, 0.35),
-    0 1px 0 rgba(255, 255, 255, 0.2) inset;
+    0 4px 16px rgba(59, 130, 246, 0.4),
+    0 1px 0 rgba(255, 255, 255, 0.35) inset;
 }
 .brand-name {
   font-weight: 800;
   font-size: 14px;
   letter-spacing: -0.02em;
-  color: var(--text);
+  background: linear-gradient(120deg, var(--text) 30%, var(--accent) 75%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
   white-space: nowrap;
 }
 .search-box {
   position: relative;
-  width: 180px;
+  width: 190px;
   flex-shrink: 0;
 }
 .search-icon {
@@ -245,9 +252,11 @@ function onSearchBlur() {
 .search-input {
   width: 100%;
   padding: 8px 30px 8px 30px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
+  border-radius: 11px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   color: var(--text);
   font-size: 12px;
   font-weight: 700;
@@ -263,7 +272,7 @@ function onSearchBlur() {
 }
 .search-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(41, 98, 255, 0.12);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15), var(--glow-accent);
 }
 .search-clear {
   position: absolute;
@@ -294,9 +303,9 @@ function onSearchBlur() {
   justify-content: center;
   width: 36px;
   height: 34px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
   color: var(--text-muted);
   cursor: pointer;
   transition: all 200ms;
@@ -306,18 +315,19 @@ function onSearchBlur() {
   border-color: #2aabee;
   color: #2aabee;
   background: var(--btn-bg);
+  box-shadow: 0 4px 14px rgba(42, 171, 238, 0.25);
 }
 .theme-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   /* align with the 36px watchlist rail below (cancels the toolbar padding) */
-  margin-right: -12px;
+  margin-right: -14px;
   width: 36px;
   height: 34px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
   cursor: pointer;
   transition: all 200ms;
   font-size: 14px;
@@ -325,29 +335,30 @@ function onSearchBlur() {
 }
 .theme-btn:hover {
   border-color: var(--border-strong);
-  background: var(--btn-bg);
+  background: var(--btn-hover);
+  box-shadow: var(--card-shadow);
 }
 /* Dark mode: panel-colored bg + hairline border vanish against the
    toolbar gradient — brighten the border and lift the surface so the
    button stays visible */
 .theme-btn.dark {
-  border-color: #3a4155;
-  background: #1c2233;
+  border-color: var(--glass-border);
+  background: var(--glass-bg);
   color: #f1c40f;
 }
 .theme-btn.dark:hover {
-  border-color: #4a5470;
-  background: #232b40;
+  border-color: var(--border-strong);
+  background: var(--btn-hover);
 }
 .demo-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   height: 36px;
-  padding: 0 12px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
+  padding: 0 13px;
+  border-radius: 11px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
   color: var(--text);
   font-size: 12px;
   font-weight: 700;
@@ -359,24 +370,25 @@ function onSearchBlur() {
 }
 .demo-btn:hover {
   transform: translateY(-1px);
-  border-color: #26a69a;
-  color: #26a69a;
+  border-color: rgba(45, 212, 167, 0.55);
+  color: var(--live);
+  box-shadow: 0 6px 18px rgba(45, 212, 167, 0.18);
 }
 .demo-btn.active {
-  background: linear-gradient(135deg, #26a69a, #1b8a80);
+  background: linear-gradient(135deg, #10b981, #0d9488);
   border-color: transparent;
   color: #fff;
-  box-shadow: 0 3px 12px rgba(38, 166, 154, 0.35);
+  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.4);
 }
 .replay-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   height: 36px;
-  padding: 0 12px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
+  padding: 0 13px;
+  border-radius: 11px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
   color: var(--text);
   font-size: 12px;
   font-weight: 700;
@@ -390,12 +402,13 @@ function onSearchBlur() {
   transform: translateY(-1px);
   border-color: var(--accent);
   color: var(--accent);
+  box-shadow: var(--glow-accent);
 }
 .replay-btn.active {
   background: var(--accent-gradient);
   border-color: transparent;
   color: #fff;
-  box-shadow: 0 3px 12px rgba(41, 98, 255, 0.35);
+  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.4);
 }
 @media (max-width: 860px) {
   .toolbar {

@@ -150,7 +150,9 @@ onBeforeUnmount(() => {
 .drawing-toolbar {
   width: 42px;
   min-width: 42px;
-  background: var(--bg-panel);
+  background: var(--glass-bg);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -172,13 +174,23 @@ onBeforeUnmount(() => {
   display: grid;
   place-items: center;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 9px;
   background: transparent;
   color: var(--text-muted);
   font-size: 15px;
   cursor: pointer;
-  transition: all 150ms;
+  transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
   flex-shrink: 0;
+}
+.tool-btn:hover {
+  background: var(--glass-bg-hover);
+  border-color: var(--glass-border);
+  color: var(--text);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(2, 6, 18, 0.25);
+}
+.tool-btn:active {
+  transform: translateY(0);
 }
 .tool-ic {
   display: grid;
@@ -188,15 +200,11 @@ onBeforeUnmount(() => {
 .tool-ic svg {
   display: block;
 }
-.tool-btn:hover {
-  background: var(--btn-bg);
-  color: var(--text);
-}
 .tool-btn.active {
   background: var(--accent-gradient);
   color: #fff;
   border-color: transparent;
-  box-shadow: 0 2px 8px rgba(41, 98, 255, 0.3);
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.45), 0 1px 0 rgba(255, 255, 255, 0.25) inset;
 }
 .tool-btn.danger:hover {
   background: rgba(239, 83, 80, 0.12);

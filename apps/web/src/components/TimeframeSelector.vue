@@ -107,11 +107,13 @@ onBeforeUnmount(() => document.removeEventListener("click", onClickOutside));
 .fav-bar {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   padding: 3px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  border-radius: 11px;
   box-shadow: var(--card-shadow);
 }
 .fav-btn {
@@ -132,7 +134,7 @@ onBeforeUnmount(() => document.removeEventListener("click", onClickOutside));
 .fav-btn.active {
   background: var(--accent-gradient);
   color: #fff;
-  box-shadow: 0 3px 10px rgba(41, 98, 255, 0.3);
+  box-shadow: 0 3px 12px rgba(59, 130, 246, 0.4);
 }
 .dropdown {
   position: relative;
@@ -142,9 +144,11 @@ onBeforeUnmount(() => document.removeEventListener("click", onClickOutside));
   align-items: center;
   gap: 6px;
   padding: 7px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
+  border-radius: 11px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   color: var(--text);
   font-size: 12px;
   font-weight: 800;
@@ -177,14 +181,15 @@ onBeforeUnmount(() => document.removeEventListener("click", onClickOutside));
   left: 0;
   min-width: 200px;
   background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  backdrop-filter: blur(22px) saturate(1.3);
+  -webkit-backdrop-filter: blur(22px) saturate(1.3);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
   box-shadow:
-    0 12px 32px rgba(0, 0, 0, 0.15),
-    0 1px 0 rgba(255, 255, 255, 0.04) inset;
+    0 18px 44px rgba(2, 6, 18, 0.35),
+    0 1px 0 var(--glass-highlight) inset;
   padding: 6px;
   z-index: 50;
-  backdrop-filter: blur(16px);
   animation: menuIn 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 @keyframes menuIn {

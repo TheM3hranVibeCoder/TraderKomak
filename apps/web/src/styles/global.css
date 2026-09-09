@@ -1,62 +1,82 @@
 :root,
 .theme-dark {
-  --bg: #0a0e1a;
-  --bg-panel: #131722;
-  --bg-toolbar: linear-gradient(135deg, #0f1423 0%, #1a1f2e 50%, #131722 100%);
-  --bg-app: radial-gradient(1200px 600px at 20% -10%, rgba(41, 98, 255, 0.08), transparent 60%),
-    radial-gradient(900px 500px at 90% 0%, rgba(106, 92, 255, 0.06), transparent 60%),
-    linear-gradient(180deg, #0a0e1a 0%, #0e1116 100%);
-  --border: #232836;
-  --border-strong: #2a2e39;
-  --text: #e6e8ee;
-  --text-muted: #8b8fa3;
-  --accent: #2962ff;
-  --accent-hover: #1e4bd8;
-  --accent-gradient: linear-gradient(135deg, #2962ff 0%, #6a5cff 50%, #8b5cf6 100%);
-  --accent-gradient-hover: linear-gradient(135deg, #1e4bd8 0%, #5a4ae6 50%, #7c3aed 100%);
-  --live: #26a69a;
-  --offline: #ef5350;
-  --reconnecting: #ff9800;
+  --bg: #060a13;
+  --bg-panel: rgba(16, 22, 38, 0.72);
+  --bg-panel-solid: #101626;
+  --bg-toolbar: linear-gradient(135deg, rgba(13, 18, 32, 0.82) 0%, rgba(20, 26, 44, 0.72) 50%, rgba(13, 18, 32, 0.82) 100%);
+  --bg-app: radial-gradient(1300px 700px at 15% -10%, rgba(41, 98, 255, 0.14), transparent 55%),
+    radial-gradient(1000px 600px at 85% -5%, rgba(139, 92, 246, 0.1), transparent 55%),
+    radial-gradient(900px 700px at 50% 110%, rgba(236, 72, 153, 0.05), transparent 60%),
+    linear-gradient(180deg, #060a13 0%, #0a0e18 55%, #080b14 100%);
+  --border: rgba(148, 163, 205, 0.14);
+  --border-strong: rgba(148, 163, 205, 0.3);
+  --glass-bg: rgba(16, 22, 38, 0.55);
+  --glass-bg-hover: rgba(255, 255, 255, 0.07);
+  --glass-border: rgba(148, 163, 205, 0.18);
+  --glass-highlight: rgba(255, 255, 255, 0.06);
+  --text: #e8eaf2;
+  --text-muted: #8f95ab;
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #6366f1 50%, #8b5cf6 100%);
+  --accent-gradient-hover: linear-gradient(135deg, #2563eb 0%, #4f46e5 50%, #7c3aed 100%);
+  --live: #2dd4a7;
+  --offline: #f87171;
+  --reconnecting: #fbbf24;
   --connecting: #868993;
-  --card-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
-  --toolbar-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 2px 6px rgba(0, 0, 0, 0.12);
+  --card-shadow: 0 10px 30px rgba(2, 6, 18, 0.45), 0 1px 0 rgba(255, 255, 255, 0.05) inset;
+  --glass-shadow: 0 12px 34px rgba(2, 6, 18, 0.5), 0 1px 0 rgba(255, 255, 255, 0.07) inset;
+  --toolbar-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 8px 28px rgba(2, 6, 18, 0.35);
   --btn-bg: rgba(255, 255, 255, 0.06);
-  --btn-hover: rgba(255, 255, 255, 0.1);
-  --chart-bg: #131722;
-  --chart-grid: #1e222d;
+  --btn-hover: rgba(255, 255, 255, 0.11);
+  --chart-bg: #0d1220;
+  --chart-grid: rgba(148, 163, 205, 0.06);
   /* Painted in CSS so the drawing layer can sit between it and the candles */
-  --chart-bg-gradient: linear-gradient(180deg, #1e1b4b 0%, #0f172a 100%);
-  --bg-watchlist: linear-gradient(180deg, #171e38 0%, #131a30 35%, #1b1836 70%, #12172b 100%);
+  --chart-bg-gradient: linear-gradient(180deg, #171a3a 0%, #0b1120 100%);
+  --bg-watchlist: linear-gradient(180deg, rgba(18, 24, 44, 0.82) 0%, rgba(15, 20, 38, 0.72) 40%, rgba(22, 18, 42, 0.78) 75%, rgba(13, 17, 32, 0.82) 100%);
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --glow-accent: 0 0 0 1px rgba(59, 130, 246, 0.35), 0 4px 18px rgba(59, 130, 246, 0.25);
 }
 
 .theme-light,
 [data-theme="light"] {
-  --bg: #f6f8fc;
-  --bg-panel: #ffffff;
-  --bg-toolbar: linear-gradient(135deg, #ffffff 0%, #f0f4ff 50%, #eef2ff 100%);
-  --bg-app: radial-gradient(1200px 600px at 20% -10%, rgba(41, 98, 255, 0.07), transparent 60%),
-    radial-gradient(900px 500px at 90% 0%, rgba(139, 92, 246, 0.05), transparent 60%),
-    linear-gradient(180deg, #f6f8fc 0%, #eef2ff 100%);
-  --border: #e2e8f0;
-  --border-strong: #d1d9e8;
+  --bg: #f6f8fd;
+  --bg-panel: rgba(255, 255, 255, 0.72);
+  --bg-panel-solid: #ffffff;
+  --bg-toolbar: linear-gradient(135deg, rgba(255, 255, 255, 0.85) 0%, rgba(244, 247, 255, 0.72) 50%, rgba(250, 245, 255, 0.78) 100%);
+  --bg-app: radial-gradient(1300px 700px at 15% -10%, rgba(59, 130, 246, 0.1), transparent 55%),
+    radial-gradient(1000px 600px at 85% -5%, rgba(139, 92, 246, 0.08), transparent 55%),
+    radial-gradient(900px 700px at 50% 110%, rgba(236, 72, 153, 0.05), transparent 60%),
+    linear-gradient(180deg, #f8fafd 0%, #f1f4fc 55%, #f6f3fc 100%);
+  --border: rgba(15, 23, 42, 0.08);
+  --border-strong: rgba(15, 23, 42, 0.16);
+  --glass-bg: rgba(255, 255, 255, 0.6);
+  --glass-bg-hover: rgba(255, 255, 255, 0.9);
+  --glass-border: rgba(255, 255, 255, 0.75);
+  --glass-highlight: rgba(255, 255, 255, 0.85);
   --text: #0f172a;
   --text-muted: #64748b;
   --accent: #2962ff;
   --accent-hover: #1e4bd8;
-  --accent-gradient: linear-gradient(135deg, #2962ff 0%, #6a5cff 50%, #8b5cf6 100%);
-  --accent-gradient-hover: linear-gradient(135deg, #1e4bd8 0%, #5a4ae6 50%, #7c3aed 100%);
+  --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #6366f1 50%, #8b5cf6 100%);
+  --accent-gradient-hover: linear-gradient(135deg, #2563eb 0%, #4f46e5 50%, #7c3aed 100%);
   --live: #0d9488;
   --offline: #dc2626;
   --reconnecting: #ea580c;
   --connecting: #64748b;
-  --card-shadow: 0 8px 24px rgba(15, 23, 42, 0.06), 0 1px 0 rgba(255, 255, 255, 0.8) inset;
-  --toolbar-shadow: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 4px 20px rgba(15, 23, 42, 0.06);
-  --btn-bg: rgba(15, 23, 42, 0.06);
-  --btn-hover: rgba(15, 23, 42, 0.1);
+  --card-shadow: 0 10px 28px rgba(15, 23, 42, 0.07), 0 1px 0 rgba(255, 255, 255, 0.9) inset;
+  --glass-shadow: 0 14px 34px rgba(15, 23, 42, 0.09), 0 1px 0 rgba(255, 255, 255, 0.95) inset;
+  --toolbar-shadow: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 8px 28px rgba(15, 23, 42, 0.07);
+  --btn-bg: rgba(15, 23, 42, 0.05);
+  --btn-hover: rgba(15, 23, 42, 0.09);
   --chart-bg: #ffffff;
   --chart-grid: #f1f5f9;
-  --chart-bg-gradient: linear-gradient(180deg, #e0e7ff 0%, #fef3f8 100%);
-  --bg-watchlist: linear-gradient(180deg, #eef2ff 0%, #f7f8ff 35%, #fdf4fa 70%, #eef4ff 100%);
+  --chart-bg-gradient: linear-gradient(180deg, #e4e9ff 0%, #fdf2f8 100%);
+  --bg-watchlist: linear-gradient(180deg, rgba(240, 244, 255, 0.85) 0%, rgba(248, 250, 255, 0.72) 40%, rgba(252, 244, 252, 0.78) 75%, rgba(238, 243, 255, 0.85) 100%);
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --glow-accent: 0 0 0 1px rgba(41, 98, 255, 0.25), 0 4px 18px rgba(41, 98, 255, 0.16);
 }
 
 *,
@@ -78,6 +98,8 @@ body {
   transition:
     background 600ms cubic-bezier(0.4, 0, 0.2, 1),
     color 500ms cubic-bezier(0.4, 0, 0.2, 1);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 #app {
@@ -106,15 +128,15 @@ body {
 
 /* Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
   background: var(--border-strong);
-  border-radius: 3px;
+  border-radius: 99px;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);

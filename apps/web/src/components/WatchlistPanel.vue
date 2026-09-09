@@ -422,6 +422,8 @@ onBeforeUnmount(() => {
   min-width: 0;
   max-width: 320px;
   background: var(--bg-watchlist);
+  backdrop-filter: blur(20px) saturate(1.3);
+  -webkit-backdrop-filter: blur(20px) saturate(1.3);
   border-left: 1px solid transparent;
   display: flex;
   flex-direction: column;
@@ -480,18 +482,21 @@ onBeforeUnmount(() => {
 .search-input {
   width: 100%;
   padding: 9px 30px 9px 30px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-app);
+  border-radius: 11px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   color: var(--text);
   font-size: 12px;
   font-weight: 600;
   outline: none;
   transition: all 180ms;
+  box-shadow: var(--card-shadow);
 }
 .search-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(41, 98, 255, 0.12);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14), var(--glow-accent);
 }
 .search-input::placeholder {
   text-transform: lowercase;
@@ -549,6 +554,18 @@ onBeforeUnmount(() => {
   -webkit-user-drag: none; /* no native ghost image when dragging rows */
   pointer-events: none;
 }
+/* Round coin/metal logos are square — the 16×12 flag frame crops their
+   tops and bottoms. Crypto icons come from jsDelivr, metals are data-URIs. */
+.flag-img[src*="jsdelivr"],
+.flag-img[src^="data:"] {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  object-fit: contain;
+  background: var(--btn-bg);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+  vertical-align: middle;
+}
 .flag-emoji {
   font-size: 12px;
   line-height: 1;
@@ -558,9 +575,9 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding: 9px 8px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
   cursor: pointer;
   transition: all 180ms;
   position: relative;
@@ -571,12 +588,13 @@ onBeforeUnmount(() => {
 .watch-item:hover {
   border-color: var(--border-strong);
   transform: translateY(-1px);
-  box-shadow: var(--card-shadow);
+  box-shadow: var(--glass-shadow);
+  background: var(--glass-bg-hover);
 }
 .watch-item.active {
-  border-color: var(--accent);
-  background: linear-gradient(135deg, rgba(41, 98, 255, 0.08) 0%, rgba(106, 92, 255, 0.06) 100%);
-  box-shadow: 0 0 0 1px rgba(41, 98, 255, 0.12);
+  border-color: rgba(59, 130, 246, 0.55);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.12) 0%, rgba(139, 92, 246, 0.08) 100%);
+  box-shadow: var(--glow-accent);
 }
 /* Picked up: lifts with a slight scale + tilt and an accent ring; transform
    (cursor tracking) stays untransitioned so the row never lags the pointer */
@@ -694,12 +712,13 @@ onBeforeUnmount(() => {
   font-weight: 800;
   font-size: 12px;
   color: var(--text);
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
 }
 .watch-sub {
-  font-size: 10px;
+  font-size: 9px;
+  font-weight: 700;
   color: var(--text-muted);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 .watch-right {
@@ -710,26 +729,27 @@ onBeforeUnmount(() => {
   min-width: 76px;
 }
 .watch-price {
-  font-weight: 700;
+  font-weight: 800;
   font-size: 12px;
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 .watch-change {
-  font-size: 11px;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 99px;
+  font-variant-numeric: tabular-nums;
   background: var(--btn-bg);
   color: var(--text-muted);
 }
 .watch-change.up {
-  background: rgba(38, 166, 154, 0.12);
-  color: #26a69a;
+  background: rgba(45, 212, 167, 0.14);
+  color: var(--live);
 }
 .watch-change.down {
-  background: rgba(239, 83, 80, 0.12);
-  color: #ef5350;
+  background: rgba(248, 113, 113, 0.14);
+  color: var(--offline);
 }
 .watch-remove {
   width: 22px;

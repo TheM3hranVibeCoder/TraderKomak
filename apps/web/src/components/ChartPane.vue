@@ -628,6 +628,10 @@ let windowLostCb: (() => void) | null = null;
 type AnyListener = EventListener;
 const countdown = ref("");
 const marketClosed = ref(false);
+/** Countdown tag width/right — matches the native price label geometry
+ *  (width = price text + padding; left-aligned with the price axis). */
+const tagW = ref(0);
+const tagRight = ref(0);
 
 /* Axis tag: the timer, styled identical to LWC's native price label and
    stacked flush directly beneath it. */
@@ -689,6 +693,17 @@ function updateBadgePosition(): void {
   }
 
   smallTagH.value = adapter.getPriceLabelHeight(); // matches native label
+
+  // Match the native live-price label: its width follows the price text
+  // (text + ~8px side padding) and it is LEFT-aligned inside the price
+  // axis — so the tag uses the same width and the same left offset
+  // (axis width − tag width). Longer countdown texts on large timeframes
+  // ("2d 04:33:12") widen the tag leftward instead of overflowing.
+  const priceText = last.close.toFixed(instrumentPrecision(market.instrument));
+  const nativeW = adapter.getPriceLabelWidth(priceText) + 16;
+  const textW = adapter.getPriceLabelWidth(countdown.value || "0") + 12; // tag padding 6px×2
+  tagW.value = Math.max(nativeW, textW);
+  tagRight.value = Math.max(0, axisRightW.value - tagW.value);
 
   const timeAxis = 26;
   const paneH = containerRef.value.clientHeight - timeAxis;
@@ -3463,7 +3478,7 @@ onBeforeUnmount(() => {
     <div
       v-if="tagVisible && candles.length > 0"
       class="axis-tag"
-      :style="{ top: timerTop + 'px', height: smallTagH + 'px' }"
+      :style="{ top: timerTop + 'px', height: smallTagH + 'px', width: tagW + 'px', right: tagRight + 'px' }"
       :title="marketClosed ? 'Forex market is closed' : `Next ${market.timeframe} candle in`"
     >
       {{ countdown }}
@@ -4519,10 +4534,10 @@ onBeforeUnmount(() => {
   background: var(--chart-bg-gradient);
   display: flex;
   flex-direction: column;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   margin: 8px;
   overflow: hidden;
-  box-shadow: var(--card-shadow);
+  box-shadow: var(--glass-shadow);
   border: 1px solid var(--border);
 }
 .chart-container {
@@ -4568,6 +4583,18 @@ onBeforeUnmount(() => {
   border-radius: 2px;
   vertical-align: middle;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+/* Round coin/metal logos are square — the 16×12 flag frame crops their
+   tops and bottoms. Crypto icons come from jsDelivr, metals are data-URIs. */
+.flag-img[src*="jsdelivr"],
+.flag-img[src^="data:"] {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  object-fit: contain;
+  background: var(--btn-bg);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+  vertical-align: middle;
 }
 .flag-emoji {
   font-size: 12px;
