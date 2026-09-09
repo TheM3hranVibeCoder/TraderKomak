@@ -49,6 +49,9 @@ const demoPeriod = ref<"day" | "week" | "month" | "all">("week");
 /** Height of the demo bottom panel (measured) — the replay panel floats
  *  just above it while both are active. */
 const demoBottomH = ref(96);
+/** Visible chart height (excludes time axis) — hides demo tags for levels
+ *  that scrolled out of the chart instead of drawing them over the panel. */
+const demoChartH = ref(0);
 const demoMini = ref(false);
 
 function demoLevelY(price: number): number | null {
@@ -115,7 +118,7 @@ function rebuildDemoLines(): void {
     const lotEff =
       demo.sizeMode === "lot"
         ? demo.lot
-        : distSl > 0 ? Math.max(0.01, +(risk / (distSl * vpp)).toFixed(2)) : demo.lot;
+        : distSl > 0 ? Math.min(100, Math.max(0.01, +(risk / (distSl * vpp)).toFixed(2))) : demo.lot;
     const reward = distTp * lotEff * vpp;
     const rr = distSl > 0 ? +(distTp / distSl).toFixed(2) : null;
     const ySl = demoLevelY(d.sl);
@@ -132,14 +135,24 @@ function rebuildDemoLines(): void {
 
 function onDemoLineDragStart(e: MouseEvent, id: string, level: "entry" | "sl" | "tp"): void {
   if (e.button !== 0 || !adapter || !containerRef.value) return;
+  // The entry of an OPEN position is filled — it must not move. Only
+  // pending (limit) orders and the draft keep a draggable entry.
+  if (id !== "__draft" && level === "entry") {
+    const pos = demo.positions.find((x) => x.id === id);
+    if (pos && pos.status === "open") return;
+  }
   e.preventDefault();
   e.stopPropagation();
   demoLineDrag = { id, level };
   const move = (ev: MouseEvent) => {
     if (!demoLineDrag || !adapter || !containerRef.value) return;
     const r = containerRef.value.getBoundingClientRect();
-    const p = adapter.yToPrice(ev.clientY - r.top);
-    if (p === null) return;
+    // Clamp the cursor to the chart area: yToPrice extrapolates wildly
+    // outside it, so a fast drag into the demo panel / axes would set
+    // SL/TP to absurd prices (e.g. -999999).
+    const cy = Math.min(Math.max(ev.clientY, r.top + 2), r.bottom - 2);
+    const p = adapter.yToPrice(cy - r.top);
+    if (p === null || !Number.isFinite(p) || p <= 0) return;
     // Draft lines adjust the in-progress order (entry shifts the whole
     // structure; SL/TP clamp to the loss/profit sides); real positions
     // update through the store.
@@ -1485,6 +1498,10 @@ const buildPolyPixel = (
   singlePixels.value = singleOut;
 
   rebuildDemoLines();
+  // Visible chart height for the demo tag visibility check
+  if (containerRef.value) {
+    demoChartH.value = containerRef.value.clientHeight - axisBottomH.value;
+  }
 
   // Replay vertical line position
   const replayT = replay.picking ? pickTime.value : replay.cutoff;
@@ -4118,7 +4135,7 @@ onBeforeUnmount(() => {
     <!-- Demo trading: entry/SL/TP lines for the active symbol's positions
          and pending orders, with drag strips and price tags on the scale -->
     <template v-if="demo.active">
-      <div class="demo-lines drawing-clip" :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }">
+      <div class="demo-lines drawing-clip" :style="{ right: axisRightW + 'px', bottom: (axisBottomH + demoBottomH) + 'px' }">
         <div
           v-for="l in demoLines"
           :key="l.id + l.level"
@@ -4142,7 +4159,7 @@ onBeforeUnmount(() => {
           </div>
         </template>
       </div>
-      <div class="demo-hit-layer" :class="{ 'drawing-mode': replay.picking }" :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }">
+      <div class="demo-hit-layer" :class="{ 'drawing-mode': replay.picking }" :style="{ right: axisRightW + 'px', bottom: (axisBottomH + demoBottomH) + 'px' }">
         <div
           v-for="l in demoLines"
           :key="'dhit-' + l.id + l.level"
@@ -4151,14 +4168,14 @@ onBeforeUnmount(() => {
           @pointerdown.stop.prevent="onDemoLineDragStart($event, l.id, l.level)"
         ></div>
       </div>
-      <div class="demo-tag-layer">
+      <div class="demo-tag-layer" :style="{ bottom: (axisBottomH + demoBottomH) + 'px' }">
         <template v-for="l in demoLines" :key="'tag-' + l.id + l.level">
           <div
-            v-if="l.level !== 'entry' || l.status === 'pending'"
+            v-if="(l.level !== 'entry' || l.status === 'pending') && l.y >= 9 && l.y <= demoChartH - 10"
             class="demo-axis-tag"
             :class="l.level"
             :style="{ top: l.y - 9 + 'px' }"
-          >{{ l.level === "entry" ? "ENTRY " : l.level === "sl" ? "SL " : "TP " }}{{ l.price.toFixed(prec) }}</div>
+          >{{ l.price.toFixed(prec) }}</div>
         </template>
       </div>
     </template>

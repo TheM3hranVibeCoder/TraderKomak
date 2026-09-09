@@ -147,7 +147,7 @@ export const useDemoStore = defineStore("demo", () => {
     const risk = riskAmount();
     if (sizeMode.value !== "lot" && sl !== null) {
       const dist = Math.abs(entry - sl) * demoValuePerPrice(symbol, entry);
-      lotEff = dist > 0 ? Math.max(0.01, +(risk / dist).toFixed(2)) : lot.value;
+      lotEff = dist > 0 ? Math.min(100, Math.max(0.01, +(risk / dist).toFixed(2))) : lot.value;
     }
     if (!(lotEff > 0)) {
       error.value = "Position size must be positive";
@@ -195,13 +195,25 @@ export const useDemoStore = defineStore("demo", () => {
   function updateLevel(id: string, level: "entry" | "sl" | "tp", price: number): void {
     const p = positions.value.find((x) => x.id === id);
     if (!p) return;
+    // A filled position's entry is fixed — only pending orders can move it.
+    if (level === "entry" && p.status === "open") return;
     const prec = precisionOf(p.symbol);
-    p[level] = +price.toFixed(prec);
+    const long = p.direction !== "short";
+    let v = +price.toFixed(prec);
+    // Ignore absurd drags (chart extrapolation, fast cursor exits)
+    if (!Number.isFinite(v) || v <= 0) return;
+    // Keep SL on the loss side and TP on the profit side of the entry —
+    // dragging a line across the entry corrupts the position's risk math.
+    const tick = Math.pow(10, -prec);
+    if (level === "sl") v = long ? Math.min(v, p.entry - tick) : Math.max(v, p.entry + tick);
+    if (level === "tp") v = long ? Math.max(v, p.entry + tick) : Math.min(v, p.entry - tick);
+    p[level] = v;
     // In percent/usd sizing modes the lot derives from the SL distance —
-    // recompute it when the SL line is dragged.
+    // recompute it when the SL line is dragged, capped so a hair-thin SL
+    // distance can't explode the position size.
     if (level === "sl" && sizeMode.value !== "lot" && p.entry) {
       const dist = p.sl !== null ? Math.abs(p.entry - p.sl) : 0;
-      p.lot = dist > 0 ? Math.max(0.01, +(riskAmount() / dist).toFixed(2)) : p.lot;
+      p.lot = dist > 0 ? Math.min(100, Math.max(0.01, +(riskAmount() / dist).toFixed(2))) : p.lot;
     }
     persist();
   }
