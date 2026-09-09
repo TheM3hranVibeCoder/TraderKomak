@@ -452,9 +452,24 @@ watch(
     // is what keeps backward/play from moving the chart.
     adapter?.setPriceAutoScale(!active);
     adapter?.setLastValueVisible(!active);
-    if (!active) focusReplayEdge(); // smooth return to the live edge on exit
+    if (!active) {
+      // Exiting replay reloads the live chart: while replaying, live candles
+      // kept appending at "now" while the view showed the cut — the array
+      // held two regions with a huge time gap, which rendered as one giant
+      // candle once the full range was revealed.
+      focusReplayEdge(); // smooth return to the live edge on exit
+    }
   }
 );
+
+/** Exit replay: fetch the live window WHILE the replay view is still
+ *  frozen, then reveal it — exiting directly would first show the gapped
+ *  intermediate array (deep-past candles + live tail) as one huge jump. */
+async function onReplayExit(): Promise<void> {
+  await market.loadHistory(true);
+  replay.exit();
+  focusReplayEdge();
+}
 watch(
   () => market.timeframe,
   () => {
@@ -4153,7 +4168,7 @@ onBeforeUnmount(() => {
             :class="l.level"
             :style="{ top: l.y - 10 + 'px' }"
           >
-            <template v-if="l.level === 'entry'">ENTRY {{ p.lot }} lot &#183; @{{ p.entry.toFixed(prec) }}</template>
+            <template v-if="l.level === 'entry'">ENTRY {{ p.lot }} lot</template>
             <template v-else-if="l.level === 'sl'">SL {{ p.lot }} lot &#183; -${{ l.money }}</template>
             <template v-else-if="l.level === 'tp'">TP ${{ l.money }} &#183; R:R {{ l.rr }}</template>
           </div>
@@ -4171,7 +4186,7 @@ onBeforeUnmount(() => {
       <div class="demo-tag-layer" :style="{ bottom: (axisBottomH + demoBottomH) + 'px' }">
         <template v-for="l in demoLines" :key="'tag-' + l.id + l.level">
           <div
-            v-if="(l.level !== 'entry' || l.status === 'pending') && l.y >= 9 && l.y <= demoChartH - 10"
+            v-if="l.y >= 9 && l.y <= demoChartH - 10"
             class="demo-axis-tag"
             :class="l.level"
             :style="{ top: l.y - 9 + 'px' }"
@@ -4220,7 +4235,7 @@ onBeforeUnmount(() => {
       <template v-if="replay.picking">
         <span class="replay-hint">Replay — click a candle to start</span>
         <button class="rp-btn accent" title="Start replay at the line" @click="togglePlay">▶</button>
-        <button class="rp-btn danger" title="Exit replay" @click="replay.exit()">✕</button>
+        <button class="rp-btn danger" title="Exit replay" @click="onReplayExit">✕</button>
       </template>
       <template v-else>
         <button
@@ -4250,7 +4265,7 @@ onBeforeUnmount(() => {
           @click="replay.speed = s as any"
         >{{ s }}x</button>
         <span class="rp-sep" />
-        <button class="rp-btn danger" title="Exit replay" @click="replay.exit()">✕</button>
+        <button class="rp-btn danger" title="Exit replay" @click="onReplayExit">✕</button>
       </template>
     </div>
 

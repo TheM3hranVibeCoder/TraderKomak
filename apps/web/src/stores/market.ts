@@ -197,7 +197,7 @@ export const useMarketStore = defineStore("market", () => {
     void closed; // reserved for future use (e.g. close animation)
   }
 
-  async function loadHistory(): Promise<void> {
+  async function loadHistory(forceLive = false): Promise<void> {
     const mySeq = ++loadSeq;
     const wantInstrument = instrument.value;
     const wantTimeframe = timeframe.value;
@@ -208,10 +208,12 @@ export const useMarketStore = defineStore("market", () => {
     // Replay mode: load a window AROUND the replay boundary — ~85% before
     // the cut and ~15% after it, so lower timeframes show the chart around
     // the cut AND forward stepping has candles to reveal. The server caps
-    // the fetch at "now".
+    // the fetch at "now". forceLive bypasses this for the replay EXIT —
+    // the live window must be fetched while the replay view is still
+    // frozen, so exiting never reveals the gapped intermediate array.
     const replay = useReplayStore();
     let replayTo: number | undefined;
-    if (replay.active && replay.cutoff !== null) {
+    if (!forceLive && replay.active && replay.cutoff !== null) {
       const barSec = TIMEFRAME_SECONDS[wantTimeframe as keyof typeof TIMEFRAME_SECONDS] ?? 60;
       replayTo = Math.min(replay.cutoff + HISTORY_COUNT * barSec * 0.15, Math.floor(Date.now() / 1000));
     }
@@ -365,6 +367,7 @@ export const useMarketStore = defineStore("market", () => {
     destroy,
     setInstrument,
     setTimeframe,
+    loadHistory,
     loadMore,
   };
 });
