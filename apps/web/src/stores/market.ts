@@ -243,10 +243,25 @@ export const useMarketStore = defineStore("market", () => {
         // Merge locally cached lazy-loaded history (older than the fetch
         // window) so revisiting a symbol/timeframe shows the full cached
         // history immediately instead of re-fetching it via lazy loading.
-        const cached =
+        // Lightweight Charts renders a time gap as two ADJACENT bars (no
+        // whitespace), so cached candles from a previous visit glued to the
+        // fresh fetch drew one giant candle across the gap. Keep only the
+        // cached suffix that is time-CONNECTED to the fresh window —
+        // anything separated by a longer-than-tolerance gap is dropped
+        // (lazy loading re-fetches that range from the provider instead).
+        const tfSec = TIMEFRAME_SECONDS[wantTimeframe as keyof typeof TIMEFRAME_SECONDS] ?? 60;
+        const maxGapSec = Math.max(120 * tfSec, 1800); // lulls + short breaks pass; overnights cut
+        const cachedRaw =
           data.length > 0
             ? loadCache(wantInstrument, wantTimeframe).filter((c) => c.time < data[0]!.time)
             : [];
+        let keepFrom = cachedRaw.length;
+        while (keepFrom > 0) {
+          const nextTime = keepFrom < cachedRaw.length ? cachedRaw[keepFrom]!.time : data[0]!.time;
+          if (nextTime - cachedRaw[keepFrom - 1]!.time <= maxGapSec) keepFrom--;
+          else break;
+        }
+        const cached = cachedRaw.slice(keepFrom);
         candles.value = cached.length > 0 ? mergeCandles(data, cached) : data;
         hasMore.value = data.length >= HISTORY_COUNT;
         awaitingHistory.value = false; // history landed → accept live frames
