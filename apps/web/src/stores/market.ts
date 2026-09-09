@@ -345,9 +345,57 @@ export const useMarketStore = defineStore("market", () => {
     void loadHistory().then(() => {
       client.subscribe(instrument.value, timeframe.value);
     });
+    // Background tabs: while hidden, streamed candles can arrive wrong
+    // (dojis/flat fillers from upstream hiccups) and corrections can be
+    // missed. When the tab becomes visible again, re-sync the recent window
+    // from the authoritative REST endpoint — real candles overwrite the bad
+    // ones in place.
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", onVisibility);
+  }
+
+  let resyncing = false;
+  async function resyncVisible(): Promise<void> {
+    if (resyncing || awaitingHistory.value) return;
+    const mySeq = loadSeq;
+    const wantInstrument = instrument.value;
+    const wantTimeframe = timeframe.value;
+    resyncing = true;
+    try {
+      const data = await fetchCandles(wantInstrument, wantTimeframe, HISTORY_COUNT);
+      if (!data.length || mySeq !== loadSeq) return;
+      if (instrument.value !== wantInstrument || timeframe.value !== wantTimeframe) return;
+      const tfSec = TIMEFRAME_SECONDS[wantTimeframe as keyof typeof TIMEFRAME_SECONDS] ?? 60;
+      const maxGapSec = Math.max(120 * tfSec, 1800);
+      // Keep the older local candles only while they stay time-connected to
+      // the fetched window (same rule as the loadHistory cache merge) —
+      // otherwise a long absence would glue two regions together.
+      const baseRaw = candles.value.filter((c) => c.time < data[0]!.time);
+      let keepFrom = baseRaw.length;
+      while (keepFrom > 0) {
+        const nextTime = keepFrom < baseRaw.length ? baseRaw[keepFrom]!.time : data[0]!.time;
+        if (nextTime - baseRaw[keepFrom - 1]!.time <= maxGapSec) keepFrom--;
+        else break;
+      }
+      const base = baseRaw.slice(keepFrom);
+      candles.value = mergeCandles(base.length > 0 ? base : [], data);
+    } catch {
+      // offline / transient — the stream keeps running; try again next focus
+    } finally {
+      resyncing = false;
+    }
+  }
+
+  function onVisibility(): void {
+    if (document.visibilityState !== "visible") return;
+    const replay = useReplayStore();
+    if (replay.active) return; // replay manages its own window
+    void resyncVisible();
   }
 
   function destroy(): void {
+    document.removeEventListener("visibilitychange", onVisibility);
+    window.removeEventListener("online", onVisibility);
     if (ws) {
       ws.disconnect();
       ws = null;
