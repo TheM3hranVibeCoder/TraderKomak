@@ -159,6 +159,12 @@ onBeforeUnmount(() => {
   gap: 4px;
   flex-shrink: 0;
   overflow-y: auto;
+  /* Hide the scrollbar strip (reads as a black border under the tools and
+     darkens on hover) — wheel/touch scrolling still works. */
+  scrollbar-width: none;
+}
+.drawing-toolbar::-webkit-scrollbar {
+  display: none;
 }
 .tool-btn {
   width: 32px;
