@@ -18,6 +18,7 @@ import { BinanceStreamClient } from "./binance/streamClient.js";
 import { CandleFeed } from "./market/candleFeed.js";
 import { CandlePersist } from "./market/candlePersist.js";
 import { MarketHub } from "./websocket/hub.js";
+import { ChatRoom } from "./chat/chatRoom.js";
 import { registerHealthRoute } from "./routes/health.js";
 import { registerCandlesRoute } from "./routes/candles.js";
 import { providerOf } from "@traderkomak/shared";
@@ -130,6 +131,13 @@ export async function createMarketServer(config: AppConfig): Promise<MarketServe
   registerCandlesRoute(app, { rest: historyRouter, feed });
   hub.register(app);
 
+  // Community chat room (public, WebSocket on /chat)
+  const chatLog = app.log.child({ module: "chat" });
+  let chatRoomRef: ChatRoom | null = null;
+  const chatRoom = new ChatRoom(config.dataDir, config.chatAdminKey, chatLog);
+  chatRoom.register(app);
+  chatRoomRef = chatRoom;
+
   async function start(): Promise<void> {
     feed.startPersistent(config.persistentAggregations);
     const instruments = feed.instrumentUnion();
@@ -145,6 +153,7 @@ export async function createMarketServer(config: AppConfig): Promise<MarketServe
   async function stop(): Promise<void> {
     hub.stopPingLoop();
     hub.closeAll();
+    chatRoomRef?.closeAll();
     await oandaStream.stop();
     await binanceStream.stopAll();
     await app.close();

@@ -29,6 +29,11 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
       },
+      "/chat": {
+        target: process.env.VITE_API_PROXY_TARGET ?? "http://localhost:8080",
+        ws: true,
+        changeOrigin: true,
+      },
     },
   },
   build: {

@@ -89,3 +89,77 @@ export type ServerMessage =
   | StatusMessage
   | PongMessage
   | ErrorMessage;
+
+/* ── Community chat protocol (v1) ──────────────────────────────────────
+   Transport: a separate WebSocket endpoint (/chat) on the market server.
+   Framing: JSON text frames, one object per frame.
+   A message carries either text, an inline image (data URL) or both. */
+
+export interface ChatMessage {
+  id: string;
+  from: string;
+  text?: string;
+  /** Inline image as a data URL (compressed, ≤ ~280KB). */
+  img?: string;
+  ts: number;
+}
+
+export interface ChatJoinMessage {
+  type: "join";
+  nick: string;
+  adminKey?: string;
+}
+
+export interface ChatSendTextMessage {
+  type: "chat";
+  text: string;
+}
+
+export interface ChatSendImageMessage {
+  type: "chat";
+  img: string;
+}
+
+export interface ChatDeleteMessage {
+  type: "delete";
+  id: string;
+}
+
+export interface ChatHistoryMessage {
+  type: "history";
+  messages: ChatMessage[];
+}
+
+export interface ChatBroadcastMessage {
+  type: "chat";
+  id: string;
+  from: string;
+  text?: string;
+  img?: string;
+  ts: number;
+}
+
+export interface ChatOnlineMessage {
+  type: "online";
+  count: number;
+}
+
+export interface ChatSystemMessage {
+  type: "system";
+  text: string;
+  ts: number;
+}
+
+export interface ChatDeletedMessage {
+  type: "deleted";
+  id: string;
+}
+
+export type ChatServerMessage =
+  | ChatHistoryMessage
+  | ChatBroadcastMessage
+  | ChatOnlineMessage
+  | ChatSystemMessage
+  | ChatDeletedMessage
+  | PongMessage
+  | ErrorMessage;

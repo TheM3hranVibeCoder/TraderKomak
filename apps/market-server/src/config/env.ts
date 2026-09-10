@@ -77,6 +77,9 @@ export interface AppConfig {
   };
   /** instrument:timeframe pairs aggregated even with no subscribers. */
   persistentAggregations: Array<{ instrument: string; timeframe: string }>;
+  /** Community chat: when set, connections presenting this key in "join"
+   *  can delete chat messages (moderation). Empty = no admins. */
+  chatAdminKey: string;
 }
 
 export class ConfigError extends Error {}
@@ -138,5 +141,6 @@ export function loadConfig(): AppConfig {
       streamUrl: optionalEnv("BINANCE_STREAM_URL", "wss://stream.binance.com:9443").replace(/\/$/, ""),
     },
     persistentAggregations,
+    chatAdminKey: optionalEnv("CHAT_ADMIN_KEY", ""),
   };
 }
