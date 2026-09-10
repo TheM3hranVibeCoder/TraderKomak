@@ -76,6 +76,11 @@ export class ChatClient {
     this.send({ type: "chat", img: dataUrl });
   }
 
+  /** One message carrying an image and/or caption text. */
+  sendChat(text: string | undefined, img: string | undefined): void {
+    this.send({ type: "chat", text, img });
+  }
+
   deleteMessage(id: string): void {
     this.send({ type: "delete", id });
   }

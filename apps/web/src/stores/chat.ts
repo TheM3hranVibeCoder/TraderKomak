@@ -116,6 +116,13 @@ export const useChatStore = defineStore("chat", () => {
     return true;
   }
 
+  /** Image + caption text in one message. */
+  function sendChat(text: string | undefined, img: string | undefined): boolean {
+    if (!client || (!text && !img)) return false;
+    client.sendChat(text, img);
+    return true;
+  }
+
   function deleteMessage(id: string): void {
     client?.deleteMessage(id);
   }
@@ -149,6 +156,7 @@ export const useChatStore = defineStore("chat", () => {
     setOpen,
     sendText,
     sendImage,
+    sendChat,
     deleteMessage,
     moderate,
     leave,

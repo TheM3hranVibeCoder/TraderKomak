@@ -6,6 +6,7 @@ import { compressImage } from "@/utils/image";
 const chat = useChatStore();
 
 const draft = ref("");
+const pendingImg = ref<string | null>(null);
 const showMembers = ref(false);
 /** 1s ticker for the send-cooldown countdown display. */
 const nowTick = ref(Date.now());
@@ -88,10 +89,24 @@ function confirmNick(): void {
 }
 
 function send(): void {
-  if (chat.sendText(draft.value)) {
+  if (isMuted.value || cooldownLeft.value > 0) return;
+  const text = draft.value.trim().slice(0, 400) || undefined;
+  const img = pendingImg.value ?? undefined;
+  if (!text && !img) return;
+  if (chat.sendChat(text, img)) {
     draft.value = "";
+    pendingImg.value = null;
     scrollTop();
   }
+}
+
+function stageImage(dataUrl: string): void {
+  pendingImg.value = dataUrl;
+  void nextTick(() => inputEl.value?.focus());
+}
+
+function clearPending(): void {
+  pendingImg.value = null;
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -108,9 +123,7 @@ function onPaste(e: ClipboardEvent): void {
   e.preventDefault();
   const file = item.getAsFile();
   if (!file) return;
-  void compressImage(file).then((dataUrl) => {
-    if (chat.sendImage(dataUrl)) scrollTop();
-  });
+  void compressImage(file).then((dataUrl) => stageImage(dataUrl));
 }
 
 function onFileChange(e: Event): void {
@@ -118,9 +131,7 @@ function onFileChange(e: Event): void {
   const file = input.files?.[0];
   input.value = "";
   if (!file) return;
-  void compressImage(file).then((dataUrl) => {
-    if (chat.sendImage(dataUrl)) scrollTop();
-  });
+  void compressImage(file).then((dataUrl) => stageImage(dataUrl));
 }
 
 function openImage(src: string): void {
@@ -253,6 +264,11 @@ onBeforeUnmount(() => {
           🔇 You are muted — you can read but not chat{{ mutedLeft ? ` (${mutedLeft} min left)` : '' }}
         </p>
 
+        <div v-if="pendingImg" class="pending-img">
+          <img :src="pendingImg" alt="attached chart" />
+          <button class="pending-remove" title="Remove image" aria-label="Remove attached image" @click="clearPending">✕</button>
+          <span class="pending-hint">Add a caption, then send</span>
+        </div>
         <div class="chat-input-row">
           <button class="attach" title="Attach a chart screenshot" aria-label="Attach image" @click="fileEl?.click()">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
@@ -267,7 +283,7 @@ onBeforeUnmount(() => {
             class="chat-input"
             type="text"
             maxlength="400"
-            placeholder="Message the room…"
+            :placeholder="pendingImg ? 'Describe the image… (optional)' : 'Message the room…'"
             aria-label="Chat message"
             @keydown="onKeydown"
             @paste="onPaste"
@@ -661,6 +677,46 @@ onBeforeUnmount(() => {
   cursor: not-allowed;
   font-size: 11px;
   font-weight: 800;
+}
+
+.pending-img {
+  position: relative;
+  margin: 0 10px 6px;
+  padding: 6px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.pending-img img {
+  height: 44px;
+  max-width: 90px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+}
+.pending-remove {
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: var(--btn-bg);
+  color: var(--text-muted);
+  font-size: 9px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.pending-remove:hover {
+  background: rgba(239, 83, 80, 0.12);
+  color: var(--offline);
+}
+.pending-hint {
+  font-size: 10px;
+  color: var(--text-muted);
 }
 
 /* Members dropdown (moderator) */
