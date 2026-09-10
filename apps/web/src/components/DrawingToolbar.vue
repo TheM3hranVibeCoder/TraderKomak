@@ -128,20 +128,25 @@ onBeforeUnmount(() => {
       <span class="tool-ic" v-html="ICONS.magnet"></span>
     </button>
 
-    <!-- Line tools flyout: trend line / horizontal line / ray / vertical -->
-    <div v-if="flyoutOpen" ref="flyoutEl" class="line-flyout" :style="{ top: flyoutTop + 'px' }">
-      <button
-        v-for="t in lineTools"
-        :key="t.id"
-        class="flyout-btn"
-        :class="{ active: drawings.activeTool === t.id }"
-        :title="t.title"
-        :aria-label="t.title"
-        @click.stop="pickLineTool(t.id)"
-      >
-        <span class="tool-ic" v-html="ICONS[t.id]"></span>
-      </button>
-    </div>
+    <!-- Line tools flyout: trend line / horizontal line / ray / vertical.
+         Teleported to <body>: the toolbar's backdrop-filter makes it the
+         containing block for fixed children and overflow-y clips them —
+         without the teleport the flyout opens trapped under the chart. -->
+    <Teleport to="body">
+      <div v-if="flyoutOpen" ref="flyoutEl" class="line-flyout" :style="{ top: flyoutTop + 'px' }">
+        <button
+          v-for="t in lineTools"
+          :key="t.id"
+          class="flyout-btn"
+          :class="{ active: drawings.activeTool === t.id }"
+          :title="t.title"
+          :aria-label="t.title"
+          @click.stop="pickLineTool(t.id)"
+        >
+          <span class="tool-ic" v-html="ICONS[t.id]"></span>
+        </button>
+      </div>
+    </Teleport>
     <div class="toolbar-divider" />
   </aside>
 </template>
@@ -275,11 +280,13 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 4px;
   background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  backdrop-filter: blur(22px) saturate(1.3);
+  -webkit-backdrop-filter: blur(22px) saturate(1.3);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
   padding: 6px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
-  z-index: 50;
+  box-shadow: var(--glass-shadow);
+  z-index: 60;
 }
 .flyout-btn {
   width: 32px;
