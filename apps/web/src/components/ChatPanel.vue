@@ -7,6 +7,10 @@ const chat = useChatStore();
 
 const draft = ref("");
 const pendingImg = ref<string | null>(null);
+/** Mobile browsers can re-deliver a ghost tap after the file picker
+ *  closes — that ghost once landed on Send and shipped the photo without
+ *  a caption. Send is ignored for a short window after staging. */
+let stageGuardUntil = 0;
 const showMembers = ref(false);
 /** 1s ticker for the send-cooldown countdown display. */
 const nowTick = ref(Date.now());
@@ -89,7 +93,7 @@ function confirmNick(): void {
 }
 
 function send(): void {
-  if (isMuted.value || cooldownLeft.value > 0) return;
+  if (isMuted.value || cooldownLeft.value > 0 || Date.now() < stageGuardUntil) return;
   const text = draft.value.trim().slice(0, 400) || undefined;
   const img = pendingImg.value ?? undefined;
   if (!text && !img) return;
@@ -102,6 +106,7 @@ function send(): void {
 
 function stageImage(dataUrl: string): void {
   pendingImg.value = dataUrl;
+  stageGuardUntil = Date.now() + 800;
   void nextTick(() => inputEl.value?.focus());
 }
 
@@ -124,6 +129,12 @@ function onPaste(e: ClipboardEvent): void {
   const file = item.getAsFile();
   if (!file) return;
   void compressImage(file).then((dataUrl) => stageImage(dataUrl));
+}
+
+function onAttachClick(e: MouseEvent): void {
+  // ignore the ghost tap some mobile browsers re-deliver after the picker
+  if (Date.now() < stageGuardUntil) return;
+  fileEl.value?.click();
 }
 
 function onFileChange(e: Event): void {
@@ -270,7 +281,7 @@ onBeforeUnmount(() => {
           <span class="pending-hint">Add a caption, then send</span>
         </div>
         <div class="chat-input-row">
-          <button class="attach" title="Attach a chart screenshot" aria-label="Attach image" @click="fileEl?.click()">
+          <button class="attach" title="Attach a chart screenshot" aria-label="Attach image" @click="onAttachClick">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
               <rect x="3" y="5" width="18" height="14" rx="2.5" />
               <circle cx="9" cy="10" r="1.6" />
