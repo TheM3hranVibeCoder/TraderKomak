@@ -12,9 +12,10 @@ export interface ChatClientHandlers {
   onChat: (message: ChatMessage) => void;
   onDeleted: (id: string) => void;
   onSystem: (text: string, ts: number) => void;
-  onOnline: (count: number) => void;
+  onOnline: (count: number, nicks: string[], known: { nick: string; lastSeen: number; online: boolean }[]) => void;
   onStatus: (status: ChatStatus) => void;
   onError: (message: string) => void;
+  onMod: (mutes: { nick: string; until?: number }[], bans: { nick: string; ips?: string[] }[]) => void;
 }
 
 function chatUrl(): string {
@@ -76,6 +77,10 @@ export class ChatClient {
     this.send({ type: "delete", id });
   }
 
+  moderate(action: "mute" | "ban" | "unmute" | "unban", nick: string, minutes?: number): void {
+    this.send({ type: "moderate", action, nick, minutes });
+  }
+
   private send(payload: Record<string, unknown>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     try {
@@ -106,9 +111,16 @@ export class ChatClient {
     });
 
     ws.addEventListener("message", (ev) => this.handle(ev.data));
-    ws.addEventListener("close", () => {
+    ws.addEventListener("close", (ev) => {
       this.ws = null;
       this.joined = false;
+      // 4003 = banned — stop reconnecting, the server will refuse anyway.
+      if (ev.code === 4003) {
+        this.handlers.onError("You are banned from this room");
+        this.handlers.onStatus("offline");
+        this.closedByUser = true;
+        return;
+      }
       if (this.closedByUser) return;
       this.handlers.onStatus("reconnecting");
       this.scheduleReconnect();
@@ -158,6 +170,11 @@ export class ChatClient {
       case "history":
         this.joined = true;
         this.handlers.onHistory(msg.messages);
+        // A delivered history means the join was accepted — we're connected.
+        this.handlers.onStatus("connected");
+        break;
+      case "mod":
+        this.handlers.onMod(msg.mutes ?? [], msg.bans ?? []);
         break;
       case "chat":
         this.handlers.onChat({ id: msg.id, from: msg.from, text: msg.text, img: msg.img, ts: msg.ts });
@@ -169,7 +186,7 @@ export class ChatClient {
         this.handlers.onSystem(msg.text, msg.ts);
         break;
       case "online":
-        this.handlers.onOnline(msg.count);
+        this.handlers.onOnline(msg.count, (msg.nicks as string[]) ?? [], (msg.known as { nick: string; lastSeen: number; online: boolean }[]) ?? []);
         break;
       case "error":
         this.handlers.onError(msg.message ?? "Chat error");

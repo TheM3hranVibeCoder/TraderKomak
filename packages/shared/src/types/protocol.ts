@@ -102,6 +102,8 @@ export interface ChatMessage {
   /** Inline image as a data URL (compressed, ≤ ~280KB). */
   img?: string;
   ts: number;
+  /** True when the author is the room owner/moderator. */
+  owner?: boolean;
 }
 
 export interface ChatJoinMessage {
@@ -142,6 +144,10 @@ export interface ChatBroadcastMessage {
 export interface ChatOnlineMessage {
   type: "online";
   count: number;
+  /** Sorted list of online nicknames (all clients). */
+  nicks?: string[];
+  /** Full member roster — sent to admins only. */
+  known?: { nick: string; lastSeen: number; online: boolean }[];
 }
 
 export interface ChatSystemMessage {
@@ -161,5 +167,29 @@ export type ChatServerMessage =
   | ChatOnlineMessage
   | ChatSystemMessage
   | ChatDeletedMessage
+  | ChatModStateMessage
   | PongMessage
   | ErrorMessage;
+
+/* Chat moderation types (admin only) */
+export interface ChatModerateMessage {
+  type: "moderate";
+  action: "mute" | "ban" | "unmute" | "unban";
+  nick: string;
+  /** Minutes for a mute (ignored for ban/unmute/unban). */
+  minutes?: number;
+}
+
+export interface ChatModEntry {
+  nick: string;
+  /** Epoch ms — mute expiry (bans are permanent until lifted). */
+  until?: number;
+  /** Known IPs of a banned user (a nick alone is bypassable). */
+  ips?: string[];
+}
+
+export interface ChatModStateMessage {
+  type: "mod";
+  mutes: ChatModEntry[];
+  bans: ChatModEntry[];
+}

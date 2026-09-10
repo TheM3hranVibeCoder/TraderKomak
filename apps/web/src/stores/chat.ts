@@ -15,6 +15,10 @@ export const useChatStore = defineStore("chat", () => {
   const isAdmin = ref<boolean>(!!localStorage.getItem(ADMIN_KEY));
   const open = ref<boolean>(localStorage.getItem(OPEN_KEY) === "1");
   const error = ref<string | null>(null);
+  const mutes = ref<{ nick: string; until?: number }[]>([]);
+  const bans = ref<{ nick: string; ips?: string[] }[]>([]);
+  const onlineNicks = ref<string[]>([]);
+  const knownNicks = ref<{ nick: string; lastSeen: number; online: boolean }[]>([]);
 
   let client: ChatClient | null = null;
 
@@ -35,8 +39,10 @@ export const useChatStore = defineStore("chat", () => {
       onSystem: (text, ts) => {
         messages.value = [...messages.value, { id: `s-${ts}-${Math.random().toString(36).slice(2, 6)}`, from: "", text, ts }];
       },
-      onOnline: (count) => {
+      onOnline: (count, nicks, known) => {
         online.value = count;
+        onlineNicks.value = nicks;
+        knownNicks.value = known;
       },
       onStatus: (s) => {
         status.value = s;
@@ -46,6 +52,10 @@ export const useChatStore = defineStore("chat", () => {
         setTimeout(() => {
           if (error.value === msg) error.value = null;
         }, 4000);
+      },
+      onMod: (m, b) => {
+        mutes.value = m;
+        bans.value = b;
       },
     });
     client.connect(nick.value, localStorage.getItem(ADMIN_KEY) ?? undefined);
@@ -87,6 +97,10 @@ export const useChatStore = defineStore("chat", () => {
     client?.deleteMessage(id);
   }
 
+  function moderate(action: "mute" | "ban" | "unmute" | "unban", targetNick: string, minutes?: number): void {
+    client?.moderate(action, targetNick, minutes);
+  }
+
   function leave(): void {
     client?.disconnect();
     client = null;
@@ -101,12 +115,17 @@ export const useChatStore = defineStore("chat", () => {
     isAdmin,
     open,
     error,
+    mutes,
+    bans,
+    onlineNicks,
+    knownNicks,
     ensureClient,
     setNick,
     setOpen,
     sendText,
     sendImage,
     deleteMessage,
+    moderate,
     leave,
   };
 });

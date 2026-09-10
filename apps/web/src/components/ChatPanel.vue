@@ -1,17 +1,33 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from "vue";
 import { useChatStore } from "@/stores/chat";
 import { compressImage } from "@/utils/image";
 
 const chat = useChatStore();
 
 const draft = ref("");
+const showMembers = ref(false);
 const nickDraft = ref("");
 const lightbox = ref<string | null>(null);
 const listEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLInputElement | null>(null);
 const fileEl = ref<HTMLInputElement | null>(null);
 let errorTimer: ReturnType<typeof setTimeout> | null = null;
+
+const offlineNicks = computed(() => chat.knownNicks.filter((k) => !k.online));
+
+function onDocClick(e: MouseEvent): void {
+  const t = e.target as HTMLElement;
+  if (showMembers.value && !t.closest(".chat-online") && !t.closest(".members-pop")) {
+    showMembers.value = false;
+  }
+}
+onMounted(() => {
+  document.addEventListener("mousedown", onDocClick);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener("mousedown", onDocClick);
+});
 
 const statusLabel: Record<string, string> = {
   connected: "Live",
@@ -100,10 +116,6 @@ function closeLightbox(): void {
   lightbox.value = null;
 }
 
-function closePanel(): void {
-  chat.setOpen(false);
-}
-
 function fmtError(msg: string): string {
   errorTimer && clearTimeout(errorTimer);
   return msg;
@@ -122,11 +134,31 @@ onBeforeUnmount(() => {
     <div class="chat-inner">
       <div class="chat-head">
         <span class="chat-title">Live Chat</span>
-        <span class="chat-online" :class="chat.status">
+        <span class="chat-online" :class="chat.status" @click="showMembers = !showMembers" :title="chat.isAdmin ? 'Members — click to moderate' : 'Members'">
           <span class="dot" :class="chat.status"></span>
           {{ chat.online }} online · {{ statusLabel[chat.status] ?? chat.status }}
+          <svg viewBox="0 0 6 8" width="6" height="8" aria-hidden="true"><path d="M0 0l5 4-5 4z" fill="currentColor"/></svg>
         </span>
-        <button class="chat-close" title="Close chat" aria-label="Close chat" @click="closePanel">✕</button>
+        <div v-if="showMembers" class="members-pop">
+          <div class="members-title">Online — {{ chat.onlineNicks.length }}</div>
+          <div v-for="n in chat.onlineNicks" :key="'on-' + n" class="member-row">
+            <span class="member-name">{{ n }}</span>
+            <template v-if="chat.isAdmin && n !== chat.nick">
+              <button class="member-act" title="Mute 10 minutes" @click.stop="chat.moderate('mute', n, 10)">🔇</button>
+              <button class="member-act ban" title="Ban (permanent)" @click.stop="chat.moderate('ban', n)">⛔</button>
+            </template>
+            <span v-if="chat.nick === n" class="member-you">you</span>
+          </div>
+          <template v-if="chat.isAdmin">
+            <div class="members-title">Offline — {{ offlineNicks.length }}</div>
+            <div v-for="k in offlineNicks" :key="'of-' + k.nick" class="member-row offline">
+              <span class="member-name">{{ k.nick }}</span>
+              <button class="member-act" title="Mute 10 minutes" @click.stop="chat.moderate('mute', k.nick, 10)">🔇</button>
+              <button class="member-act ban" title="Ban (permanent)" @click.stop="chat.moderate('ban', k.nick)">⛔</button>
+            </div>
+            <div v-if="offlineNicks.length === 0" class="member-empty">no offline members yet</div>
+          </template>
+        </div>
       </div>
 
       <!-- Nickname gate -->
@@ -150,6 +182,23 @@ onBeforeUnmount(() => {
 
       <!-- Conversation -->
       <template v-else>
+        <!-- Admin moderation strip: muted/banned chatters with lift buttons -->
+        <div v-if="chat.isAdmin && (chat.mutes.length || chat.bans.length)" class="mod-strip">
+          <span
+            v-for="m in chat.mutes"
+            :key="'mu-' + m.nick"
+            class="mod-chip"
+            title="Click to unmute"
+            @click="chat.moderate('unmute', m.nick)"
+          >🔇 {{ m.nick }} ✕</span>
+          <span
+            v-for="b in chat.bans"
+            :key="'ba-' + b.nick"
+            class="mod-chip ban"
+            title="Click to unban"
+            @click="chat.moderate('unban', b.nick)"
+          >⛔ {{ b.nick }} ✕</span>
+        </div>
         <div ref="listEl" class="chat-list">
           <div v-for="m in chat.messages" :key="m.id" class="msg" :class="{ system: m.from === '' }">
             <template v-if="m.from === ''">
@@ -158,7 +207,12 @@ onBeforeUnmount(() => {
             <template v-else>
               <div class="msg-head">
                 <span class="msg-from">{{ m.from }}</span>
+                <span v-if="m.owner" class="owner-badge">OWNER</span>
                 <span class="msg-time">{{ timeLabel(m.ts) }}</span>
+                <template v-if="chat.isAdmin && chat.nick !== m.from">
+                  <button class="msg-mod" title="Mute 10 minutes" @click="chat.moderate('mute', m.from, 10)">🔇</button>
+                  <button class="msg-mod ban" title="Ban (permanent)" @click="chat.moderate('ban', m.from)">⛔</button>
+                </template>
                 <button
                   v-if="chat.isAdmin"
                   class="msg-del"
@@ -210,10 +264,14 @@ onBeforeUnmount(() => {
       </template>
     </div>
 
-    <!-- Full-size image lightbox -->
-    <div v-if="lightbox" class="lightbox" @click="closeLightbox">
-      <img :src="lightbox" alt="shared chart (full size)" />
-    </div>
+    <!-- Full-size image lightbox — teleported to <body>: the chat panel's
+         backdrop-filter would otherwise clip the fixed overlay to the
+         320px column and cut the image in half. -->
+    <Teleport to="body">
+      <div v-if="lightbox" class="lightbox" @click="closeLightbox">
+        <img :src="lightbox" alt="shared chart (full size)" />
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -395,6 +453,65 @@ onBeforeUnmount(() => {
   font-size: 11px;
   color: var(--accent);
 }
+.owner-badge {
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border-radius: 99px;
+  color: #fff;
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  box-shadow: 0 1px 6px rgba(239, 68, 68, 0.45);
+}
+.msg-mod {
+  width: 18px;
+  height: 16px;
+  margin-left: auto;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 9px;
+  cursor: pointer;
+}
+.msg-mod:hover {
+  background: rgba(251, 191, 36, 0.15);
+  color: var(--reconnecting);
+}
+.msg-mod.ban:hover {
+  background: rgba(239, 83, 80, 0.12);
+  color: var(--offline);
+}
+.msg-mod + .msg-mod {
+  margin-left: 0;
+}
+.msg-mod.ban {
+  margin-left: 0;
+}
+.mod-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 10px;
+  flex-shrink: 0;
+}
+.mod-chip {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 99px;
+  background: var(--btn-bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 150ms;
+}
+.mod-chip:hover {
+  background: rgba(239, 83, 80, 0.12);
+  color: var(--offline);
+}
+.mod-chip.ban {
+  color: var(--offline);
+}
 .msg-time {
   font-size: 9px;
   color: var(--text-muted);
@@ -499,6 +616,92 @@ onBeforeUnmount(() => {
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow);
 }
+/* Members dropdown (moderator) */
+.chat-online {
+  cursor: pointer;
+}
+.members-pop {
+  position: absolute;
+  top: 40px;
+  left: 10px;
+  right: 10px;
+  z-index: 20;
+  background: var(--bg-panel);
+  backdrop-filter: blur(22px) saturate(1.3);
+  -webkit-backdrop-filter: blur(22px) saturate(1.3);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--glass-shadow);
+  padding: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.members-title {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 4px 4px 2px;
+}
+.member-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px;
+  border-radius: 7px;
+}
+.member-row.offline {
+  opacity: 0.6;
+}
+.member-name {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.member-you {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+.member-act {
+  width: 22px;
+  height: 20px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+.member-act:hover {
+  background: rgba(251, 191, 36, 0.15);
+  color: var(--reconnecting);
+}
+.member-act.ban:hover {
+  background: rgba(239, 83, 80, 0.12);
+  color: var(--offline);
+}
+.member-empty {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 2px 4px;
+}
+.owner-badge {
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border-radius: 99px;
+  color: #fff;
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  box-shadow: 0 1px 6px rgba(239, 68, 68, 0.45);
+}
+
 /* Phones: overlay like the watchlist */
 @media (max-width: 768px) {
   .chat-panel.open {
