@@ -295,6 +295,7 @@ onBeforeUnmount(() => {
   place-items: center;
   border: 1px solid transparent;
   border-radius: 7px;
+  background: transparent;
   color: var(--text-muted);
   cursor: grab;
   transition: all 150ms;
