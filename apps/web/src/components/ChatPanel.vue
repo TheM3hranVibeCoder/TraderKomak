@@ -277,8 +277,8 @@ onBeforeUnmount(() => {
             aria-label="Send message"
             @click="send"
           >{{ cooldownLeft > 0 && !isMuted ? cooldownLeft + 's' : '' }}
-            <svg v-if="!cooldownLeft || isMuted" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M4 12l16-8-6 8 6 8z" />
+            <svg v-if="!cooldownLeft || isMuted" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path d="M2 21l21-9L2 3v7l15 2-15 2z" fill="currentColor" />
             </svg>
           </button>
           <input ref="fileEl" type="file" accept="image/*" class="file-hidden" @change="onFileChange" />
