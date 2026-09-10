@@ -257,7 +257,6 @@ onBeforeUnmount(() => {
                   <button class="msg-del" title="Delete message" @click="chat.deleteMessage(m.id)">✕</button>
                 </span>
               </div>
-              <div v-if="m.text" class="msg-text">{{ m.text }}</div>
               <img
                 v-if="m.img"
                 :src="m.img"
@@ -266,6 +265,7 @@ onBeforeUnmount(() => {
                 loading="lazy"
                 @click="openImage(m.img!)"
               />
+              <div v-if="m.text" class="msg-text msg-caption">{{ m.text }}</div>
             </template>
           </div>
         </div>
@@ -589,9 +589,13 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+.msg-caption {
+  margin-top: 2px;
+}
 .msg-img {
   display: block;
   margin-top: 6px;
+  margin-bottom: 2px;
   max-width: 100%;
   max-height: 180px;
   border-radius: 8px;
