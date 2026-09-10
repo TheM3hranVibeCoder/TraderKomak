@@ -169,14 +169,17 @@ export class ChatRoom {
       if (m?.until) this.safeSend(conn, { type: "muted", until: m.until });
       return;
     }
-    // Cooldown: one message per 15s — the client shows the wait timer
+    // Cooldown: one message per 15s — the client shows the wait timer.
+    // The room owner/moderator is exempt.
     const now = Date.now();
-    const wait = conn.lastChatAt ? RATE_INTERVAL_MS - (now - conn.lastChatAt) : 0;
-    if (wait > 0) {
-      this.safeSend(conn, { type: "ratelimit", waitMs: wait });
-      return;
+    if (!conn.admin) {
+      const wait = conn.lastChatAt ? RATE_INTERVAL_MS - (now - conn.lastChatAt) : 0;
+      if (wait > 0) {
+        this.safeSend(conn, { type: "ratelimit", waitMs: wait });
+        return;
+      }
+      conn.lastChatAt = now;
     }
-    conn.lastChatAt = now;
 
     const cleanText = text.replace(/\s+/g, " ").trim().slice(0, TEXT_MAX);
     const cleanImg = this.sanitizeImage(img);

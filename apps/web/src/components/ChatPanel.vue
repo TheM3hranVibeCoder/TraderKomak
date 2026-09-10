@@ -223,14 +223,16 @@ onBeforeUnmount(() => {
                 <span class="msg-from">{{ m.from }}</span>
                 <span v-if="m.owner" class="owner-badge">OWNER</span>
                 <span class="msg-time">{{ timeLabel(m.ts) }}</span>
-                <span v-if="chat.isAdmin && chat.nick !== m.from" class="msg-actions">
-                  <button
-                    class="msg-mod"
-                    :title="authorMuted(m.from) ? 'Unmute' : 'Mute 10 minutes'"
-                    @click="authorMuted(m.from) ? chat.moderate('unmute', m.from) : chat.moderate('mute', m.from, 10)"
-                  >{{ authorMuted(m.from) ? '🔊' : '🔇' }}</button>
-                  <button class="msg-mod ban" title="Ban (permanent)" @click="chat.moderate('ban', m.from)">⛔</button>
-                  <button class="msg-del" title="Delete message (admin)" @click="chat.deleteMessage(m.id)">✕</button>
+                <span v-if="chat.isAdmin" class="msg-actions">
+                  <template v-if="chat.nick !== m.from">
+                    <button
+                      class="msg-mod"
+                      :title="authorMuted(m.from) ? 'Unmute' : 'Mute 10 minutes'"
+                      @click="authorMuted(m.from) ? chat.moderate('unmute', m.from) : chat.moderate('mute', m.from, 10)"
+                    >{{ authorMuted(m.from) ? '🔊' : '🔇' }}</button>
+                    <button class="msg-mod ban" title="Ban (permanent)" @click="chat.moderate('ban', m.from)">⛔</button>
+                  </template>
+                  <button class="msg-del" title="Delete message" @click="chat.deleteMessage(m.id)">✕</button>
                 </span>
               </div>
               <div v-if="m.text" class="msg-text">{{ m.text }}</div>
