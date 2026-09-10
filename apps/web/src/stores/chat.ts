@@ -19,10 +19,22 @@ export const useChatStore = defineStore("chat", () => {
   const bans = ref<{ nick: string; ips?: string[] }[]>([]);
   const onlineNicks = ref<string[]>([]);
   const knownNicks = ref<{ nick: string; lastSeen: number; online: boolean }[]>([]);
+  /** Epoch ms when this user's mute lifts (0 = not muted). */
+  const mutedUntil = ref<number>(0);
+  /** Epoch ms when the 15s chat cooldown lifts (0 = can send now). */
+  const rateWaitUntil = ref<number>(0);
 
   let client: ChatClient | null = null;
+  let clientAdminKey: string | undefined;
 
   function ensureClient(): void {
+    // Moderator key added mid-session (console/UI) — upgrade live instead of
+    // waiting for a page refresh.
+    const currentKey = localStorage.getItem(ADMIN_KEY) ?? undefined;
+    if (client && clientAdminKey !== currentKey) {
+      client.disconnect();
+      client = null;
+    }
     if (client) return;
     if (!nick.value) return;
     client = new ChatClient({
@@ -57,8 +69,19 @@ export const useChatStore = defineStore("chat", () => {
         mutes.value = m;
         bans.value = b;
       },
+      onMuted: (until) => {
+        mutedUntil.value = until;
+      },
+      onUnmuted: () => {
+        mutedUntil.value = 0;
+        messages.value = [...messages.value, { id: `u-${Date.now()}`, from: "", text: "You have been unmuted — you can chat again", ts: Math.floor(Date.now() / 1000) }];
+      },
+      onRateLimit: (waitMs) => {
+        rateWaitUntil.value = Date.now() + waitMs;
+      },
     });
-    client.connect(nick.value, localStorage.getItem(ADMIN_KEY) ?? undefined);
+    clientAdminKey = currentKey;
+    client.connect(nick.value, currentKey);
   }
 
   function setNick(value: string): boolean {
@@ -119,6 +142,8 @@ export const useChatStore = defineStore("chat", () => {
     bans,
     onlineNicks,
     knownNicks,
+    mutedUntil,
+    rateWaitUntil,
     ensureClient,
     setNick,
     setOpen,

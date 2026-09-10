@@ -7,6 +7,12 @@ const chat = useChatStore();
 
 const draft = ref("");
 const showMembers = ref(false);
+/** 1s ticker for the send-cooldown countdown display. */
+const nowTick = ref(Date.now());
+let tickTimer: ReturnType<typeof setInterval> | null = null;
+const cooldownLeft = computed(() => Math.max(0, Math.ceil((chat.rateWaitUntil - nowTick.value) / 1000)));
+const mutedLeft = computed(() => Math.max(0, Math.ceil((chat.mutedUntil - nowTick.value) / 60000)));
+const isMuted = computed(() => chat.mutedUntil > nowTick.value);
 const nickDraft = ref("");
 const lightbox = ref<string | null>(null);
 const listEl = ref<HTMLElement | null>(null);
@@ -24,9 +30,13 @@ function onDocClick(e: MouseEvent): void {
 }
 onMounted(() => {
   document.addEventListener("mousedown", onDocClick);
+  tickTimer = setInterval(() => {
+    nowTick.value = Date.now();
+  }, 1000);
 });
 onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onDocClick);
+  tickTimer && clearInterval(tickTimer);
 });
 
 const statusLabel: Record<string, string> = {
@@ -35,6 +45,10 @@ const statusLabel: Record<string, string> = {
   reconnecting: "Reconnecting…",
   offline: "Offline",
 };
+
+function authorMuted(from: string): boolean {
+  return chat.mutes.some((m) => m.nick.toLowerCase() === from.toLowerCase());
+}
 
 function timeLabel(ts: number): string {
   const d = new Date(ts * 1000);
@@ -134,12 +148,12 @@ onBeforeUnmount(() => {
     <div class="chat-inner">
       <div class="chat-head">
         <span class="chat-title">Live Chat</span>
-        <span class="chat-online" :class="chat.status" @click="showMembers = !showMembers" :title="chat.isAdmin ? 'Members — click to moderate' : 'Members'">
+        <span v-if="chat.isAdmin" class="chat-online clickable" :class="chat.status" @click="showMembers = !showMembers" title="Members — click to moderate">
           <span class="dot" :class="chat.status"></span>
           {{ chat.online }} online · {{ statusLabel[chat.status] ?? chat.status }}
-          <svg viewBox="0 0 6 8" width="6" height="8" aria-hidden="true"><path d="M0 0l5 4-5 4z" fill="currentColor"/></svg>
+          <svg v-if="chat.isAdmin" viewBox="0 0 6 8" width="6" height="8" aria-hidden="true"><path d="M0 0l5 4-5 4z" fill="currentColor"/></svg>
         </span>
-        <div v-if="showMembers" class="members-pop">
+        <div v-if="chat.isAdmin && showMembers" class="members-pop">
           <div class="members-title">Online — {{ chat.onlineNicks.length }}</div>
           <div v-for="n in chat.onlineNicks" :key="'on-' + n" class="member-row">
             <span class="member-name">{{ n }}</span>
@@ -209,16 +223,15 @@ onBeforeUnmount(() => {
                 <span class="msg-from">{{ m.from }}</span>
                 <span v-if="m.owner" class="owner-badge">OWNER</span>
                 <span class="msg-time">{{ timeLabel(m.ts) }}</span>
-                <template v-if="chat.isAdmin && chat.nick !== m.from">
-                  <button class="msg-mod" title="Mute 10 minutes" @click="chat.moderate('mute', m.from, 10)">🔇</button>
+                <span v-if="chat.isAdmin && chat.nick !== m.from" class="msg-actions">
+                  <button
+                    class="msg-mod"
+                    :title="authorMuted(m.from) ? 'Unmute' : 'Mute 10 minutes'"
+                    @click="authorMuted(m.from) ? chat.moderate('unmute', m.from) : chat.moderate('mute', m.from, 10)"
+                  >{{ authorMuted(m.from) ? '🔊' : '🔇' }}</button>
                   <button class="msg-mod ban" title="Ban (permanent)" @click="chat.moderate('ban', m.from)">⛔</button>
-                </template>
-                <button
-                  v-if="chat.isAdmin"
-                  class="msg-del"
-                  title="Delete message (admin)"
-                  @click="chat.deleteMessage(m.id)"
-                >✕</button>
+                  <button class="msg-del" title="Delete message (admin)" @click="chat.deleteMessage(m.id)">✕</button>
+                </span>
               </div>
               <div v-if="m.text" class="msg-text">{{ m.text }}</div>
               <img
@@ -234,6 +247,9 @@ onBeforeUnmount(() => {
         </div>
 
         <p v-if="chat.error" class="chat-error">{{ fmtError(chat.error) }}</p>
+        <p v-if="isMuted" class="muted-banner">
+          🔇 You are muted — you can read but not chat{{ mutedLeft ? ` (${mutedLeft} min left)` : '' }}
+        </p>
 
         <div class="chat-input-row">
           <button class="attach" title="Attach a chart screenshot" aria-label="Attach image" @click="fileEl?.click()">
@@ -254,8 +270,14 @@ onBeforeUnmount(() => {
             @keydown="onKeydown"
             @paste="onPaste"
           />
-          <button class="send" title="Send" aria-label="Send message" @click="send">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <button
+            class="send"
+            :title="isMuted ? 'You are muted' : cooldownLeft > 0 ? `Wait ${cooldownLeft}s` : 'Send'"
+            :disabled="isMuted || cooldownLeft > 0"
+            aria-label="Send message"
+            @click="send"
+          >{{ cooldownLeft > 0 && !isMuted ? cooldownLeft + 's' : '' }}
+            <svg v-if="!cooldownLeft || isMuted" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M4 12l16-8-6 8 6 8z" />
             </svg>
           </button>
@@ -466,7 +488,6 @@ onBeforeUnmount(() => {
 .msg-mod {
   width: 18px;
   height: 16px;
-  margin-left: auto;
   border: none;
   border-radius: 4px;
   background: transparent;
@@ -616,6 +637,30 @@ onBeforeUnmount(() => {
   border: 1px solid var(--glass-border);
   box-shadow: var(--glass-shadow);
 }
+.msg-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.muted-banner {
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--reconnecting);
+  background: rgba(251, 191, 36, 0.08);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.send:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  font-size: 11px;
+  font-weight: 800;
+}
+
 /* Members dropdown (moderator) */
 .chat-online {
   cursor: pointer;

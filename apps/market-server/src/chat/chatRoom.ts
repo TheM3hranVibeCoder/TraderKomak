@@ -27,8 +27,7 @@ const HISTORY_FILE = "chat-history.json";
 const MOD_FILE = "chat-mod.json";
 const TEXT_MAX = 400;
 const IMG_MAX_CHARS = 280_000; // ~210KB image
-const RATE_WINDOW_MS = 10_000;
-const RATE_MAX = 5;
+const RATE_INTERVAL_MS = 15_000; // one message per 15s per user
 const NICK_MIN = 2;
 const NICK_MAX = 20;
 
@@ -37,7 +36,7 @@ interface Conn {
   nick: string | null;
   admin: boolean;
   ip: string;
-  rateStamps: number[];
+  lastChatAt: number;
 }
 
 interface ModState {
@@ -71,7 +70,7 @@ export class ChatRoom {
 
   register(app: FastifyInstance): void {
     app.get("/chat", { websocket: true }, (socket, req) => {
-      const conn: Conn = { socket, nick: null, admin: false, ip: req.ip ?? "", rateStamps: [] };
+      const conn: Conn = { socket, nick: null, admin: false, ip: req.ip ?? "", lastChatAt: 0 };
       // IP bans are enforced before anything else — banned means banned.
       if (this.isBannedIp(conn.ip)) {
         this.safeSend(conn, { type: "error", message: "You are banned from this room" });
@@ -150,6 +149,14 @@ export class ChatRoom {
     this.known.set(nick.toLowerCase(), { lastSeen: Math.floor(Date.now() / 1000), ip: conn.ip });
     conn.admin = this.adminKey !== "" && adminKey === this.adminKey;
     this.send(conn, { type: "history", messages: this.history });
+    // Broadcast the fresh roster — otherwise a refreshed client never
+    // re-appears online for everyone else (join only told THEM).
+    this.broadcastOnline();
+    // Tell muted users they can read but not chat (with the exact lift time)
+    if (this.isMutedNick(nick)) {
+      const m = this.mod.mutes.find((x) => x.nick.toLowerCase() === nick.toLowerCase());
+      if (m?.until) this.safeSend(conn, { type: "muted", until: m.until });
+    }
     this.sendOnline(conn.socket);
     if (conn.admin) this.sendModState(conn);
     // No join/leave notices — page refreshes would spam the room.
@@ -159,18 +166,17 @@ export class ChatRoom {
     if (!conn.nick) return; // must join first
     if (this.isMutedNick(conn.nick)) {
       const m = this.mod.mutes.find((x) => x.nick.toLowerCase() === conn.nick!.toLowerCase());
-      const mins = m?.until ? Math.max(1, Math.ceil((m.until - Date.now()) / 60000)) : 1;
-      this.safeSend(conn, { type: "error", message: `You are muted (${mins} min left)` });
+      if (m?.until) this.safeSend(conn, { type: "muted", until: m.until });
       return;
     }
-    // Rate limit
+    // Cooldown: one message per 15s — the client shows the wait timer
     const now = Date.now();
-    conn.rateStamps = conn.rateStamps.filter((t) => now - t < RATE_WINDOW_MS);
-    if (conn.rateStamps.length >= RATE_MAX) {
-      this.safeSend(conn, { type: "error", message: "Slow down — too many messages" });
+    const wait = conn.lastChatAt ? RATE_INTERVAL_MS - (now - conn.lastChatAt) : 0;
+    if (wait > 0) {
+      this.safeSend(conn, { type: "ratelimit", waitMs: wait });
       return;
     }
-    conn.rateStamps.push(now);
+    conn.lastChatAt = now;
 
     const cleanText = text.replace(/\s+/g, " ").trim().slice(0, TEXT_MAX);
     const cleanImg = this.sanitizeImage(img);
@@ -211,8 +217,8 @@ export class ChatRoom {
       const until = now + Math.max(1, Math.min(1440, minutes || 10)) * 60_000;
       this.mod.mutes = this.mod.mutes.filter((m) => m.nick.toLowerCase() !== cleanNick);
       this.mod.mutes.push({ nick: cleanNick, until });
-      // Kick the muted user's connection so the mute applies immediately
-      this.disconnectNick(cleanNick);
+      // Kick so the mute applies immediately — the reconnect shows the mute banner
+      this.disconnectNick(cleanNick, "You have been muted");
     } else if (action === "ban") {
       this.mod.bans = this.mod.bans.filter((b) => b.nick.toLowerCase() !== cleanNick);
       // record every known IP for this nick — a nick ban alone is bypassable
@@ -221,9 +227,13 @@ export class ChatRoom {
         if (c.nick && c.nick.toLowerCase() === cleanNick) ips.add(c.ip);
       }
       this.mod.bans.push({ nick: cleanNick, ips: [...ips] });
-      this.disconnectNick(cleanNick);
+      this.disconnectNick(cleanNick, "You have been banned from the room");
     } else if (action === "unmute") {
       this.mod.mutes = this.mod.mutes.filter((m) => m.nick.toLowerCase() !== cleanNick);
+      // Notify the unmuted user live so their input re-enables
+      for (const [, c] of this.conns) {
+        if (c.nick && c.nick.toLowerCase() === cleanNick) this.safeSend(c, { type: "unmuted" });
+      }
     } else if (action === "unban") {
       this.mod.bans = this.mod.bans.filter((b) => b.nick.toLowerCase() !== cleanNick);
     } else {
@@ -234,10 +244,10 @@ export class ChatRoom {
     this.log.info({ by: conn.nick, action, nick: cleanNick }, "chat moderation");
   }
 
-  private disconnectNick(nick: string): void {
+  private disconnectNick(nick: string, reason = "You have been moderated"): void {
     for (const [, c] of this.conns) {
       if (c.nick && c.nick.toLowerCase() === nick.toLowerCase()) {
-        this.safeSend(c, { type: "error", message: "You have been moderated" });
+        this.safeSend(c, { type: "error", message: reason });
         try {
           c.socket.close(4002, "moderated");
         } catch {}

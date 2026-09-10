@@ -16,6 +16,9 @@ export interface ChatClientHandlers {
   onStatus: (status: ChatStatus) => void;
   onError: (message: string) => void;
   onMod: (mutes: { nick: string; until?: number }[], bans: { nick: string; ips?: string[] }[]) => void;
+  onMuted: (until: number) => void;
+  onUnmuted: () => void;
+  onRateLimit: (waitMs: number) => void;
 }
 
 function chatUrl(): string {
@@ -176,8 +179,18 @@ export class ChatClient {
       case "mod":
         this.handlers.onMod(msg.mutes ?? [], msg.bans ?? []);
         break;
+      case "muted":
+        this.handlers.onMuted(msg.until);
+        break;
+      case "unmuted":
+        this.handlers.onUnmuted();
+        break;
+      case "ratelimit":
+        this.handlers.onRateLimit(msg.waitMs);
+        break;
       case "chat":
-        this.handlers.onChat({ id: msg.id, from: msg.from, text: msg.text, img: msg.img, ts: msg.ts });
+        // owner flag must survive — live viewers need the OWNER badge too
+        this.handlers.onChat({ id: msg.id, from: msg.from, text: msg.text, img: msg.img, ts: msg.ts, owner: msg.owner });
         break;
       case "deleted":
         this.handlers.onDeleted(msg.id);

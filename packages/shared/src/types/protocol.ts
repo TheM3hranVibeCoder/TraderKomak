@@ -139,6 +139,7 @@ export interface ChatBroadcastMessage {
   text?: string;
   img?: string;
   ts: number;
+  owner?: boolean;
 }
 
 export interface ChatOnlineMessage {
@@ -161,6 +162,22 @@ export interface ChatDeletedMessage {
   id: string;
 }
 
+export interface ChatMutedMessage {
+  type: "muted";
+  /** Epoch ms when the mute lifts. */
+  until: number;
+}
+
+export interface ChatUnmutedMessage {
+  type: "unmuted";
+}
+
+export interface ChatRateLimitMessage {
+  type: "ratelimit";
+  /** Epoch ms when the sender may chat again. */
+  waitMs: number;
+}
+
 export type ChatServerMessage =
   | ChatHistoryMessage
   | ChatBroadcastMessage
@@ -168,6 +185,9 @@ export type ChatServerMessage =
   | ChatSystemMessage
   | ChatDeletedMessage
   | ChatModStateMessage
+  | ChatMutedMessage
+  | ChatUnmutedMessage
+  | ChatRateLimitMessage
   | PongMessage
   | ErrorMessage;
 
