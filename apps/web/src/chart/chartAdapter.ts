@@ -43,6 +43,8 @@ export interface ChartAdapter {
   getPriceY(price: number): number | null;
   /** Height of an axis price label, derived from the chart's font size. */
   getPriceLabelHeight(): number;
+  /** Width of a price-axis label for the given text (chart font metrics). */
+  getPriceLabelWidth(text: string): number;
   /** Converts a UNIX timestamp (seconds) to an x-pixel on the chart. */
   timeToX(time: number): number | null;
   /** Converts a logical bar index to an x-pixel (works in the margins too). */
@@ -447,6 +449,18 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       const opts = chart.options() as { layout?: { fontSize?: number } };
       const fs = opts.layout?.fontSize ?? 12;
       return Math.max(16, Math.round(fs * 1.55));
+    },
+    /** Width of a price-axis label for the given text, measured with the
+     *  chart's own font — used to size the countdown tag so it centers
+     *  under the native live-price label. */
+    getPriceLabelWidth(text: string): number {
+      const opts = chart.options() as { layout?: { fontSize?: number; fontFamily?: string } };
+      const fs = opts.layout?.fontSize ?? 12;
+      const fam = opts.layout?.fontFamily ?? "Trebuchet MS";
+      const ctx = document.createElement("canvas").getContext("2d");
+      if (!ctx) return 0;
+      ctx.font = `${fs}px ${fam}, sans-serif`;
+      return Math.ceil(ctx.measureText(text).width);
     },
     timeToX(time: number): number | null {
       try {
