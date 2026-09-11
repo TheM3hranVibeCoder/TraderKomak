@@ -79,10 +79,14 @@ export class ChatRoom {
         if (remote && this.history.length === 0) {
           this.history = remote.chat;
           this.mod = remote.mod;
+          // Member roster persists too (nick → last seen + known IP)
+          for (const k of remote.known) {
+            this.known.set(k.nick.toLowerCase(), { lastSeen: k.lastSeen, ip: k.ips?.[0] });
+          }
           for (const m of this.history) {
             if (m.from) this.known.set(m.from.toLowerCase(), { lastSeen: m.ts });
           }
-          this.log.info({ messages: this.history.length }, "chat history restored from redis");
+          this.log.info({ messages: this.history.length, members: this.known.size }, "chat restored from redis");
         }
       });
     }
@@ -116,9 +120,10 @@ export class ChatRoom {
     }
   }
 
-  private async pullFromRedis(): Promise<{ chat: ChatMessage[]; mod: ModState } | null> {
+  private async pullFromRedis(): Promise<{ chat: ChatMessage[]; mod: ModState; known: { nick: string; lastSeen: number; ips?: string[] }[] } | null> {
     const chatRaw = await this.redisGet("chat:history");
     const modRaw = await this.redisGet("chat:mod");
+    const knownRaw = await this.redisGet("chat:known");
     if (!chatRaw) return null;
     try {
       const chat = JSON.parse(chatRaw) as ChatMessage[];
@@ -130,7 +135,14 @@ export class ChatRoom {
           if (Array.isArray(parsed.mutes) && Array.isArray(parsed.bans)) mod = parsed;
         } catch {}
       }
-      return { chat, mod };
+      let known: { nick: string; lastSeen: number; ips?: string[] }[] = [];
+      if (knownRaw) {
+        try {
+          const parsed = JSON.parse(knownRaw);
+          if (Array.isArray(parsed)) known = parsed;
+        } catch {}
+      }
+      return { chat, mod, known };
     } catch {
       return null;
     }
@@ -458,7 +470,15 @@ export class ChatRoom {
     } catch (err) {
       this.log.warn({ err: err instanceof Error ? err.message : "unknown" }, "chat history save failed");
     }
-    if (this.useRedis) void this.redisSet("chat:history", JSON.stringify(this.history));
+    if (this.useRedis) {
+      void this.redisSet("chat:history", JSON.stringify(this.history));
+      const known = [...this.known.entries()].map(([nick, v]) => ({
+        nick,
+        lastSeen: v.lastSeen,
+        ips: v.ip ? [v.ip] : [],
+      }));
+      void this.redisSet("chat:known", JSON.stringify(known));
+    }
   }
 
   private schedulePersistMod(): void {
