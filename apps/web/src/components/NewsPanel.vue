@@ -90,10 +90,7 @@ onMounted(() => {
         </div>
       </div>
 
-      <div class="news-foot">
-        <span v-if="news.error" class="news-err">{{ news.error }}</span>
-        <span v-else-if="news.fetchedAt" class="news-updated">Updated {{ timeLabel(Math.floor(news.fetchedAt / 1000)) }}</span>
-      </div>
+
     </div>
   </div>
 </template>

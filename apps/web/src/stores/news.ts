@@ -13,11 +13,13 @@ export const useNewsStore = defineStore("news", () => {
   const open = ref<boolean>(localStorage.getItem(OPEN_KEY) === "1");
   const error = ref<string | null>(null);
   /** Local-midnight epoch of the day being viewed (index into the feed). */
-  const dayOffset = ref<number>(0);
+  const dayOffset = ref<number>(new Date().getDay()); // open on Today
 
-  /** 1s ticker drives all countdowns. */
+  /** 1s ticker drives all countdowns and the Today label. */
   const now = ref<number>(Date.now());
-  let tickTimer: ReturnType<typeof setInterval> | null = null;
+  setInterval(() => {
+    now.value = Date.now();
+  }, 1000);
 
   async function refresh(): Promise<void> {
     try {
@@ -30,19 +32,11 @@ export const useNewsStore = defineStore("news", () => {
     }
   }
 
-  function ensureTicker(): void {
-    if (tickTimer) return;
-    tickTimer = setInterval(() => {
-      now.value = Date.now();
-    }, 1000);
-  }
-
   function setOpen(v: boolean): void {
     open.value = v;
     localStorage.setItem(OPEN_KEY, v ? "1" : "0");
     if (v) {
-      ensureTicker();
-      dayOffset.value = 0; // open on today
+      dayOffset.value = Math.max(0, Math.min(6, new Date().getDay()));
       void refresh();
     }
   }
@@ -87,16 +81,9 @@ export const useNewsStore = defineStore("news", () => {
   const dayItems = computed(() => {
     const sel = selectedDay.value;
     if (!sel) return [];
-    return items.value
-      .filter((it) => {
-        const d = new Date(it.date);
-        return (
-          d.getFullYear() === new Date(sel.start).getFullYear() &&
-          d.getMonth() === new Date(sel.start).getMonth() &&
-          d.getDate() === new Date(sel.start).getDate()
-        );
-      })
-      .sort((a, b) => a.date - b.date);
+    const start = sel.start;
+    const end = start + 86_400_000;
+    return items.value.filter((it) => it.date >= start && it.date < end).sort((a, b) => a.date - b.date);
   });
 
   /** Nearest upcoming HIGH-impact release — drives the rail alarm. */
