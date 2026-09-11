@@ -191,7 +191,9 @@ function fmtError(msg: string): string {
 }
 
 onMounted(() => {
-  if (chat.open) chat.ensureClient();
+  // Connect ALWAYS (even with the panel closed) — otherwise messages
+  // received while closed never arrive and the unread badge can't count.
+  chat.ensureClient();
 });
 onBeforeUnmount(() => {
   errorTimer && clearTimeout(errorTimer);
