@@ -1495,7 +1495,7 @@ const buildPolyPixel = (
       time2: posCursor.value.time,
       entry: posState.value.entry,
       sl: posCursor.value.price,
-      tp: posState.value.entry + (long ? 1 : -1) * 2 * risk,
+      tp: posState.value.entry + (long ? 1 : -1) * 3 * risk, // default R:R 1:3
       showLevels: false,
       selected: false,
       preview: true,
@@ -2508,7 +2508,7 @@ function finalizePos(e: MouseEvent): void {
           time2: s.time,
           entry: st.entry,
           sl: s.price,
-          tp: st.entry + (long ? 1 : -1) * 2 * risk,
+          tp: st.entry + (long ? 1 : -1) * 3 * risk, // default R:R 1:3
         });
       }
     }
