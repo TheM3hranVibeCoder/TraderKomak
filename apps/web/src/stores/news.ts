@@ -32,12 +32,50 @@ export const useNewsStore = defineStore("news", () => {
     }
   }
 
+  /** Pick the day the panel opens on: TODAY if it has news, otherwise the
+   *  most recent day that does, otherwise the next upcoming one. */
+  function goToRelevantDay(): void {
+    const list = days.value;
+    if (!list.length) return;
+    const d = new Date(now.value);
+    const todayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const hasItems = (start: number) =>
+      items.value.some((it) => it.date >= start && it.date < start + 86_400_000);
+    const idx = list.findIndex((x) => x.start === todayStart);
+    if (idx >= 0 && hasItems(list[idx]!.start)) {
+      dayOffset.value = idx;
+      return;
+    }
+    // The feed range can sit fully in the future (weekend rollover → next
+    // week) or fully in the past — clamp to its nearest edge.
+    if (todayStart < list[0]!.start) {
+      dayOffset.value = 0;
+      return;
+    }
+    if (todayStart > list[list.length - 1]!.start) {
+      dayOffset.value = list.length - 1;
+      return;
+    }
+    for (let i = idx; i >= 0; i--) {
+      if (hasItems(list[i]!.start)) {
+        dayOffset.value = i;
+        return;
+      }
+    }
+    for (let i = idx + 1; i < list.length; i++) {
+      if (hasItems(list[i]!.start)) {
+        dayOffset.value = i;
+        return;
+      }
+    }
+    dayOffset.value = Math.max(0, idx);
+  }
+
   function setOpen(v: boolean): void {
     open.value = v;
     localStorage.setItem(OPEN_KEY, v ? "1" : "0");
     if (v) {
-      dayOffset.value = Math.max(0, Math.min(6, new Date().getDay()));
-      void refresh();
+      void refresh().then(() => goToRelevantDay());
     }
   }
 
@@ -132,6 +170,7 @@ export const useNewsStore = defineStore("news", () => {
     dayOffset,
     shiftDay,
     setOpen,
+    goToRelevantDay,
     refresh,
   };
 });
