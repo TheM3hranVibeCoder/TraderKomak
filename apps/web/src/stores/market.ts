@@ -113,12 +113,22 @@ export const useMarketStore = defineStore("market", () => {
     }
   );
 
+  let lastWsStatus: WsStatus = "offline";
   function ensureWs(): MarketWsClient {
     if (ws) return ws;
     ws = new MarketWsClient({
       onStatus: (s) => {
         status.value = s;
         if (s === "connected" || s === "reconnecting") error.value = null;
+        // Connection restored after a drop (internet blip, mobile sleep):
+        // the stream resumes from NOW, so the candles missed while offline
+        // must be re-fetched from the provider and merged — otherwise the
+        // chart shows a gap/jump at the junction. The snapshot alone can't
+        // always fill it (the server session may have missed them too).
+        if (s === "connected" && lastWsStatus === "reconnecting") {
+          void resyncVisible();
+        }
+        lastWsStatus = s;
       },
       onSnapshot: (inst, tf, snapshotCandles) => {
         if (inst !== instrument.value || tf !== timeframe.value) return;
