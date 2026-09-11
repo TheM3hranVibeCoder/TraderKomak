@@ -21,6 +21,7 @@ import { MarketHub } from "./websocket/hub.js";
 import { ChatRoom } from "./chat/chatRoom.js";
 import { registerHealthRoute } from "./routes/health.js";
 import { registerCandlesRoute } from "./routes/candles.js";
+import { registerNewsRoute } from "./routes/news.js";
 import { providerOf } from "@traderkomak/shared";
 
 export interface MarketServer {
@@ -129,6 +130,7 @@ export async function createMarketServer(config: AppConfig): Promise<MarketServe
 
   registerHealthRoute(app);
   registerCandlesRoute(app, { rest: historyRouter, feed });
+  registerNewsRoute(app);
   hub.register(app);
 
   // Community chat room (public, WebSocket on /chat)

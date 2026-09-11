@@ -4,6 +4,8 @@ import { useMarketStore } from "@/stores/market";
 import { useThemeStore } from "@/stores/theme";
 import { useWatchlistStore } from "@/stores/watchlist";
 import { useChatStore } from "@/stores/chat";
+import { useNewsStore } from "@/stores/news";
+import NewsPanel from "@/components/NewsPanel.vue";
 import TopToolbar from "@/components/TopToolbar.vue";
 import ChartPane from "@/components/ChartPane.vue";
 import WatchlistPanel from "@/components/WatchlistPanel.vue";
@@ -15,23 +17,37 @@ const market = useMarketStore();
 const theme = useThemeStore();
 const watchlist = useWatchlistStore();
 const chat = useChatStore();
+const news = useNewsStore();
 
 // The right column shows one panel at a time
 watch(
   () => chat.open,
   (open) => {
     if (open && watchlist.isOpen) watchlist.isOpen = false;
+    if (open && news.open) news.setOpen(false);
   }
 );
 watch(
   () => watchlist.isOpen,
   (open) => {
     if (open && chat.open) chat.setOpen(false);
+    if (open && news.open) news.setOpen(false);
+  }
+);
+watch(
+  () => news.open,
+  (open) => {
+    if (open && chat.open) chat.setOpen(false);
+    if (open && watchlist.isOpen) watchlist.isOpen = false;
   }
 );
 
 function toggleChat(): void {
   chat.setOpen(!chat.open);
+}
+
+function toggleNews(): void {
+  news.setOpen(!news.open);
 }
 
 onMounted(() => {
@@ -66,6 +82,7 @@ function onTimeframeChange(next: Timeframe): void {
       <ChartPane :candles="market.candles" :is-loading="market.isLoading" :error="market.error" :instrument="market.instrument" />
       <WatchlistPanel />
       <ChatPanel />
+      <NewsPanel />
       <!-- Right rail: watchlist (top half) + live chat (bottom half) -->
       <div class="right-rail">
         <button
@@ -91,6 +108,19 @@ function onTimeframeChange(next: Timeframe): void {
             <path d="M8.5 10.5h7M8.5 13.5h4.5" />
           </svg>
           <span v-if="chat.unread > 0 && !chat.open" class="unread-badge">{{ chat.unread > 99 ? '99+' : chat.unread }}</span>
+        </button>
+        <button
+          class="rail-half news"
+          :class="{ active: news.open, alarm: news.alarmActive }"
+          @click="toggleNews"
+          :title="news.alarmActive ? `High impact news in ${news.alarmLabel}` : 'Economic news calendar'"
+          aria-label="Toggle economic news"
+        >
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 8v4l2.5 2.5" />
+            <circle cx="12" cy="12" r="9" />
+          </svg>
+          <span v-if="news.alarmActive" class="alarm-badge">{{ news.alarmLabel }}</span>
         </button>
       </div>
     </div>
@@ -139,6 +169,30 @@ function onTimeframeChange(next: Timeframe): void {
   cursor: pointer;
   transition: background 200ms, color 200ms;
   flex-shrink: 0;
+}
+.alarm-badge {
+  position: absolute;
+  bottom: 3px;
+  left: 1px;
+  right: 1px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: rgba(239, 68, 68, 0.95);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  animation: railAlarm 1s steps(2, start) infinite;
+}
+@keyframes railAlarm {
+  50% {
+    opacity: 0.45;
+  }
+}
+.rail-half.news.alarm {
+  color: var(--offline);
 }
 .unread-badge {
   position: absolute;
