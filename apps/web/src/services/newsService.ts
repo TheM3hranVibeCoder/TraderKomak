@@ -20,8 +20,15 @@ export interface NewsFeed {
   stale: boolean;
 }
 
+/** Same base as the candles API: the market server in production,
+ *  same-origin (Vite proxy) in development. */
+function httpBase(): string {
+  const raw = import.meta.env.VITE_API_HTTP_URL as string | undefined;
+  return (raw ?? "").replace(/\/$/, "");
+}
+
 export async function fetchNews(): Promise<NewsFeed> {
-  const res = await fetch(`${location.protocol}//${location.host}/api/news`);
+  const res = await fetch(`${httpBase()}/api/news`);
   if (!res.ok) throw new Error("news feed unavailable");
   const d = (await res.json()) as {
     fetchedAt: number;
