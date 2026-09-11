@@ -24,6 +24,12 @@ export const useNewsStore = defineStore("news", () => {
   async function refresh(): Promise<void> {
     try {
       const feed = await fetchNews();
+      // An empty result (weekend rollover, transient upstream) must not
+      // wipe the panel — keep showing the last known week.
+      if (feed.items.length === 0) {
+        error.value = "No news in the feed yet — retrying";
+        return;
+      }
       items.value = feed.items;
       fetchedAt.value = feed.fetchedAt;
       error.value = null;

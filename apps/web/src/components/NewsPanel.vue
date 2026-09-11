@@ -67,7 +67,14 @@ onMounted(() => {
       </div>
 
       <div class="news-list" ref="panelEl">
-        <div v-if="news.dayItems.length === 0" class="news-empty">No medium/high impact news on this day</div>
+        <div v-if="news.error" class="news-empty">
+          ⚠ {{ news.error }}
+          <button class="retry-btn" @click="news.refresh()">Retry</button>
+        </div>
+        <div v-else-if="news.dayItems.length === 0" class="news-empty">
+          No medium/high impact news on this day
+          <button class="retry-btn" @click="news.refresh()">Retry</button>
+        </div>
         <div v-for="it in news.dayItems" :key="it.title + it.date" class="news-row" :class="impactClass(it.impact)">
           <div class="row-time">
             <img v-if="flagFor(it.country)" :src="flagFor(it.country)!" class="row-flag" :alt="it.country" />
@@ -327,6 +334,22 @@ onMounted(() => {
   color: var(--offline);
 }
 /* Phones: overlay like the watchlist */
+.retry-btn {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.retry-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 @media (max-width: 768px) {
   .news-panel.open {
     position: absolute;

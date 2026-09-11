@@ -51,6 +51,15 @@ async function refresh(): Promise<void> {
   });
   if (!res.ok) throw new Error(`FF feed ${res.status}`);
   const raw = (await res.json()) as Array<Record<string, unknown>>;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    // The feed sometimes serves an empty list between weeks — keep the
+    // previous cached week instead of wiping the panel.
+    if (cache) {
+      cache.fetchedAt = Date.now();
+      return;
+    }
+    throw new Error("FF feed empty");
+  }
   const items: NewsItem[] = [];
   for (const it of raw) {
     const impact = String(it.impact ?? "");
