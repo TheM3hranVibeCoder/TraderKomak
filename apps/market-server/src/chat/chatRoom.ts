@@ -50,6 +50,11 @@ export class ChatRoom {
   /** Every nick the room has seen — powers the member/offline lists. */
   private readonly known = new Map<string, { lastSeen: number; ip?: string }>();
   private mod: ModState = { mutes: [], bans: [] };
+  /** When Upstash Redis env vars are set, history + mod state persist
+   *  there — surviving Render free-tier restarts and sleep cycles that
+   *  wipe the ephemeral disk. Without them, a local file is used. */
+  private readonly redisUrl = process.env.UPSTASH_REDIS_REST_URL ?? "";
+  private readonly redisToken = process.env.UPSTASH_REDIS_REST_TOKEN ?? "";
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private modSaveTimer: ReturnType<typeof setTimeout> | null = null;
   private dirty = false;
@@ -65,6 +70,69 @@ export class ChatRoom {
     // Seed the member list from the persisted history
     for (const m of this.history) {
       if (m.from) this.known.set(m.from.toLowerCase(), { lastSeen: m.ts });
+    }
+    // Cloud persistence (Upstash REST): pulls the latest history once it
+    // arrives. Only applies when the local file had nothing — fresh
+    // messages typed in the meantime always win.
+    if (this.useRedis) {
+      void this.pullFromRedis().then((remote) => {
+        if (remote && this.history.length === 0) {
+          this.history = remote.chat;
+          this.mod = remote.mod;
+          for (const m of this.history) {
+            if (m.from) this.known.set(m.from.toLowerCase(), { lastSeen: m.ts });
+          }
+          this.log.info({ messages: this.history.length }, "chat history restored from redis");
+        }
+      });
+    }
+  }
+
+  private get useRedis(): boolean {
+    return this.redisUrl !== "" && this.redisToken !== "";
+  }
+
+  private async redisSet(key: string, value: string): Promise<void> {
+    try {
+      await fetch(`${this.redisUrl}/set/${key}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${this.redisToken}` },
+        body: value,
+      });
+    } catch (err) {
+      this.log.warn({ err: err instanceof Error ? err.message : "unknown" }, "redis set failed");
+    }
+  }
+
+  private async redisGet(key: string): Promise<string | null> {
+    try {
+      const res = await fetch(`${this.redisUrl}/get/${key}`, {
+        headers: { Authorization: `Bearer ${this.redisToken}` },
+      });
+      const json = (await res.json()) as { result?: string | null };
+      return typeof json.result === "string" ? json.result : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async pullFromRedis(): Promise<{ chat: ChatMessage[]; mod: ModState } | null> {
+    const chatRaw = await this.redisGet("chat:history");
+    const modRaw = await this.redisGet("chat:mod");
+    if (!chatRaw) return null;
+    try {
+      const chat = JSON.parse(chatRaw) as ChatMessage[];
+      if (!Array.isArray(chat)) return null;
+      let mod: ModState = { mutes: [], bans: [] };
+      if (modRaw) {
+        try {
+          const parsed = JSON.parse(modRaw) as ModState;
+          if (Array.isArray(parsed.mutes) && Array.isArray(parsed.bans)) mod = parsed;
+        } catch {}
+      }
+      return { chat, mod };
+    } catch {
+      return null;
     }
   }
 
@@ -390,6 +458,7 @@ export class ChatRoom {
     } catch (err) {
       this.log.warn({ err: err instanceof Error ? err.message : "unknown" }, "chat history save failed");
     }
+    if (this.useRedis) void this.redisSet("chat:history", JSON.stringify(this.history));
   }
 
   private schedulePersistMod(): void {
@@ -411,5 +480,6 @@ export class ChatRoom {
     } catch (err) {
       this.log.warn({ err: err instanceof Error ? err.message : "unknown" }, "chat mod save failed");
     }
+    if (this.useRedis) void this.redisSet("chat:mod", JSON.stringify(this.mod));
   }
 }

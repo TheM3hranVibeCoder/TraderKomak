@@ -23,6 +23,10 @@ export const useChatStore = defineStore("chat", () => {
   const mutedUntil = ref<number>(0);
   /** Epoch ms when the 15s chat cooldown lifts (0 = can send now). */
   const rateWaitUntil = ref<number>(0);
+  /** Unread messages while the panel is closed + the ts of the first one
+   *  (opening the panel jumps straight to it). */
+  const unread = ref<number>(0);
+  const firstUnseenTs = ref<number>(0);
 
   let client: ChatClient | null = null;
   let clientAdminKey: string | undefined;
@@ -42,6 +46,10 @@ export const useChatStore = defineStore("chat", () => {
         messages.value = list;
       },
       onChat: (msg) => {
+        if (!open.value) {
+          unread.value++;
+          if (!firstUnseenTs.value) firstUnseenTs.value = msg.ts;
+        }
         messages.value = [...messages.value, msg];
         if (messages.value.length > 300) messages.value = messages.value.slice(-300);
       },
@@ -49,6 +57,10 @@ export const useChatStore = defineStore("chat", () => {
         messages.value = messages.value.filter((m) => m.id !== id);
       },
       onSystem: (text, ts) => {
+        if (!open.value) {
+          unread.value++;
+          if (!firstUnseenTs.value) firstUnseenTs.value = ts;
+        }
         messages.value = [...messages.value, { id: `s-${ts}-${Math.random().toString(36).slice(2, 6)}`, from: "", text, ts }];
       },
       onOnline: (count, nicks, known) => {
@@ -100,7 +112,10 @@ export const useChatStore = defineStore("chat", () => {
   function setOpen(v: boolean): void {
     open.value = v;
     localStorage.setItem(OPEN_KEY, v ? "1" : "0");
-    if (v) ensureClient();
+    if (v) {
+      ensureClient();
+      unread.value = 0; // opened → everything is seen
+    }
   }
 
   function sendText(text: string): boolean {
@@ -144,6 +159,8 @@ export const useChatStore = defineStore("chat", () => {
     nick,
     isAdmin,
     open,
+    unread,
+    firstUnseenTs,
     error,
     mutes,
     bans,

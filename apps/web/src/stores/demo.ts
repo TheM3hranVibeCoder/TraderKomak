@@ -16,7 +16,7 @@ import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
 import { useMarketStore } from "@/stores/market";
 import { useReplayStore } from "@/stores/replay";
-import { instrumentPrecision, oandaDailyBucketStart } from "@traderkomak/shared";
+import { instrumentPrecision, oandaDailyBucketStart, providerOf } from "@traderkomak/shared";
 
 export type DemoSide = "long" | "short";
 export type DemoStatus = "pending" | "open" | "closed";
@@ -287,12 +287,20 @@ export const useDemoStore = defineStore("demo", () => {
    *  take a 1-hour break right after each session open (5–6pm NY), which is
    *  why gold opens an hour later than forex on Sunday evenings. */
   function isClosed(symbol = market.instrument): boolean {
+    // Crypto trades 24/7 — never closed
+    if (providerOf(symbol) === "binance") return false;
     const now = Date.now();
     const DAY = 86400000;
     const mid = Math.floor(now / DAY) * DAY;
     const sundayMid = mid - new Date(mid).getUTCDay() * DAY;
-    const weekOpen = oandaDailyBucketStart(sundayMid + 12 * 3600000);
-    const weekClose = oandaDailyBucketStart(sundayMid + 5 * DAY + 12 * 3600000);
+    // Anchor INSIDE the Sunday session (22:00 UTC is always after the Sun
+    // 5pm-NY open) — Sunday noon itself resolves to Saturday's session,
+    // which OANDA doesn't trade, shifting the whole week a day early.
+    const weekOpen = oandaDailyBucketStart(sundayMid + 22 * 3600000);
+    // Week closes after FIVE daily sessions: Sun 5pm NY → Mon → Tue → Wed
+    // → Thu → Fri 5pm NY. (The old bucketStart(Fri noon) call returned
+    // THURSDAY's session start — a day early — making Friday show CLOSED.)
+    const weekClose = weekOpen + 5 * DAY;
     if (now < weekOpen || now >= weekClose) return true;
     const norm = symbol.toUpperCase();
     if (norm === "XAU_USD" || norm === "XAG_USD") {

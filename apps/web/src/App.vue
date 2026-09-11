@@ -83,13 +83,14 @@ function onTimeframeChange(next: Timeframe): void {
           class="rail-half"
           :class="{ active: chat.open }"
           @click="toggleChat"
-          :title="chat.open ? 'Close live chat' : 'Open live chat'"
+          :title="chat.open ? 'Close live chat' : chat.unread > 0 ? `${chat.unread} new messages — open live chat` : 'Open live chat'"
           aria-label="Toggle live chat"
         >
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M21 12a8 8 0 0 1-8 8H5.5a1.5 1.5 0 0 1-1.06-2.56l1.2-1.2A8 8 0 1 1 21 12z" />
             <path d="M8.5 10.5h7M8.5 13.5h4.5" />
           </svg>
+          <span v-if="chat.unread > 0 && !chat.open" class="unread-badge">{{ chat.unread > 99 ? '99+' : chat.unread }}</span>
         </button>
       </div>
     </div>
@@ -138,6 +139,25 @@ function onTimeframeChange(next: Timeframe): void {
   cursor: pointer;
   transition: background 200ms, color 200ms;
   flex-shrink: 0;
+}
+.unread-badge {
+  position: absolute;
+  top: 4px;
+  right: 3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  display: grid;
+  place-items: center;
+  border-radius: 99px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 900;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+.rail-half {
+  position: relative;
 }
 .rail-half:first-child {
   border-bottom: 1px solid var(--border);

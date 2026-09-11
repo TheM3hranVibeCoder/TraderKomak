@@ -68,10 +68,43 @@ function scrollTop(): void {
   });
 }
 
+/** On open: jump to the FIRST UNSEEN message (or bottom when all seen). */
+function jumpToUnseen(): void {
+  void nextTick(() => {
+    const el = listEl.value;
+    if (!el) return;
+    if (chat.firstUnseenTs) {
+      const target = el.querySelector(`[data-ts="${chat.firstUnseenTs}"]`);
+      if (target) {
+        target.scrollIntoView({ block: "start" });
+        return;
+      }
+    }
+    el.scrollTop = el.scrollHeight;
+  });
+}
+
+/** Down-arrow visibility: user is away from the bottom of the list. */
+const showJumpDown = ref(false);
+function onListScroll(): void {
+  const el = listEl.value;
+  if (!el) return;
+  showJumpDown.value = el.scrollHeight - el.scrollTop - el.clientHeight > 120;
+}
+function jumpToBottom(): void {
+  scrollTop();
+}
+
 watch(
   () => [chat.messages.length, chat.open],
-  () => {
-    if (chat.open) scrollTop();
+  ([, open]) => {
+    if (open) scrollTop(); // new message while open → follow the bottom
+  }
+);
+watch(
+  () => chat.open,
+  (open) => {
+    if (open) jumpToUnseen();
   }
 );
 
@@ -235,8 +268,8 @@ onBeforeUnmount(() => {
             @click="chat.moderate('unban', b.nick)"
           >⛔ {{ b.nick }} ✕</span>
         </div>
-        <div ref="listEl" class="chat-list">
-          <div v-for="m in chat.messages" :key="m.id" class="msg" :class="{ system: m.from === '' }">
+        <div ref="listEl" class="chat-list" @scroll="onListScroll">
+          <div v-for="m in chat.messages" :key="m.id" class="msg" :class="{ system: m.from === '' }" :data-ts="m.ts">
             <template v-if="m.from === ''">
               <span class="sys-text">— {{ m.text }} —</span>
             </template>
@@ -732,6 +765,23 @@ onBeforeUnmount(() => {
 .pending-hint {
   font-size: 10px;
   color: var(--text-muted);
+}
+
+.jump-down {
+  position: absolute;
+  right: 12px;
+  bottom: 76px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--glass-border);
+  background: var(--accent-gradient);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.4);
+  z-index: 5;
 }
 
 /* Members dropdown (moderator) */
