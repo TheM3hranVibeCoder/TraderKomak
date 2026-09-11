@@ -97,8 +97,12 @@ function jumpToBottom(): void {
 
 watch(
   () => [chat.messages.length, chat.open],
-  ([, open]) => {
-    if (open) scrollTop(); // new message while open → follow the bottom
+  ([, open], old) => {
+    if (!open) return;
+    const prevLen = old ? Number(old[0]) : 0;
+    // Follow the bottom only when a message ARRIVES — deletions must not
+    // yank the view away from where the moderator is working.
+    if (chat.messages.length > prevLen) scrollTop();
   }
 );
 watch(
