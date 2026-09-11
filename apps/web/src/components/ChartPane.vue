@@ -4756,29 +4756,6 @@ onBeforeUnmount(() => {
   z-index: 3;
   pointer-events: none;
 }
-/* Selected position: small visible grips on its grab strips (like the
-   rectangle resize handles) so the grab points are discoverable */
-.pos-hit.selected .pos-edge-hit::before,
-.pos-hit.selected .pos-level-hit::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background: #fff;
-  border: 1px solid var(--accent);
-  border-radius: 3px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-}
-.pos-hit.selected .pos-edge-hit::before {
-  width: 7px;
-  height: 22px;
-}
-.pos-hit.selected .pos-level-hit::before {
-  width: 22px;
-  height: 7px;
-}
-
 /* The SELECTED drawing's grab areas always win the pointer — resizing
    follows the selection no matter which drawings overlap it. Handles
    only exist on the selected drawing, so lifting them is safe too. */
@@ -5221,7 +5198,7 @@ onBeforeUnmount(() => {
   cursor: ew-resize;
 }
 .pos-handle {
-  cursor: grab;
+  cursor: nwse-resize;
 }
 .pos-label-layer {
   position: absolute;
