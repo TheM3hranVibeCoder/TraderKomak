@@ -3663,6 +3663,7 @@ onBeforeUnmount(() => {
           <polyline
             :points="p.pts.map((q) => q.x + ',' + q.y).join(' ')"
             class="trend-hit"
+            :class="{ selected: p.selected }"
             fill="none"
             stroke="transparent"
             stroke-width="14"
@@ -3756,7 +3757,7 @@ onBeforeUnmount(() => {
         v-for="s in singlePixels"
         :key="'hit-' + s.id"
         class="single-hit"
-        :class="s.kind"
+        :class="[s.kind, { selected: s.selected }]"
         :style="
           s.kind === 'vline'
             ? { left: s.x - 4 + 'px' }
@@ -4755,6 +4756,45 @@ onBeforeUnmount(() => {
   z-index: 3;
   pointer-events: none;
 }
+/* Selected position: small visible grips on its grab strips (like the
+   rectangle resize handles) so the grab points are discoverable */
+.pos-hit.selected .pos-edge-hit::before,
+.pos-hit.selected .pos-level-hit::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: #fff;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+.pos-hit.selected .pos-edge-hit::before {
+  width: 7px;
+  height: 22px;
+}
+.pos-hit.selected .pos-level-hit::before {
+  width: 22px;
+  height: 7px;
+}
+
+/* The SELECTED drawing's grab areas always win the pointer — resizing
+   follows the selection no matter which drawings overlap it. Handles
+   only exist on the selected drawing, so lifting them is safe too. */
+.drawing-hit-rect.selected,
+.drawing-hit-rect.selected .rect-edge-hit,
+.trend-hit.selected,
+.pos-hit.selected,
+.pos-hit.selected .pos-level-hit,
+.pos-hit.selected .pos-edge-hit,
+.pos-hit.selected .resize-handle.pos-handle,
+.single-hit.selected,
+.single-handle,
+.resize-handle {
+  z-index: 30;
+}
+
 /* Touch: a finger-drag on a drawing must move the drawing, not scroll the
    page — without this the browser fires pointercancel mid-gesture */
 .drawing-hit-rect,
