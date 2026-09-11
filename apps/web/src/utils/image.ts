@@ -3,7 +3,7 @@
  * and re-encode as JPEG until it fits the inline message budget (~200KB).
  */
 const MAX_EDGE = 1280;
-const TARGET_CHARS = 200_000; // ≈ 150KB image as a data URL
+const TARGET_CHARS = 150_000; // ≈ 112KB image as a data URL
 
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
