@@ -56,13 +56,15 @@ export const useChatStore = defineStore("chat", () => {
       onHistory: (list) => {
         messages.value = list;
         if (open.value) {
-          markSeen(list.length ? list[list.length - 1].ts : 0);
+          const last = list[list.length - 1];
+          markSeen(last ? last.ts : 0);
         } else {
           // Panel closed at page-load: everything in history newer than the
           // user's persisted last-seen ts counts as unread.
           const unseen = list.filter((m) => m.ts > lastSeenTs && m.from !== nick.value);
           unread.value = unseen.length;
-          firstUnseenTs.value = unseen.length ? unseen[0].ts : 0;
+          const first = unseen[0];
+          firstUnseenTs.value = first ? first.ts : 0;
         }
       },
       onChat: (msg) => {
@@ -139,8 +141,8 @@ export const useChatStore = defineStore("chat", () => {
     if (v) {
       ensureClient();
       unread.value = 0; // opened → everything is seen
-      const last = messages.value.length ? messages.value[messages.value.length - 1].ts : 0;
-      markSeen(last || Math.floor(Date.now() / 1000));
+      const lastMsg = messages.value[messages.value.length - 1];
+      markSeen(lastMsg ? lastMsg.ts : Math.floor(Date.now() / 1000));
     }
   }
 
