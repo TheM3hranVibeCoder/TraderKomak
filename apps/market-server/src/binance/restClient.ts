@@ -73,23 +73,71 @@ export class BinanceRestClient {
     toIso?: string
   ): Promise<Candle[]> {
     const { interval, factor } = planFor(timeframe);
+    const tfSec = TIMEFRAME_SECONDS[timeframe];
+    // Binance interval duration in ms ("1s" for sub-minute TFs, else the
+    // native interval; "1M" is variable-length and excluded from parallel).
+    const intervalMs = (tfSec < 60 ? 1 : tfSec) * 1000;
     const needed = Math.min(count * factor, MAX_BATCHES * BINANCE_MAX_LIMIT);
+    const batchCount = Math.min(Math.ceil(needed / BINANCE_MAX_LIMIT), MAX_BATCHES);
+    const startEndMs = toIso !== undefined ? Date.parse(toIso) : Date.now();
 
-    const all: Candle[] = [];
-    let endTimeMs: number | undefined =
-      toIso !== undefined ? Date.parse(toIso) : undefined;
+    let all: Candle[] = [];
 
-    for (let batch = 0; batch < MAX_BATCHES && all.length < needed; batch++) {
-      const rows = await this.fetchBatch(instrument, interval, Math.min(needed - all.length, BINANCE_MAX_LIMIT), endTimeMs);
-      if (rows.length === 0) break;
+    if (batchCount <= 1 || interval === "1M") {
+      // Single batch (or the monthly walk — uneven month lengths make
+      // estimated windows unreliable): sequential as before.
+      let endTimeMs: number | undefined =
+        toIso !== undefined ? Date.parse(toIso) : undefined;
+      for (let batch = 0; batch < MAX_BATCHES && all.length < needed; batch++) {
+        const rows = await this.fetchBatch(instrument, interval, Math.min(needed - all.length, BINANCE_MAX_LIMIT), endTimeMs);
+        if (rows.length === 0) break;
+        all.unshift(...rows);
+        const earliestOpen = rows[0]!.time * 1000;
+        endTimeMs = earliestOpen - 1;
+        if (rows.length < BINANCE_MAX_LIMIT) break; // exhausted history
+        await new Promise((r) => setTimeout(r, 120)); // be polite
+      }
+    } else {
+      // Multi-batch: Binance crypto trades 24/7, so kline windows are
+      // predictable — fetch ALL batches in parallel (~batchCount× faster
+      // than walking), each window slightly overlapping the previous one,
+      // then dedupe. Rare holes (exchange downtime) get a sequential
+      // top-up pass.
+      const overlapMs = 5 * intervalMs;
+      const windows: number[] = [];
+      for (let i = 0; i < batchCount; i++) {
+        windows.push(startEndMs - i * (BINANCE_MAX_LIMIT * intervalMs) + (i > 0 ? overlapMs : 0));
+      }
+      const batches = await Promise.all(
+        windows.map((end, i) => (async () => {
+          if (i > 0) await new Promise((r) => setTimeout(r, i * 60)); // tiny stagger
+          return this.fetchBatch(instrument, interval, BINANCE_MAX_LIMIT, end);
+        })())
+      );
+      const dedupP = new Map<number, Candle>();
+      for (const rows of batches) for (const c of rows) dedupP.set(c.time, c);
+      let merged = [...dedupP.values()].sort((a, b) => a.time - b.time);
 
-      all.unshift(...rows);
-      const earliestOpen = rows[0]!.time * 1000;
-      endTimeMs = earliestOpen - 1; // strictly before this kline's open
-      if (rows.length < BINANCE_MAX_LIMIT) break; // exhausted history
-      // 1s klines carry elevated weight — pace the walk so rapid chains
-      // don't trip Binance's rate limiter mid-walk.
-      await new Promise((r) => setTimeout(r, interval === "1s" ? 350 : 120)); // be polite
+      // Top-up: fill holes between consecutive klines (max 2 passes)
+      for (let round = 0; round < 2; round++) {
+        const holes: Array<{ end: number; missing: number }> = [];
+        for (let i = 1; i < merged.length; i++) {
+          const gapSec = merged[i]!.time - merged[i - 1]!.time;
+          const missing = Math.floor(gapSec / (intervalMs / 1000)) - 1;
+          if (missing > 0 && missing <= 500) holes.push({ end: merged[i]!.time - 1, missing });
+        }
+        if (holes.length === 0) break;
+        const before = merged.length;
+        const fills = await Promise.all(
+          holes.map((h) => this.fetchBatch(instrument, interval, Math.min(BINANCE_MAX_LIMIT, h.missing + 5), h.end * 1000))
+        );
+        const dedup2 = new Map<number, Candle>();
+        for (const c of merged) dedup2.set(c.time, c);
+        for (const rows of fills) for (const c of rows) dedup2.set(c.time, c);
+        merged = [...dedup2.values()].sort((a, b) => a.time - b.time);
+        if (merged.length === before) break;
+      }
+      all = merged;
     }
 
     // Dedupe + sort ascending
