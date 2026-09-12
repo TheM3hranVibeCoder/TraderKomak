@@ -87,7 +87,9 @@ export class BinanceRestClient {
       const earliestOpen = rows[0]!.time * 1000;
       endTimeMs = earliestOpen - 1; // strictly before this kline's open
       if (rows.length < BINANCE_MAX_LIMIT) break; // exhausted history
-      await new Promise((r) => setTimeout(r, 120)); // be polite
+      // 1s klines carry elevated weight — pace the walk so rapid chains
+      // don't trip Binance's rate limiter mid-walk.
+      await new Promise((r) => setTimeout(r, interval === "1s" ? 350 : 120)); // be polite
     }
 
     // Dedupe + sort ascending

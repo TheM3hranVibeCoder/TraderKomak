@@ -103,7 +103,7 @@ export function registerCandlesRoute(
  * Switching timeframes/symbols re-requests the same windows over and over;
  * without a cache every switch pays the full upstream (OANDA) round trip.
  * The live stream keeps the chart head fresh, so a short TTL is safe. */
-const HISTORY_TTL_MS = 30_000;
+const HISTORY_TTL_MS = 90_000;
 const HISTORY_CACHE_MAX = 300;
 const historyCache = new Map<string, { at: number; candles: unknown[] }>();
 
