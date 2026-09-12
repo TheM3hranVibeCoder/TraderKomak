@@ -743,6 +743,13 @@ watch(
     // Re-anchor the badge after any data change (scale may shift)
     nextTick(updateBadgePosition);
     if (!prev || prev.length === 0 || next.length === 0) {
+      // Fresh history after a symbol/timeframe switch (or first load): the
+      // price scale may carry a MANUALLY-dragged range from the previous
+      // chart — a different symbol's candles then squash into a thin band
+      // until the user drags the scale. Re-arm autoscale BEFORE setData so
+      // the y-axis refits to the new symbol's own price range. Replay keeps
+      // its frozen scale.
+      adapter.setPriceAutoScale(!replay.active);
       adapter.setData(next);
       return;
     }
