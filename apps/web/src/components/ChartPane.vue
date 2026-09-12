@@ -6,6 +6,7 @@ import { useMarketStore } from "@/stores/market";
 import { useDrawingsStore, type DrawingRect, type DrawingTrend, type DrawingPoly, type DrawingPosition, type DrawingHLine, type DrawingHRay, type DrawingVLine, type SingleKind, type SingleDrawing, type DashStyle } from "@/stores/drawings";
 import { useReplayStore } from "@/stores/replay";
 import { useDemoStore, demoValuePerPrice, type DemoSide, type DemoStatus, type DemoKind } from "@/stores/demo";
+import { useIndicatorsStore, sessionKindAt, nextBoundaryAfter, boundaryEpoch, tzOffsetMin, inSession, localMinutesOfDay, type SessionDef, type CustomSession } from "@/stores/indicators";
 import DemoPanel from "./DemoPanel.vue";
 import type { Candle } from "@traderkomak/shared";
 import { currencyFlagUrl, commodityIcon, symbolParts } from "@/utils/flags";
@@ -22,6 +23,247 @@ const market = useMarketStore();
 const drawingsStore = useDrawingsStore();
 const replay = useReplayStore();
 const demo = useDemoStore();
+const indicators = useIndicatorsStore();
+
+/* ── Sessions indicator: market-session background boxes ─────────────── */
+interface SessionBoxPx {
+  key: string;
+  name: string;
+  color: string;
+  left: number;
+  width: number;
+  top: number;
+  height: number;
+  showLabel: boolean;
+  /** vertical offset of the name inside the box (label anti-collision) */
+  labelTop: number;
+}
+const sessionPixels = ref<SessionBoxPx[]>([]);
+const indSettingsOpen = ref(false);
+
+/** While the settings popup is open, any pointerdown outside it (the chart,
+ *  watchlist, news…) closes it. The legend buttons are excluded — the gear
+ *  toggles itself. */
+function indSettingsOutside(e: PointerEvent): void {
+  const pop = document.querySelector(".ind-settings");
+  if (pop && pop.contains(e.target as Node)) return;
+  const legend = document.querySelector(".indicator-legend");
+  if (legend && legend.contains(e.target as Node)) return;
+  indSettingsOpen.value = false;
+}
+watch(indSettingsOpen, (open) => {
+  if (open) document.addEventListener("pointerdown", indSettingsOutside, true);
+  else document.removeEventListener("pointerdown", indSettingsOutside, true);
+});
+
+/** Groups candles into contiguous runs of each session and projects each
+ *  run to a box spanning the run's high→low, TradingView Sessions-style.
+ *  Built-ins are a CHAIN of market-open boundaries (DST-aware, see store);
+ *  the run currently in progress extends right to its SCHEDULED end —
+ *  e.g. the NY&LN box reaches 17:30, New York's reaches the next Sydney
+ *  open — projecting into the future whitespace past the last candle. */
+function computeSessionBoxes(): void {
+  if (!indicators.sessionsAdded || !indicators.sessionsVisible || !adapter) {
+    sessionPixels.value = [];
+    return;
+  }
+  const c = props.candles;
+  const n = c.length;
+  if (n < 2) {
+    sessionPixels.value = [];
+    return;
+  }
+  const chartW = (containerRef.value?.clientWidth ?? 0) - axisRightW.value;
+  // bar interval for extending a run to the end of its last candle
+  const tfSec = (TIMEFRAME_SECONDS as Record<string, number>)[market.timeframe] ?? Math.max(1, (c[n - 1]!.time - c[n - 2]!.time));
+  const out: SessionBoxPx[] = [];
+  const active = indicators.sessionsEnabled;
+
+  /** End time of the run that contains the LAST candle: its scheduled
+   *  session end (future) — the box draws up to it, not just to the last
+   *  candle. Built-ins: the next link of the chain; customs: the window's
+   *  next closing time in the visitor's clock. */
+  const scheduledEndFor = (def: SessionDef, t: number): number => {
+    return nextBoundaryAfter(def, t);
+  };
+  const scheduledEndCustom = (def: CustomSession, t: number): number => {
+    const d = Math.floor(t / 86400);
+    for (const day of [d, d + 1]) {
+      const end = day * 86400 + (def.end - tzOffsetMin(def.tz, day)) * 60;
+      if (end > t) return end;
+    }
+    return t;
+  };
+
+  /** One contiguous-run scan over `member`: 1 = candle belongs to the
+   *  session. Boxes span the run's high→low. */
+  const scanRuns = (
+    member: (i: number) => boolean,
+    endT: (lastTime: number, isLive: boolean) => number,
+    key: string,
+    name: string,
+    color: string
+  ): void => {
+    let runStart = -1;
+    let runHigh = -Infinity;
+    let runLow = Infinity;
+    const closeRun = (endIdx: number): void => {
+      if (runStart < 0) return;
+      const lastIdx = endIdx - 1;
+      const t1 = c[runStart]!.time;
+      // The scheduled-end extension applies ONLY while data is actually
+      // streaming — when the market is closed (weekend/after close) the
+      // box must stop at the last candle, not reach into the blank area.
+      const streaming =
+        lastIdx === n - 1 &&
+        Date.now() / 1000 - c[lastIdx]!.time < Math.max(tfSec * 2, 120);
+      const t2 = lastIdx === n - 1
+        ? (streaming ? endT(c[lastIdx]!.time, true) : c[lastIdx]!.time + tfSec)
+        : c[lastIdx]!.time + tfSec;
+      runStart = -1;
+      const x1 = adapter!.timeToX(t1);
+      const x2 = adapter!.timeToX(t2);
+      const top = adapter!.getPriceY(runHigh);
+      const bottom = adapter!.getPriceY(runLow);
+      if (x1 === null || x2 === null || top === null || bottom === null) return;
+      const left = Math.max(-2, Math.min(x1, x2));
+      const right = Math.min(chartW + 2, Math.max(x1, x2));
+      const width = right - left;
+      if (width < 1) return;
+      const yTop = Math.min(top, bottom);
+      const yBot = Math.max(top, bottom);
+      out.push({
+        key: key + "-" + t1,
+        name,
+        color,
+        left,
+        width,
+        top: yTop,
+        height: Math.max(2, yBot - yTop),
+        showLabel: width > 56 && indicators.sessionsLabels,
+        labelTop: 3,
+      });
+    };
+    for (let i = 0; i <= n; i++) {
+      const isIn = i < n && member(i);
+      if (isIn) {
+        if (runStart < 0) {
+          runStart = i;
+          runHigh = -Infinity;
+          runLow = Infinity;
+        }
+        runHigh = Math.max(runHigh, c[i]!.high);
+        runLow = Math.min(runLow, c[i]!.low);
+      } else {
+        closeRun(i);
+      }
+    }
+  };
+
+  // Built-ins: membership by chained market-open boundaries
+  for (const def of indicators.defs) {
+    if (!indicators.isEnabled(def.id)) continue;
+    scanRuns(
+      (i) => sessionKindAt(c[i]!.time) === def.id,
+      (t) => scheduledEndFor(def, t),
+      def.id,
+      def.name,
+      def.color
+    );
+  }
+  // Custom sessions: free windows in the visitor's local clock
+  for (const def of indicators.customs) {
+    if (!indicators.isEnabled(def.id)) continue;
+    scanRuns(
+      (i) => inSession(def, localMinutesOfDay(def.tz, c[i]!.time)),
+      (t) => scheduledEndCustom(def, t),
+      def.id,
+      def.name,
+      def.color
+    );
+  }
+  // Label anti-collision: two sessions sharing the same time region and a
+  // similar high would put their names on top of each other — stack the
+  // later label lower inside its own box (hide it if the box is too short).
+  const LABEL_H = 12;
+  const placed: { l: number; r: number; t: number; b: number }[] = [];
+  for (const b of [...out].sort((a, b) => a.left - b.left)) {
+    if (!b.showLabel) continue;
+    const l = b.left;
+    const r = b.left + b.width;
+    let lt = 3;
+    while (placed.some((p) => l < p.r && r > p.l && b.top + lt < p.b && b.top + lt + LABEL_H > p.t)) {
+      lt += LABEL_H + 2;
+    }
+    if (lt + LABEL_H > b.height) {
+      b.showLabel = false;
+      continue;
+    }
+    placed.push({ l, r, t: b.top + lt, b: b.top + lt + LABEL_H });
+    b.labelTop = lt;
+  }
+  sessionPixels.value = out;
+}
+
+/** "09:00" ↔ minutes-of-day helpers for the settings time inputs. */
+function toTimeStr(min: number): string {
+  const m = ((Math.round(min) % 1440) + 1440) % 1440;
+  return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+}
+function onCustomTimeChange(s: CustomSession, which: "start" | "end", ev: Event): void {
+  const v = (ev.target as HTMLInputElement).value; // "HH:MM"
+  const [h = 0, m = 0] = v.split(":").map(Number);
+  if (Number.isFinite(h) && Number.isFinite(m)) s[which] = h * 60 + m;
+}
+
+/** A built-in session's current window, rendered in the VISITOR's own
+ *  local clock (e.g. "01:30 – 03:30"). Boundaries are chained market
+ *  opens, so this text shifts by an hour when DST changes anywhere. */
+function sessionWindowLocal(def: SessionDef): string {
+  const now = Math.floor(Date.now() / 1000);
+  const day = Math.floor(now / 86400);
+  // boundary instances within ±36h of now, sorted
+  const bounds: { t: number; id: SessionDef["id"] }[] = [];
+  for (const dd of [day - 2, day - 1, day, day + 1, day + 2]) {
+    for (const d of indicators.defs) {
+      const t = boundaryEpoch(d, dd * 86400);
+      if (t > now - 36 * 3600 && t < now + 36 * 3600) bounds.push({ t, id: d.id });
+    }
+  }
+  bounds.sort((a, b) => a.t - b.t);
+  // the window that contains now, else the next one to start
+  let si = bounds.findIndex((b, i) => b.id === def.id && b.t <= now && (i + 1 >= bounds.length || bounds[i + 1]!.t > now));
+  if (si < 0) si = bounds.findIndex((b) => b.id === def.id && b.t > now);
+  if (si < 0 || si + 1 >= bounds.length) return "—";
+  const fmt = (t: number): string =>
+    new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  const startT = bounds[si]!.t;
+  const endT = bounds[si + 1]!.t;
+  const wrap = endT <= startT ? " +1" : "";
+  return fmt(startT) + " – " + fmt(endT) + wrap;
+}
+
+/** New-custom-session form state (the settings popup's add row). */
+const newSessName = ref("");
+const newSessColor = ref("#7bd88f");
+const newSessStart = ref("08:00");
+const newSessEnd = ref("12:00");
+function onAddSession(): void {
+  const parse = (v: string): number => {
+    const [h = 0, m = 0] = v.split(":").map(Number);
+    return h * 60 + m;
+  };
+  if (indicators.addCustomSession(newSessName.value, parse(newSessStart.value), parse(newSessEnd.value), newSessColor.value)) {
+    newSessName.value = "";
+  }
+}
+
+// Indicator toggles don't move the chart — re-project the boxes directly
+watch(
+  () => [indicators.sessionsAdded, indicators.sessionsVisible, indicators.sessionsLabels, indicators.sessionsEnabled, indicators.defs, indicators.customs],
+  () => recalcRects(),
+  { deep: true }
+);
 
 /** Price display precision of the active instrument (template + tags). */
 const prec = computed(() => instrumentPrecision(market.instrument));
@@ -1243,6 +1485,9 @@ function recalcRects(): void {
   }
 
   rectPixels.value = out;
+
+  // Sessions indicator background boxes (same triggers as drawings)
+  computeSessionBoxes();
 
   // Trendlines: endpoints project directly (no min/max — a line keeps its
   // drawn direction; vertical lines with equal times are valid).
@@ -3047,6 +3292,8 @@ onMounted(async () => {
   // tool is active. In cursor mode this handler does nothing and the chart
   // behaves normally.
   const onChartMouseDown = (e: MouseEvent) => {
+    // Any click on the chart closes the indicator settings popup
+    indSettingsOpen.value = false;
     // Demo limit placement: a click sets the draft entry price
     if (demo.active && draft.value) {
       if (e.button !== 0 || !isInChartArea(e) || !adapter || !containerRef.value) return;
@@ -3376,6 +3623,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  document.removeEventListener("pointerdown", indSettingsOutside, true);
   if (visibleCb && adapter) adapter.unsubscribeVisibleRange(visibleCb);
   if (dataCb && adapter) adapter.unsubscribeDataChanged(dataCb);
   if (countdownTimer) clearInterval(countdownTimer);
@@ -3461,6 +3709,96 @@ onBeforeUnmount(() => {
       </span>
     </div>
 
+    <!-- Indicator legend (TradingView-style): name + eye/settings/remove -->
+    <div v-if="indicators.sessionsAdded && instrument" class="indicator-legend">
+      <span class="ind-legend-name" :class="{ off: !indicators.sessionsVisible }">Sessions</span>
+      <button class="ind-legend-btn" type="button" :title="indicators.sessionsVisible ? 'Hide' : 'Show'" @click="indicators.sessionsVisible = !indicators.sessionsVisible">
+        <svg v-if="indicators.sessionsVisible" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" />
+          <circle cx="12" cy="12" r="2.6" />
+        </svg>
+        <svg v-else viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M2 12s3.5-6.5 10-6.5c2 0 3.7.6 5.1 1.5M22 12s-3.5 6.5-10 6.5c-2 0-3.7-.6-5.1-1.5" />
+          <path d="M4 20L20 4" />
+        </svg>
+      </button>
+      <button class="ind-legend-btn" type="button" title="Settings" @click="indSettingsOpen = !indSettingsOpen">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z" />
+        </svg>
+      </button>
+      <button class="ind-legend-btn" type="button" title="Remove" @click="indicators.removeSessions()">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18" />
+        </svg>
+      </button>
+      <!-- Settings popup: enable/rename/recolor sessions; built-in windows
+           are chained to real market opens and shown in the VISITOR's own
+           local clock (DST adjusts itself); custom sessions are free. -->
+      <div v-if="indSettingsOpen" class="ind-settings" @click.stop>
+        <div class="ind-settings-title">Sessions — settings</div>
+        <div v-for="s in indicators.defs" :key="s.id" class="ind-set-row ind-set-edit">
+          <input type="checkbox" v-model="indicators.sessionsEnabled[s.id]" />
+          <input
+            class="ind-set-color"
+            type="color"
+            v-model="s.color"
+            :aria-label="s.id + ' color'"
+            :title="'Color of ' + s.name"
+          />
+          <input
+            class="ind-set-name"
+            type="text"
+            v-model="s.name"
+            maxlength="20"
+            :aria-label="s.id + ' name'"
+          />
+          <span class="ind-set-time">{{ sessionWindowLocal(s) }}</span>
+          <span class="ind-set-city">{{ s.city }}</span>
+        </div>
+        <div v-for="s in indicators.customs" :key="s.id" class="ind-set-row ind-set-edit">
+          <input type="checkbox" v-model="indicators.sessionsEnabled[s.id]" />
+          <input
+            class="ind-set-color"
+            type="color"
+            v-model="s.color"
+            :aria-label="s.id + ' color'"
+            :title="'Color of ' + s.name"
+          />
+          <input
+            class="ind-set-name"
+            type="text"
+            v-model="s.name"
+            maxlength="20"
+            :aria-label="s.id + ' name'"
+          />
+          <input class="ind-set-time" type="time" :value="toTimeStr(s.start)" @change="onCustomTimeChange(s, 'start', $event)" />
+          <input class="ind-set-time" type="time" :value="toTimeStr(s.end)" @change="onCustomTimeChange(s, 'end', $event)" />
+          <span class="ind-set-city">Custom</span>
+          <button
+            class="ind-set-remove"
+            type="button"
+            :title="'Delete ' + s.name"
+            :aria-label="'Delete ' + s.name"
+            @click="indicators.removeCustomSession(s.id)"
+          >✕</button>
+        </div>
+        <!-- Add a new custom session (visitor's local clock) -->
+        <div class="ind-set-add">
+          <input class="ind-set-name" type="text" v-model="newSessName" maxlength="20" placeholder="Session name" aria-label="New session name" />
+          <input class="ind-set-color" type="color" v-model="newSessColor" aria-label="New session color" title="Color" />
+          <input class="ind-set-time" type="time" v-model="newSessStart" aria-label="New session start" />
+          <input class="ind-set-time" type="time" v-model="newSessEnd" aria-label="New session end" />
+          <button class="ind-set-add-btn" type="button" title="Add session" @click="onAddSession">+ Add</button>
+        </div>
+        <label class="ind-set-row">
+          <input type="checkbox" v-model="indicators.sessionsLabels" />
+          <span>Show session names</span>
+        </label>
+      </div>
+    </div>
+
     <div v-if="isLoading" class="overlay center loading-only">
       <span class="overlay-spinner large"></span>
     </div>
@@ -3482,6 +3820,23 @@ onBeforeUnmount(() => {
       :title="marketClosed ? 'Forex market is closed' : `Next ${market.timeframe} candle in`"
     >
       {{ countdown }}
+    </div>
+    <!-- Sessions indicator: translucent session background boxes, painted
+         behind the drawings layer (which itself sits behind the candles).
+         Non-interactive. -->
+    <div
+      v-if="sessionPixels.length"
+      class="session-layer drawing-clip"
+      :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }"
+    >
+      <div
+        v-for="b in sessionPixels"
+        :key="b.key"
+        class="session-box"
+        :style="{ left: b.left + 'px', width: b.width + 'px', top: b.top + 'px', height: b.height + 'px', background: b.color + '26' }"
+      >
+        <span v-if="b.showLabel" class="session-label" :style="{ color: b.color, top: b.labelTop + 'px' }">{{ b.name }}</span>
+      </div>
     </div>
     <!-- Visible drawing layer: z-ordered BEHIND the candle painting, so a
          small rectangle drawn on a low timeframe never covers candle bodies
@@ -4567,6 +4922,196 @@ onBeforeUnmount(() => {
   padding: 0;
   pointer-events: none;
 }
+/* Indicator legend row under the symbol label */
+.indicator-legend {
+  position: absolute;
+  top: 30px;
+  left: 14px;
+  z-index: 7;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  pointer-events: auto;
+}
+.ind-legend-name {
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--text-muted);
+  margin-right: 3px;
+  white-space: nowrap;
+}
+.ind-legend-name.off {
+  text-decoration: line-through;
+  opacity: 0.55;
+}
+.ind-legend-btn {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+.ind-legend-btn:hover {
+  background: var(--btn-hover);
+  color: var(--text);
+}
+.ind-settings {
+  position: absolute;
+  top: 22px;
+  left: 0;
+  z-index: 8;
+  min-width: 205px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border);
+  background: var(--bg-panel, #171b26);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  cursor: default;
+}
+.ind-settings-title {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.ind-set-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 3px 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ind-set-row input[type="checkbox"] {
+  accent-color: var(--accent, #3b82f6);
+  margin: 0;
+}
+.ind-set-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ind-set-color {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ind-set-time {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 600;
+  padding-left: 10px;
+}
+/* Editable session rows: enable ✓ + color dot + name + start/end times */
+.ind-set-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ind-set-name {
+  width: 92px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+.ind-set-name:hover,
+.ind-set-name:focus {
+  border-color: var(--border, #444);
+  outline: none;
+}
+.ind-set-edit .ind-set-time {
+  margin-left: 0;
+  font-size: 10.5px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 1px 2px;
+  width: 84px;
+}
+.ind-set-edit .ind-set-time:hover,
+.ind-set-edit .ind-set-time:focus {
+  border-color: var(--border, #444);
+  outline: none;
+}
+.ind-set-city {
+  font-size: 9.5px;
+  color: var(--text-muted);
+  margin-left: auto;
+  white-space: nowrap;
+}
+.ind-set-remove {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 3px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.ind-set-remove:hover {
+  color: #f23645;
+  background: rgba(242, 54, 69, 0.12);
+}
+.ind-set-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border, #444);
+}
+.ind-set-add .ind-set-name {
+  flex: 1;
+  min-width: 0;
+  border-color: var(--border, #444);
+}
+.ind-set-add .ind-set-time {
+  margin-left: 0;
+  width: 84px;
+  font-size: 10.5px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border, #444);
+  border-radius: 4px;
+  padding: 1px 2px;
+}
+.ind-set-add-btn {
+  border: none;
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ind-set-add-btn:hover {
+  filter: brightness(1.12);
+}
 .label-text {
   font-weight: 800;
   font-size: 13px;
@@ -4744,6 +5289,25 @@ onBeforeUnmount(() => {
   inset: 0;
   z-index: 0;
   pointer-events: none;
+}
+/* Sessions indicator background boxes — behind the drawings layer. */
+.session-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.session-box {
+  position: absolute;
+}
+.session-label {
+  position: absolute;
+  left: 5px;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
 }
 /* Clip overlay children (boxes, hit areas, handles) to the chart area so
    nothing renders over or can be drawn on the price/time scales. */

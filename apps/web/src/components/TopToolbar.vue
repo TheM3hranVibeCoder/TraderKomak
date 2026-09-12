@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, nextTick, onUnmounted } from "vue";
 import TimeframeSelector from "./TimeframeSelector.vue";
 import { useReplayStore } from "@/stores/replay";
 import { useDemoStore } from "@/stores/demo";
 import { useThemeStore } from "@/stores/theme";
+import { useIndicatorsStore } from "@/stores/indicators";
 import { SUPPORTED_INSTRUMENTS, normalizeInstrument } from "@traderkomak/shared";
 import type { Timeframe } from "@traderkomak/shared";
 
@@ -20,6 +21,32 @@ const emit = defineEmits<{
 const replay = useReplayStore();
 const demo = useDemoStore();
 const themeStore = useThemeStore();
+const indicators = useIndicatorsStore();
+
+/** Indicators dropdown — Teleported to <body> because the toolbar's
+ *  backdrop-filter creates a containing block that clips/anchors
+ *  absolutely-positioned children wrongly (same as the line-tools flyout). */
+const indOpen = ref(false);
+const indBtnEl = ref<HTMLElement | null>(null);
+const indPop = ref<{ top: number; left: number }>({ top: 0, left: 0 });
+
+async function toggleIndicators(): Promise<void> {
+  indOpen.value = !indOpen.value;
+  if (indOpen.value) {
+    await nextTick();
+    const r = indBtnEl.value?.getBoundingClientRect();
+    if (r) indPop.value = { top: r.bottom + 6, left: r.left };
+  }
+}
+
+function onWindowPointerDown(e: PointerEvent): void {
+  const t = e.target as Node;
+  if (indBtnEl.value?.contains(t)) return;
+  if (document.querySelector(".indicators-pop")?.contains(t)) return;
+  indOpen.value = false;
+}
+window.addEventListener("pointerdown", onWindowPointerDown, true);
+onUnmounted(() => window.removeEventListener("pointerdown", onWindowPointerDown, true));
 
 function toggleDemo(): void {
   demo.active = !demo.active;
@@ -112,7 +139,48 @@ function onSearchBlur() {
         </svg>
         <span>Replay</span>
       </button>
+      <!-- Indicators: opens the indicator library dropdown -->
+      <button
+        ref="indBtnEl"
+        class="ind-btn"
+        type="button"
+        title="Indicators"
+        aria-label="Indicators"
+        aria-haspopup="true"
+        :aria-expanded="indOpen"
+        @click.stop="toggleIndicators"
+      >
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+          <text x="3" y="18" font-size="15" font-weight="700" font-family="Georgia, 'Times New Roman', serif" font-style="italic" fill="currentColor">ƒx</text>
+        </svg>
+        <span class="ind-label">Indicators</span>
+      </button>
     </div>
+
+    <!-- Indicators dropdown (teleported: escapes the toolbar's backdrop-filter) -->
+    <Teleport to="body">
+      <div
+        v-if="indOpen"
+        class="indicators-pop"
+        :style="{ top: indPop.top + 'px', left: indPop.left + 'px' }"
+        role="menu"
+      >
+        <div class="ind-pop-title">Indicators</div>
+        <button
+          class="ind-item"
+          type="button"
+          role="menuitemcheckbox"
+          :aria-checked="indicators.sessionsAdded"
+          @click="indicators.sessionsAdded ? indicators.removeSessions() : indicators.addSessions()"
+        >
+          <span class="ind-check" :class="{ on: indicators.sessionsAdded }">
+            <svg v-if="indicators.sessionsAdded" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12l5 5L20 7" /></svg>
+          </span>
+          <span class="ind-item-name">Sessions</span>
+          <span class="ind-item-desc">Market session backgrounds</span>
+        </button>
+      </div>
+    </Teleport>
 
     <div class="right">
       <!-- Telegram channel link -->
@@ -410,6 +478,97 @@ function onSearchBlur() {
   color: #fff;
   box-shadow: 0 4px 16px rgba(59, 130, 246, 0.4);
 }
+.ind-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 13px;
+  border-radius: 11px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: var(--card-shadow);
+  transition: all 200ms;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.ind-btn:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: var(--glow-accent);
+}
+.ind-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.indicators-pop {
+  position: fixed;
+  z-index: 300;
+  min-width: 250px;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--glass-border);
+  background: var(--bg-panel, #171b26);
+  backdrop-filter: blur(22px) saturate(1.4);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+}
+.ind-pop-title {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 6px 8px 4px;
+}
+.ind-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: "check name" "check desc";
+  align-items: center;
+  column-gap: 9px;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.ind-item:hover {
+  background: var(--btn-hover);
+}
+.ind-check {
+  grid-area: check;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  border: 1.5px solid var(--border-strong);
+  color: #fff;
+}
+.ind-check.on {
+  background: var(--accent, #3b82f6);
+  border-color: var(--accent, #3b82f6);
+}
+.ind-item-name {
+  grid-area: name;
+  font-weight: 700;
+}
+.ind-item-desc {
+  grid-area: desc;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
 @media (max-width: 860px) {
   .toolbar {
     padding: 6px 8px;
@@ -431,11 +590,13 @@ function onSearchBlur() {
     display: none;
   }
   .demo-btn span,
-  .replay-btn span {
+  .replay-btn span,
+  .ind-label {
     display: none;
   }
   .demo-btn,
-  .replay-btn {
+  .replay-btn,
+  .ind-btn {
     padding: 0 9px;
   }
 }
