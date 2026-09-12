@@ -6,7 +6,7 @@ import { useMarketStore } from "@/stores/market";
 import { useDrawingsStore, type DrawingRect, type DrawingTrend, type DrawingPoly, type DrawingPosition, type DrawingHLine, type DrawingHRay, type DrawingVLine, type SingleKind, type SingleDrawing, type DashStyle } from "@/stores/drawings";
 import { useReplayStore } from "@/stores/replay";
 import { useDemoStore, demoValuePerPrice, type DemoSide, type DemoStatus, type DemoKind } from "@/stores/demo";
-import { useIndicatorsStore, sessionKindAt, nextBoundaryAfter, boundaryEpoch, tzOffsetMin, inSession, localMinutesOfDay, type SessionDef, type CustomSession } from "@/stores/indicators";
+import { useIndicatorsStore, sessionKindAt, nextBoundaryAfter, boundaryEpoch, CHAIN_NEXT, tzOffsetMin, inSession, localMinutesOfDay, type SessionDef, type CustomSession } from "@/stores/indicators";
 import DemoPanel from "./DemoPanel.vue";
 import type { Candle } from "@traderkomak/shared";
 import { currencyFlagUrl, commodityIcon, symbolParts } from "@/utils/flags";
@@ -81,10 +81,13 @@ function computeSessionBoxes(): void {
 
   /** End time of the run that contains the LAST candle: its scheduled
    *  session end (future) — the box draws up to it, not just to the last
-   *  candle. Built-ins: the next link of the chain; customs: the window's
-   *  next closing time in the visitor's clock. */
+   *  candle. Built-ins: the NEXT LINK of the chain (New York ends at
+   *  Sydney's open, NY&LN at New York's open…) — extending to the
+   *  session's own next occurrence would draw a whole extra day. */
   const scheduledEndFor = (def: SessionDef, t: number): number => {
-    return nextBoundaryAfter(def, t);
+    const nextId = CHAIN_NEXT[def.id];
+    const nextDef = nextId ? indicators.defs.find((d) => d.id === nextId) : undefined;
+    return nextDef ? nextBoundaryAfter(nextDef, t) : nextBoundaryAfter(def, t);
   };
   const scheduledEndCustom = (def: CustomSession, t: number): number => {
     const d = Math.floor(t / 86400);
