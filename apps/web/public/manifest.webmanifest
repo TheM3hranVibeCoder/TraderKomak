@@ -1,0 +1,15 @@
+{
+  "name": "TraderKomak — Live Forex & Crypto Charts",
+  "short_name": "TraderKomak",
+  "description": "Real-time forex and crypto charting with session indicators, demo trading and a community chat.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0a0e18",
+  "theme_color": "#2962ff",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

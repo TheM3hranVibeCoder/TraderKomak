@@ -71,20 +71,21 @@ function onTimeframeChange(next: Timeframe): void {
 
 <template>
   <div class="app" :data-theme="theme.theme">
+    <h1 class="sr-only">TraderKomak — live forex and crypto charting platform</h1>
     <TopToolbar
       :instrument="market.instrument"
       :timeframe="market.timeframe"
       @update:instrument="onInstrumentChange"
       @update:timeframe="onTimeframeChange"
     />
-    <div class="main">
+    <main class="main">
       <DrawingToolbar />
       <ChartPane :candles="market.candles" :is-loading="market.isLoading" :error="market.error" :instrument="market.instrument" />
       <WatchlistPanel />
       <ChatPanel />
       <NewsPanel />
       <!-- Right rail: watchlist (top half) + live chat (bottom half) -->
-      <div class="right-rail">
+      <nav class="right-rail" aria-label="Panels">
         <button
           class="rail-half"
           :class="{ active: watchlist.isOpen }"
@@ -122,12 +123,29 @@ function onTimeframeChange(next: Timeframe): void {
           </svg>
           <span v-if="news.alarmActive" class="alarm-badge">{{ news.alarmLabel }}</span>
         </button>
-      </div>
-    </div>
+      </nav>
+    </main>
+    <footer class="sr-only">TraderKomak — traderkomak.ir</footer>
   </div>
 </template>
 
 <style scoped>
+/* Screen-reader-only: present for landmarks/SEO, invisible on screen */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+nav.right-rail {
+  padding: 0;
+  margin: 0;
+}
 .app {
   display: flex;
   flex-direction: column;
