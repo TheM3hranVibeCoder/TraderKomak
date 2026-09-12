@@ -36,7 +36,7 @@ export class BinanceRestError extends Error {
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const BINANCE_MAX_LIMIT = 1000;
-const MAX_BATCHES = 20;
+const MAX_BATCHES = 50;
 const RETRY_DELAY_MS = 500;
 const MAX_ATTEMPTS = 3;
 
@@ -108,12 +108,19 @@ export class BinanceRestClient {
       for (let i = 0; i < batchCount; i++) {
         windows.push(startEndMs - i * (BINANCE_MAX_LIMIT * intervalMs) + (i > 0 ? overlapMs : 0));
       }
-      const batches = await Promise.all(
-        windows.map((end, i) => (async () => {
-          if (i > 0) await new Promise((r) => setTimeout(r, i * 60)); // tiny stagger
-          return this.fetchBatch(instrument, interval, BINANCE_MAX_LIMIT, end);
-        })())
-      );
+      const batches: Candle[][] = [];
+      const WAVE = 8;
+      for (let w = 0; w < windows.length; w += WAVE) {
+        const wave = windows.slice(w, w + WAVE);
+        const results = await Promise.all(
+          wave.map((end, i) => (async () => {
+            if (i > 0) await new Promise((r) => setTimeout(r, i * 40)); // tiny stagger
+            return this.fetchBatch(instrument, interval, BINANCE_MAX_LIMIT, end);
+          })())
+        );
+        batches.push(...results);
+        if (w + WAVE < windows.length) await new Promise((r) => setTimeout(r, 150)); // between waves
+      }
       const dedupP = new Map<number, Candle>();
       for (const rows of batches) for (const c of rows) dedupP.set(c.time, c);
       let merged = [...dedupP.values()].sort((a, b) => a.time - b.time);
