@@ -6,6 +6,8 @@ import { ChatClient, type ChatStatus } from "@/services/chatClient";
 const NICK_KEY = "tk-chat-nick";
 const ADMIN_KEY = "tk-chat-admin";
 const OPEN_KEY = "tk-chat-open";
+/** Epoch seconds of the last chat message this user has seen. */
+const LASTSEEN_KEY = "tk-chat-lastseen";
 
 export const useChatStore = defineStore("chat", () => {
   const messages = ref<ChatMessage[]>([]);
@@ -27,6 +29,15 @@ export const useChatStore = defineStore("chat", () => {
    *  (opening the panel jumps straight to it). */
   const unread = ref<number>(0);
   const firstUnseenTs = ref<number>(0);
+  /** Last message ts this user has seen (persisted, so history loaded at
+   *  page-open can be split into seen vs unseen). */
+  let lastSeenTs = Number(localStorage.getItem(LASTSEEN_KEY)) || 0;
+
+  function markSeen(upTo: number): void {
+    if (upTo <= lastSeenTs) return;
+    lastSeenTs = upTo;
+    localStorage.setItem(LASTSEEN_KEY, String(Math.floor(upTo)));
+  }
 
   let client: ChatClient | null = null;
   let clientAdminKey: string | undefined;
@@ -44,11 +55,22 @@ export const useChatStore = defineStore("chat", () => {
     client = new ChatClient({
       onHistory: (list) => {
         messages.value = list;
+        if (open.value) {
+          markSeen(list.length ? list[list.length - 1].ts : 0);
+        } else {
+          // Panel closed at page-load: everything in history newer than the
+          // user's persisted last-seen ts counts as unread.
+          const unseen = list.filter((m) => m.ts > lastSeenTs && m.from !== nick.value);
+          unread.value = unseen.length;
+          firstUnseenTs.value = unseen.length ? unseen[0].ts : 0;
+        }
       },
       onChat: (msg) => {
         if (!open.value) {
           unread.value++;
           if (!firstUnseenTs.value) firstUnseenTs.value = msg.ts;
+        } else {
+          markSeen(msg.ts);
         }
         messages.value = [...messages.value, msg];
         if (messages.value.length > 300) messages.value = messages.value.slice(-300);
@@ -60,6 +82,8 @@ export const useChatStore = defineStore("chat", () => {
         if (!open.value) {
           unread.value++;
           if (!firstUnseenTs.value) firstUnseenTs.value = ts;
+        } else {
+          markSeen(ts);
         }
         messages.value = [...messages.value, { id: `s-${ts}-${Math.random().toString(36).slice(2, 6)}`, from: "", text, ts }];
       },
@@ -115,6 +139,8 @@ export const useChatStore = defineStore("chat", () => {
     if (v) {
       ensureClient();
       unread.value = 0; // opened → everything is seen
+      const last = messages.value.length ? messages.value[messages.value.length - 1].ts : 0;
+      markSeen(last || Math.floor(Date.now() / 1000));
     }
   }
 
