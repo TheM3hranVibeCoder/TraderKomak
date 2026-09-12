@@ -7,6 +7,10 @@ import type { ChatMessage, ChatServerMessage } from "@traderkomak/shared";
 
 export type ChatStatus = "connected" | "connecting" | "reconnecting" | "offline";
 
+/** Ping cadence and the silence window after which the socket is dead. */
+const PING_MS = 15_000;
+const STALE_MS = 45_000;
+
 export interface ChatClientHandlers {
   onHistory: (messages: ChatMessage[]) => void;
   onChat: (message: ChatMessage) => void;
@@ -43,6 +47,10 @@ export class ChatClient {
   private joinNick: string | null = null;
   private adminKey: string | undefined;
   private joined = false;
+  /** Messages typed while the socket is down/reconnecting — flushed on join. */
+  private outbox: Record<string, unknown>[] = [];
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private lastServerMsgAt = 0;
 
   constructor(handlers: ChatClientHandlers) {
     this.handlers = handlers;
@@ -59,6 +67,7 @@ export class ChatClient {
   disconnect(): void {
     this.closedByUser = true;
     this.clearTimer();
+    this.stopPing();
     if (this.ws) {
       try {
         this.ws.close(1000, "client left");
@@ -90,6 +99,77 @@ export class ChatClient {
   }
 
   private send(payload: Record<string, unknown>): void {
+    const ws = this.ws;
+    // A stale socket reports OPEN but the connection underneath is dead —
+    // sending into it loses the message silently. Treat it like a down
+    // socket: hold the message and flush it once the reconnect joins.
+    const stale = Date.now() - this.lastServerMsgAt > STALE_MS;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !this.joined || stale) {
+      this.outbox.push(payload);
+      if (this.outbox.length > 20) this.outbox.shift();
+      if (stale) this.ensureFresh(); // start healing right away
+      return;
+    }
+    try {
+      ws.send(JSON.stringify(payload));
+    } catch {}
+  }
+
+  private flushOutbox(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.joined) return;
+    const pending = this.outbox.splice(0, this.outbox.length);
+    for (const payload of pending) {
+      try {
+        this.ws.send(JSON.stringify(payload));
+      } catch {
+        this.outbox.unshift(payload); // put it back on failure
+      }
+    }
+  }
+
+  /** Detect half-open sockets: dead NAT/proxy connections keep readyState=OPEN
+   *  forever, so sends "succeed" into the void. Ping and force-close on silence. */
+  private startPing(): void {
+    this.stopPing();
+    this.lastServerMsgAt = Date.now();
+    this.pingTimer = setInterval(() => {
+      this.sendRaw({ type: "ping" });
+      // 3 missed ping intervals without any server traffic = dead socket
+      if (Date.now() - this.lastServerMsgAt > STALE_MS) {
+        try {
+          this.ws?.close(4000, "stale");
+        } catch {}
+      }
+    }, PING_MS);
+  }
+
+  /**
+   * Heals a half-open socket immediately instead of waiting for the ping
+   * watchdog: called when the tab becomes visible/focused again — browsers
+   * throttle background timers, so the connection may have silently died
+   * while the user was away.
+   */
+  ensureFresh(): void {
+    if (
+      this.ws &&
+      this.ws.readyState === WebSocket.OPEN &&
+      Date.now() - this.lastServerMsgAt > STALE_MS
+    ) {
+      try {
+        this.ws.close(4000, "stale");
+      } catch {}
+    }
+  }
+
+  private stopPing(): void {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+  }
+
+  /** Send bypassing the outbox — used for protocol frames (ping). */
+  private sendRaw(payload: Record<string, unknown>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     try {
       this.ws.send(JSON.stringify(payload));
@@ -112,14 +192,22 @@ export class ChatClient {
 
     ws.addEventListener("open", () => {
       this.attempt = 0;
-      if (this.joinNick) {
-        this.send({ type: "join", nick: this.joinNick, adminKey: this.adminKey });
+      this.lastServerMsgAt = Date.now();
+      this.startPing();
+      // Empty nick = observer join (read-only, feeds the unread badge)
+      if (this.joinNick !== null) {
         this.joined = true;
+        this.sendRaw({ type: "join", nick: this.joinNick, adminKey: this.adminKey });
+        this.flushOutbox();
       }
     });
 
+    ws.addEventListener("message", () => {
+      this.lastServerMsgAt = Date.now();
+    });
     ws.addEventListener("message", (ev) => this.handle(ev.data));
     ws.addEventListener("close", (ev) => {
+      this.stopPing();
       this.ws = null;
       this.joined = false;
       // 4003 = banned — stop reconnecting, the server will refuse anyway.
@@ -180,6 +268,7 @@ export class ChatClient {
         this.handlers.onHistory(msg.messages);
         // A delivered history means the join was accepted — we're connected.
         this.handlers.onStatus("connected");
+        this.flushOutbox();
         break;
       case "mod":
         this.handlers.onMod(msg.mutes ?? [], msg.bans ?? []);

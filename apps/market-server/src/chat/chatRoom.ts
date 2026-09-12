@@ -217,6 +217,14 @@ export class ChatRoom {
   private join(conn: Conn, rawNick: string, adminKey?: string): void {
     const nick = rawNick.trim().replace(/\s+/g, " ").slice(0, NICK_MAX);
     if (nick.length < NICK_MIN) {
+      // Empty nick = read-only observer: receives history and live messages
+      // (so the unread badge counts for visitors who haven't picked a nick
+      // yet) but is not a member, stays out of the roster and cannot chat.
+      if (rawNick.trim() === "") {
+        this.send(conn, { type: "history", messages: this.history });
+        this.sendOnline(conn.socket);
+        return;
+      }
       this.safeSend(conn, { type: "error", message: "Nickname must be at least 2 characters" });
       return;
     }

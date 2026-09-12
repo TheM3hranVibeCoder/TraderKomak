@@ -39,8 +39,21 @@ export const useChatStore = defineStore("chat", () => {
     localStorage.setItem(LASTSEEN_KEY, String(Math.floor(upTo)));
   }
 
-  let client: ChatClient | null = null;
-  let clientAdminKey: string | undefined;
+let client: ChatClient | null = null;
+let clientAdminKey: string | undefined;
+let healListenersAdded = false;
+
+/** Browsers throttle background-tab timers, so a chat socket can silently
+ *  die while the user is away. On focus/visibility/online, force-close a
+ *  stale socket so it reconnects before the user tries to send. */
+function addHealListeners(): void {
+  if (healListenersAdded) return;
+  healListenersAdded = true;
+  const heal = () => client?.ensureFresh();
+  document.addEventListener("visibilitychange", heal);
+  window.addEventListener("focus", heal);
+  window.addEventListener("online", heal);
+}
 
   function ensureClient(): void {
     // Moderator key added mid-session (console/UI) — upgrade live instead of
@@ -51,16 +64,20 @@ export const useChatStore = defineStore("chat", () => {
       client = null;
     }
     if (client) return;
-    if (!nick.value) return;
+    addHealListeners();
+    // Connect even without a nick — the server accepts an empty-nick
+    // observer join so the unread badge counts for visitors who haven't
+    // picked a nickname yet.
     client = new ChatClient({
       onHistory: (list) => {
         messages.value = list;
-        if (open.value) {
+        if (open.value && nick.value) {
+          // Panel open with a nick = the user can actually read the list.
           const last = list[list.length - 1];
           markSeen(last ? last.ts : 0);
         } else {
-          // Panel closed at page-load: everything in history newer than the
-          // user's persisted last-seen ts counts as unread.
+          // Panel closed (or nick gate still up): everything in history
+          // newer than the user's persisted last-seen ts counts as unread.
           const unseen = list.filter((m) => m.ts > lastSeenTs && m.from !== nick.value);
           unread.value = unseen.length;
           const first = unseen[0];
@@ -68,7 +85,8 @@ export const useChatStore = defineStore("chat", () => {
         }
       },
       onChat: (msg) => {
-        if (!open.value) {
+        // Messages hidden behind the nick gate count as unseen too.
+        if (!open.value || !nick.value) {
           unread.value++;
           if (!firstUnseenTs.value) firstUnseenTs.value = msg.ts;
         } else {
@@ -81,7 +99,7 @@ export const useChatStore = defineStore("chat", () => {
         messages.value = messages.value.filter((m) => m.id !== id);
       },
       onSystem: (text, ts) => {
-        if (!open.value) {
+        if (!open.value || !nick.value) {
           unread.value++;
           if (!firstUnseenTs.value) firstUnseenTs.value = ts;
         } else {
@@ -131,7 +149,19 @@ export const useChatStore = defineStore("chat", () => {
     nick.value = clean;
     localStorage.setItem(NICK_KEY, clean);
     error.value = null;
+    // Upgrade from observer (or an old nick) to this nick: a fresh join so
+    // the roster, chat rights and OWNER state apply immediately.
+    if (client) {
+      client.disconnect();
+      client = null;
+    }
     ensureClient();
+    if (open.value) {
+      // The gate just lifted — the visible list is now read.
+      unread.value = 0;
+      const lastMsg = messages.value[messages.value.length - 1];
+      markSeen(lastMsg ? lastMsg.ts : Math.floor(Date.now() / 1000));
+    }
     return true;
   }
 
@@ -140,9 +170,13 @@ export const useChatStore = defineStore("chat", () => {
     localStorage.setItem(OPEN_KEY, v ? "1" : "0");
     if (v) {
       ensureClient();
-      unread.value = 0; // opened → everything is seen
-      const lastMsg = messages.value[messages.value.length - 1];
-      markSeen(lastMsg ? lastMsg.ts : Math.floor(Date.now() / 1000));
+      // Only mark seen when the message list is actually visible — with no
+      // nick yet the panel shows the nickname gate instead.
+      if (nick.value) {
+        unread.value = 0; // opened → everything is seen
+        const lastMsg = messages.value[messages.value.length - 1];
+        markSeen(lastMsg ? lastMsg.ts : Math.floor(Date.now() / 1000));
+      }
     }
   }
 
