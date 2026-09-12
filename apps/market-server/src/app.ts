@@ -136,7 +136,7 @@ export async function createMarketServer(config: AppConfig): Promise<MarketServe
   // Community chat room (public, WebSocket on /chat)
   const chatLog = app.log.child({ module: "chat" });
   let chatRoomRef: ChatRoom | null = null;
-  const chatRoom = new ChatRoom(config.dataDir, config.chatAdminKey, chatLog);
+  const chatRoom = new ChatRoom(config.dataDir, config.chatAdminKey, chatLog, config.chatOwnerNick);
   chatRoom.register(app);
   chatRoomRef = chatRoom;
 

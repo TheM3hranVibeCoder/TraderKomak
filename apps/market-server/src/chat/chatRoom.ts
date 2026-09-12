@@ -63,7 +63,9 @@ export class ChatRoom {
   constructor(
     private readonly dataDir: string,
     private readonly adminKey: string,
-    private readonly log: Log
+    private readonly log: Log,
+    /** Reserved nickname — only admin-key joins may claim it. */
+    private readonly ownerNick: string = ""
   ) {
     this.history = this.loadHistory();
     this.mod = this.loadMod();
@@ -233,9 +235,17 @@ export class ChatRoom {
       this.safeSend(conn, { type: "error", message: "You are banned from this room" });
       return;
     }
+    // The owner's nickname is reserved: a regular visitor cannot claim it
+    // (any case spelling) — only a join carrying the admin key can.
+    const isAdminKey = this.adminKey !== "" && adminKey === this.adminKey;
+    if (!isAdminKey && this.ownerNick && nick.toLowerCase() === this.ownerNick.toLowerCase()) {
+      this.safeSend(conn, { type: "error", message: "This nickname is reserved" });
+      this.log.warn({ ip: conn.ip, nick }, "chat: reserved nickname rejected");
+      return;
+    }
     conn.nick = nick;
     this.known.set(nick.toLowerCase(), { lastSeen: Math.floor(Date.now() / 1000), ip: conn.ip });
-    conn.admin = this.adminKey !== "" && adminKey === this.adminKey;
+    conn.admin = isAdminKey;
     this.send(conn, { type: "history", messages: this.history });
     // Broadcast the fresh roster — otherwise a refreshed client never
     // re-appears online for everyone else (join only told THEM).

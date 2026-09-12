@@ -80,6 +80,9 @@ export interface AppConfig {
   /** Community chat: when set, connections presenting this key in "join"
    *  can delete chat messages (moderation). Empty = no admins. */
   chatAdminKey: string;
+  /** Community chat: reserved nickname — only admin-key joins may use it
+   *  (case-insensitive). Empty = no reservation. */
+  chatOwnerNick: string;
 }
 
 export class ConfigError extends Error {}
@@ -142,5 +145,6 @@ export function loadConfig(): AppConfig {
     },
     persistentAggregations,
     chatAdminKey: optionalEnv("CHAT_ADMIN_KEY", ""),
+    chatOwnerNick: optionalEnv("CHAT_OWNER_NICK", "mehran"),
   };
 }
