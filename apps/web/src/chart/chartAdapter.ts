@@ -189,6 +189,11 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     priceLineColor: "#2962ff",
   });
 
+  // Debug handle for diagnosing timescale/series issues from the console
+  if (typeof window !== "undefined") {
+    (window as unknown as Record<string, unknown>).__tkChart = { chart, series, get data() { return lastData; } };
+  }
+
   let lastData: Candle[] = [];
   /** Flips true after the first non-empty dataset — enables view preservation. */
   let hadDataOnce = false;
