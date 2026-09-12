@@ -1,5 +1,6 @@
 :root,
 .theme-dark {
+  color-scheme: dark;
   --bg: #060a13;
   --bg-panel: rgba(16, 22, 38, 0.72);
   --bg-panel-solid: #101626;
@@ -41,6 +42,7 @@
 
 .theme-light,
 [data-theme="light"] {
+  color-scheme: light;
   --bg: #f6f8fd;
   --bg-panel: rgba(255, 255, 255, 0.72);
   --bg-panel-solid: #ffffff;
