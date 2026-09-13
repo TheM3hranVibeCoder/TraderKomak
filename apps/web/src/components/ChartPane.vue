@@ -3336,15 +3336,22 @@ onMounted(async () => {
   interactCb = onInteract;
 
   // Wheel-zoom over drawings: the drawing/demo hit layers sit ABOVE the
-  // chart canvas, so a wheel over a rectangle/position never reaches
-  // Lightweight Charts and zoom silently dies. Re-dispatch any wheel whose
-  // target is an overlay onto the chart's own canvas — LWC's zoom handler
-  // receives it as if the cursor were on the candles. Events that already
-  // hit the canvas are left alone (no double zoom).
+  // chart canvas as SIBLINGS of the chart container, so a wheel over a
+  // rectangle/position never reaches Lightweight Charts and zoom silently
+  // dies. The forwarder lives on the common ancestor (.chart-pane) and
+  // re-dispatches any wheel whose target is an overlay onto the chart's
+  // own canvas — but ONLY when the cursor is over the pane area (wheels
+  // over the demo panel, legend etc. stay untouched).
   const onOverlayWheel = (e: WheelEvent) => {
     if ((e.target as HTMLElement)?.tagName === "CANVAS") return;
+    // UI islands on the pane (indicator legend/settings) scroll their own
+    // content — never zoom the chart from them.
+    const t = e.target as HTMLElement | null;
+    if (t?.closest?.(".indicator-legend")) return;
     const canvas = el.querySelector("canvas");
     if (!canvas) return;
+    const r = canvas.getBoundingClientRect();
+    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
     canvas.dispatchEvent(new WheelEvent("wheel", {
       bubbles: true,
       cancelable: true,
@@ -3362,9 +3369,12 @@ onMounted(async () => {
       metaKey: e.metaKey,
     }));
   };
-  el.addEventListener("wheel", onOverlayWheel, true);
-  overlayWheelEl = el;
-  overlayWheelCb = onOverlayWheel;
+  const paneHost = el.parentElement; // .chart-pane — contains the overlay layers too
+  if (paneHost) {
+    paneHost.addEventListener("wheel", onOverlayWheel, true);
+    overlayWheelEl = paneHost;
+    overlayWheelCb = onOverlayWheel;
+  }
 
   // While any button is held over the chart (pan drag, price-axis scale
   // drag), re-project overlays EVERY frame so they stay glued to the canvas
