@@ -41,6 +41,82 @@ interface SessionBoxPx {
 const sessionPixels = ref<SessionBoxPx[]>([]);
 const indSettingsOpen = ref(false);
 
+/* ── Chart settings: background (solid/gradient) + candle colors ─────── */
+interface ChartStyle {
+  bgMode: "solid" | "gradient";
+  bgSolid: string;
+  bgTop: string;
+  bgBottom: string;
+  up: string;
+  down: string;
+  borderUp: string;
+  borderDown: string;
+  wickUp: string;
+  wickDown: string;
+}
+const CHART_STYLE_KEY = "tk-chart-style";
+/** Lightweight Charts' own defaults — used by "Reset to theme". */
+const DEFAULT_CANDLES = {
+  up: "#26a69a",
+  down: "#ef5350",
+  borderUp: "#26a69a",
+  borderDown: "#ef5350",
+  wickUp: "#26a69a",
+  wickDown: "#ef5350",
+};
+function defaultChartStyle(): ChartStyle {
+  return {
+    bgMode: "gradient",
+    bgSolid: "#131722",
+    bgTop: "#171a3a",
+    bgBottom: "#0b1120",
+    ...DEFAULT_CANDLES,
+  };
+}
+function loadChartStyle(): ChartStyle {
+  const base = defaultChartStyle();
+  try {
+    const raw = localStorage.getItem(CHART_STYLE_KEY);
+    if (raw) {
+      const p = JSON.parse(raw) as Partial<ChartStyle>;
+      if (p.bgMode === "solid" || p.bgMode === "gradient") base.bgMode = p.bgMode;
+      // legacy "default" value falls through to the gradient theme default
+      for (const k of ["bgSolid", "bgTop", "bgBottom", "up", "down", "borderUp", "borderDown", "wickUp", "wickDown"] as const) {
+        const v = p[k];
+        if (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v)) base[k] = v;
+      }
+    }
+  } catch {}
+  return base;
+}
+const paneRef = ref<HTMLElement | null>(null);
+const chartStyle = ref<ChartStyle>(loadChartStyle());
+const chartSettingsOpen = ref(false);
+
+function applyChartStyle(): void {
+  const s = chartStyle.value;
+  const pane = paneRef.value;
+  if (pane) {
+    pane.style.background =
+      s.bgMode === "solid"
+        ? s.bgSolid
+        : `linear-gradient(180deg, ${s.bgTop} 0%, ${s.bgBottom} 100%)`;
+  }
+  adapter?.setCandleColors({
+    up: s.up,
+    down: s.down,
+    borderUp: s.borderUp,
+    borderDown: s.borderDown,
+    wickUp: s.wickUp,
+    wickDown: s.wickDown,
+  });
+  localStorage.setItem(CHART_STYLE_KEY, JSON.stringify(s));
+}
+watch(chartStyle, applyChartStyle, { deep: true });
+function resetChartStyle(): void {
+  chartStyle.value = defaultChartStyle();
+}
+
 /** While the settings popup is open, any pointerdown outside it (the chart,
  *  watchlist, news…) closes it. The legend buttons are excluded — the gear
  *  toggles itself. */
@@ -3279,6 +3355,7 @@ onMounted(async () => {
   await nextTick();
   if (!containerRef.value) return;
   adapter = createChartAdapter(containerRef.value);
+  applyChartStyle();
   adapter.setTheme(themeStore.theme === "dark");
   if (props.instrument) adapter.setInstrument(props.instrument);
   adapter.setData(displayCandles.value);
@@ -3804,7 +3881,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="chart-pane">
+  <div ref="paneRef" class="chart-pane">
     <!-- Top-left symbol label like TradingView — transparent, only letters with flags -->
     <div v-if="instrument" class="chart-symbol-label">
       <span class="label-text">
@@ -4986,10 +5063,233 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+
+    <!-- Chart settings: TradingView-style gear in the bottom-right corner +
+         a centered panel for background (solid/gradient) and candle colors -->
+    <button
+      class="chart-settings-btn"
+      type="button"
+      title="Chart settings"
+      aria-label="Chart settings"
+      :style="{ right: '0px', bottom: '0px', width: axisRightW + 'px', height: axisBottomH + 'px' }"
+      @click="chartSettingsOpen = !chartSettingsOpen"
+    >
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z" />
+      </svg>
+    </button>
+    <template v-if="chartSettingsOpen">
+      <div class="chart-settings-backdrop" @click="chartSettingsOpen = false"></div>
+      <div class="chart-settings-panel" role="dialog" aria-label="Chart settings">
+        <div class="cs-head">
+          <span class="cs-title">Chart settings</span>
+          <button class="cs-close" type="button" aria-label="Close" @click="chartSettingsOpen = false">✕</button>
+        </div>
+        <div class="cs-section">
+          <div class="cs-label">Background</div>
+          <div class="cs-row">
+            <span class="cs-cap">Type</span>
+            <div class="cs-modes">
+              <button class="cs-mode" :class="{ on: chartStyle.bgMode === 'solid' }" type="button" @click="chartStyle.bgMode = 'solid'">Solid</button>
+              <button class="cs-mode" :class="{ on: chartStyle.bgMode === 'gradient' }" type="button" @click="chartStyle.bgMode = 'gradient'">Gradient</button>
+            </div>
+          </div>
+          <div v-if="chartStyle.bgMode === 'solid'" class="cs-row">
+            <span class="cs-cap">Color</span>
+            <input type="color" v-model="chartStyle.bgSolid" aria-label="Background color" />
+          </div>
+          <template v-if="chartStyle.bgMode === 'gradient'">
+            <div class="cs-row">
+              <span class="cs-cap">Top</span>
+              <input type="color" v-model="chartStyle.bgTop" aria-label="Gradient top color" />
+            </div>
+            <div class="cs-row">
+              <span class="cs-cap">Bottom</span>
+              <input type="color" v-model="chartStyle.bgBottom" aria-label="Gradient bottom color" />
+            </div>
+            <div class="cs-preview" :style="{ background: `linear-gradient(180deg, ${chartStyle.bgTop} 0%, ${chartStyle.bgBottom} 100%)` }"></div>
+          </template>
+        </div>
+        <div class="cs-section">
+          <div class="cs-label">Candles</div>
+          <div class="cs-candles">
+            <label class="cs-candle"><input type="color" v-model="chartStyle.up" /><span>Body ▲</span></label>
+            <label class="cs-candle"><input type="color" v-model="chartStyle.down" /><span>Body ▼</span></label>
+            <label class="cs-candle"><input type="color" v-model="chartStyle.borderUp" /><span>Border ▲</span></label>
+            <label class="cs-candle"><input type="color" v-model="chartStyle.borderDown" /><span>Border ▼</span></label>
+            <label class="cs-candle"><input type="color" v-model="chartStyle.wickUp" /><span>Wick ▲</span></label>
+            <label class="cs-candle"><input type="color" v-model="chartStyle.wickDown" /><span>Wick ▼</span></label>
+          </div>
+        </div>
+        <div class="cs-foot">
+          <button class="cs-reset" type="button" @click="resetChartStyle">Reset to theme</button>
+        </div>
+      </div>
+    </template>
+
   </div>
 </template>
 
 <style scoped>
+/* Chart settings: corner gear + centered panel (TradingView-style) */
+.chart-settings-btn {
+  position: absolute;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 160ms;
+  padding: 0;
+}
+.chart-settings-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.chart-settings-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.35);
+}
+.chart-settings-panel {
+  position: absolute;
+  z-index: 61;
+  left: 50%;
+  top: 45%;
+  transform: translate(-50%, -50%);
+  width: min(360px, calc(100% - 32px));
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--glass-border);
+  background: var(--bg-panel, #171b26);
+  backdrop-filter: blur(22px) saturate(1.4);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+}
+.cs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.cs-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text);
+}
+.cs-close {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.cs-close:hover {
+  color: var(--text);
+  background: var(--btn-hover);
+}
+.cs-section {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.cs-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.cs-modes {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.cs-mode {
+  flex: 1;
+  padding: 6px 0;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.cs-mode.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(59, 130, 246, 0.08);
+}
+.cs-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+.cs-cap {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  width: 60px;
+}
+.cs-preview {
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  margin-top: 6px;
+}
+.cs-candles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.cs-candle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+.cs-candle input[type="color"] {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+}
+.cs-foot {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+}
+.cs-reset {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.cs-reset:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
 .chart-pane {
   position: relative;
   flex: 1;

@@ -38,6 +38,8 @@ export interface ChartAdapter {
   destroy(): void;
   setTheme(isDark: boolean): void;
   setInstrument(instrument: string): void;
+  /** Restyle the candles (chart-settings panel). Pass theme defaults to reset. */
+  setCandleColors(o: { up: string; down: string; borderUp: string; borderDown: string; wickUp: string; wickDown: string }): void;
   getLogicalRange(): { from: number; to: number } | null;
   setLogicalRange(range: { from: number; to: number } | null): void;
   getPriceY(price: number): number | null;
@@ -373,6 +375,17 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
 
     setPriceAutoScale(on: boolean): void {
       chart.priceScale("right").applyOptions({ autoScale: on });
+    },
+
+    setCandleColors(o: { up: string; down: string; borderUp: string; borderDown: string; wickUp: string; wickDown: string }): void {
+      series.applyOptions({
+        upColor: o.up,
+        downColor: o.down,
+        borderUpColor: o.borderUp,
+        borderDownColor: o.borderDown,
+        wickUpColor: o.wickUp,
+        wickDownColor: o.wickDown,
+      });
     },
 
     setLastValueVisible(on: boolean): void {
