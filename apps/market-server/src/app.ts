@@ -24,6 +24,7 @@ import { registerCandlesRoute } from "./routes/candles.js";
 import { DukascopyStream } from "./dukascopy/stream.js";
 import { getHistory as dukascopyHistory } from "./dukascopy/client.js";
 import { registerNewsRoute } from "./routes/news.js";
+import { registerDukaDebugRoute } from "./routes/dukaDebug.js";
 import { providerOf } from "@traderkomak/shared";
 
 export interface MarketServer {
@@ -148,6 +149,7 @@ export async function createMarketServer(config: AppConfig): Promise<MarketServe
   registerHealthRoute(app);
   registerCandlesRoute(app, { rest: historyRouter, feed });
   registerNewsRoute(app);
+  registerDukaDebugRoute(app);
   hub.register(app);
 
   // Community chat room (public, WebSocket on /chat)
