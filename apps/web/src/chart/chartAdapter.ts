@@ -23,6 +23,10 @@ import type { Candle } from "@traderkomak/shared";
 import { instrumentPrecision } from "@traderkomak/shared";
 
 export interface ChartAdapter {
+  /** Exact right price-scale width, from the chart API. */
+  priceScaleWidth(): number;
+  /** Exact time-scale height, from the chart API. */
+  timeScaleHeight(): number;
   setData(candles: Candle[]): void;
   updateCandle(candle: Candle): void;
   fitContent(): void;
@@ -504,7 +508,15 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       isDarkNow = isDark;
       const c = themeColors(isDark);
       chart.applyOptions({
-        layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: c.text },
+        layout: {
+          background: { type: ColorType.Solid, color: "transparent" },
+          textColor: c.text,
+          panes: {
+            enableResize: true,
+            separatorColor: c.border,
+            separatorHoverColor: "rgba(120, 144, 156, 0.35)",
+          },
+        },
         grid: { vertLines: { visible: false }, horzLines: { visible: false } },
         rightPriceScale: { borderColor: c.border },
         timeScale: { borderColor: c.border },
@@ -532,6 +544,14 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
         },
       });
     },
+    priceScaleWidth(): number {
+      return chart.priceScale("right").width();
+    },
+
+    timeScaleHeight(): number {
+      return chart.timeScale().height();
+    },
+
     setInstrument(instrument: string): void {
       const prec = instrumentPrecision(instrument);
       // Smallest displayable increment always matches the precision
