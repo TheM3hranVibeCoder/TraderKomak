@@ -5206,7 +5206,6 @@ onBeforeUnmount(() => {
               <span class="cs-cap">Bottom</span>
               <input type="color" :value="eff(chartStyle.bgBottom, themeBgPair()[1])" @input="setColor('bgBottom', $event)" aria-label="Gradient bottom color" />
             </div>
-            <div class="cs-preview" :style="{ background: `linear-gradient(180deg, ${eff(chartStyle.bgTop, themeBgPair()[0])} 0%, ${eff(chartStyle.bgBottom, themeBgPair()[1])} 100%)` }"></div>
           </template>
         </div>
         <div class="cs-section">
@@ -5216,14 +5215,14 @@ onBeforeUnmount(() => {
           </div>
           <div class="cs-dir-wrap">
             <div class="cs-dir">
-              <span class="cs-dir-cap up">▲ Long</span>
+              <span class="cs-dir-cap up">▲ Bull</span>
               <label class="cs-candle"><input type="color" :value="eff(chartStyle.up, DEFAULT_CANDLES.up)" @input="setColor('up', $event)" /><span>Body</span></label>
               <label class="cs-candle"><input type="color" :value="eff(chartStyle.borderUp, DEFAULT_CANDLES.borderUp)" @input="setColor('borderUp', $event)" /><span>Border</span></label>
               <label class="cs-candle"><input type="color" :value="eff(chartStyle.wickUp, DEFAULT_CANDLES.wickUp)" @input="setColor('wickUp', $event)" /><span>Wick</span></label>
               <button class="cs-apply" type="button" title="Apply the body color to border & wick" @click="applyBodyToGroup('up')">Apply body ⇄</button>
             </div>
             <div class="cs-dir">
-              <span class="cs-dir-cap down">▼ Short</span>
+              <span class="cs-dir-cap down">▼ Bear</span>
               <label class="cs-candle"><input type="color" :value="eff(chartStyle.down, DEFAULT_CANDLES.down)" @input="setColor('down', $event)" /><span>Body</span></label>
               <label class="cs-candle"><input type="color" :value="eff(chartStyle.borderDown, DEFAULT_CANDLES.borderDown)" @input="setColor('borderDown', $event)" /><span>Border</span></label>
               <label class="cs-candle"><input type="color" :value="eff(chartStyle.wickDown, DEFAULT_CANDLES.wickDown)" @input="setColor('wickDown', $event)" /><span>Wick</span></label>
@@ -5384,12 +5383,6 @@ onBeforeUnmount(() => {
   font-weight: 600;
   color: var(--text);
   width: 60px;
-}
-.cs-preview {
-  height: 26px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  margin-top: 6px;
 }
 .cs-dir-wrap {
   display: grid;
