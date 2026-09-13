@@ -54,6 +54,11 @@ function onWindowPointerDown(e: PointerEvent): void {
 window.addEventListener("pointerdown", onWindowPointerDown, true);
 onUnmounted(() => window.removeEventListener("pointerdown", onWindowPointerDown, true));
 
+function toggleRsi(): void {
+  indicators.rsiAdded = !indicators.rsiAdded;
+  if (indicators.rsiAdded) indicators.rsiVisible = true;
+}
+
 function toggleDemo(): void {
   demo.active = !demo.active;
 }
@@ -189,7 +194,7 @@ function onSearchBlur() {
           type="button"
           role="menuitemcheckbox"
           :aria-checked="indicators.rsiAdded"
-          @click="indicators.rsiAdded ? (indicators.rsiAdded = false) : (indicators.rsiAdded = true, indicators.rsiVisible = true)"
+          @click="toggleRsi"
         >
           <span class="ind-check" :class="{ on: indicators.rsiAdded }">
             <svg v-if="indicators.rsiAdded" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12l5 5L20 7" /></svg>

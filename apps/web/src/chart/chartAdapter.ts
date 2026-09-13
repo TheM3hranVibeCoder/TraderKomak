@@ -10,10 +10,14 @@ import {
   createChart,
   type IChartApi,
   type ISeriesApi,
+  type IPriceLine,
   type CandlestickData,
   type Time,
   ColorType,
   CrosshairMode,
+  LineStyle,
+  CandlestickSeries,
+  LineSeries,
 } from "lightweight-charts";
 import type { Candle } from "@traderkomak/shared";
 import { instrumentPrecision } from "@traderkomak/shared";
@@ -40,6 +44,13 @@ export interface ChartAdapter {
   setInstrument(instrument: string): void;
   /** Restyle the candles (chart-settings panel). Pass theme defaults to reset. */
   setCandleColors(o: { up: string; down: string; borderUp: string; borderDown: string; wickUp: string; wickDown: string }): void;
+  /** RSI sub-pane (LWC v5 panes). */
+  setRsiData(points: { time: number; value: number }[]): void;
+  updateRsiLast(point: { time: number; value: number }): void;
+  setRsiStyle(color: string): void;
+  setRsiLevels(upper: number, lower: number, color: string): void;
+  removeRsi(): void;
+  rsiPaneHeight(): number;
   /** Axis text/border colors; null = follow the active theme. */
   setAxisColors(o: { text: string | null; border: string | null }): void;
   /** Crosshair line colors; null = follow the active theme. */
@@ -182,7 +193,7 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     },
   });
 
-  const series: ISeriesApi<"Candlestick"> = chart.addCandlestickSeries({
+  const series: ISeriesApi<"Candlestick"> = chart.addSeries(CandlestickSeries, {
     upColor: "#26a69a",
     downColor: "#ef5350",
     wickUpColor: "#26a69a",
@@ -198,6 +209,66 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
 
 
   let lastData: Candle[] = [];
+
+  /* ── RSI sub-pane (pane index 1) ────────────────────────────────────── */
+  let rsiSeries: ISeriesApi<"Line"> | null = null;
+  let rsiLevelLines: IPriceLine[] = [];
+
+  function ensureRsi(): ISeriesApi<"Line"> {
+    if (!rsiSeries) {
+      rsiSeries = chart.addSeries(
+        LineSeries,
+        {
+          color: "#a78bfa",
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: true,
+          priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+        },
+        1 // second pane, under the main chart
+      );
+      // Main chart stays dominant; the RSI pane is the compact one.
+      const panes = chart.panes();
+      panes[0]?.setStretchFactor(4);
+      panes[1]?.setStretchFactor(1);
+    }
+    return rsiSeries;
+  }
+
+  function setRsiData(points: { time: number; value: number }[]): void {
+    ensureRsi().setData(points as never);
+  }
+
+  function updateRsiLast(point: { time: number; value: number }): void {
+    ensureRsi().update(point as never);
+  }
+
+  function setRsiStyle(color: string): void {
+    ensureRsi().applyOptions({ color });
+  }
+
+  function setRsiLevels(upper: number, lower: number, color: string): void {
+    const series = ensureRsi();
+    for (const line of rsiLevelLines) series.removePriceLine(line);
+    rsiLevelLines = [
+      series.createPriceLine({ price: upper, color, lineStyle: LineStyle.Dashed, lineWidth: 1, axisLabelVisible: true, title: "" }),
+      series.createPriceLine({ price: lower, color, lineStyle: LineStyle.Dashed, lineWidth: 1, axisLabelVisible: true, title: "" }),
+    ];
+  }
+
+  function removeRsi(): void {
+    if (rsiSeries) {
+      chart.removeSeries(rsiSeries);
+      rsiSeries = null;
+      rsiLevelLines = [];
+    }
+  }
+
+  /** Height of the RSI pane (0 when it doesn't exist) — overlays anchor above it. */
+  function rsiPaneHeight(): number {
+    const panes = chart.panes();
+    return panes.length > 1 ? panes[1]!.getHeight() : 0;
+  }
   /** Flips true after the first non-empty dataset — enables view preservation. */
   let hadDataOnce = false;
   const rangeCbs = new Set<(range: { from: number; to: number } | null) => void>();
@@ -388,6 +459,13 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
         wickDownColor: o.wickDown,
       });
     },
+
+    setRsiData,
+    updateRsiLast,
+    setRsiStyle,
+    setRsiLevels,
+    removeRsi,
+    rsiPaneHeight,
 
     setLastValueVisible(on: boolean): void {
       series.applyOptions({ lastValueVisible: on });

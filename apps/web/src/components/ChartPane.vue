@@ -258,7 +258,6 @@ function computeSessionBoxes(): void {
     lastBoxesJson = j;
     sessionPixels.value = out;
   }
-  scheduleRsiDraw();
 }
 
 /** "09:00" ↔ minutes-of-day helpers for the settings time inputs. */
@@ -315,15 +314,11 @@ function onAddSession(): void {
 }
 
 /* ── RSI indicator (sub-pane under the chart) ────────────────────────── */
-const rsiPaneEl = ref<HTMLElement | null>(null);
-const rsiCanvasEl = ref<HTMLCanvasElement | null>(null);
-/** Pixel height the RSI pane occupies (0 when hidden/removed). The overlay
- *  layers anchor to `overlayBottom` so they never cover the pane. */
-const rsiPaneH = ref(Math.min(420, Math.max(60, Number(localStorage.getItem("tk-rsi-height")) || 110)));
-const overlayBottom = computed(() => axisBottomH.value + (indicators.rsiAdded && indicators.rsiVisible ? rsiPaneH.value : 0));
-const rsiLast = ref<number | null>(null);
-let rsiRaf = 0;
 
+
+// Indicator toggle/* ── RSI indicator (native LWC v5 sub-pane) ──────────────────────────── */
+const rsiPaneH = ref(0);
+const overlayBottom = computed(() => axisBottomH.value + (indicators.rsiAdded && indicators.rsiVisible ? rsiPaneH.value : 0));
 /** Wilder's RSI over the close series. */
 function computeRsi(closes: number[], length: number): (number | null)[] {
   const out: (number | null)[] = new Array(closes.length).fill(null);
@@ -347,139 +342,39 @@ function computeRsi(closes: number[], length: number): (number | null)[] {
   return out;
 }
 
-function drawRsi(): void {
-  const canvas = rsiCanvasEl.value;
-  const pane = rsiPaneEl.value;
-  if (!canvas || !pane || !adapter) return;
-  const dpr = window.devicePixelRatio || 1;
-  const w = pane.clientWidth - axisRightW.value;
-  const h = pane.clientHeight;
-  if (w <= 10 || h <= 10) return;
-  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-    canvas.width = Math.round(w * dpr);
-    canvas.height = Math.round(h * dpr);
-    canvas.style.width = w + "px";
-    canvas.style.height = h + "px";
-  }
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-  const styles = getComputedStyle(pane);
-  const textColor = styles.color || "#888";
-
-  // grid lines: upper / lower (dashed) + 50 midline
-  const yOf = (v: number): number => h - (v / 100) * h;
-  ctx.strokeStyle = indicators.rsiLevelColor;
-  ctx.globalAlpha = 0.8;
-  ctx.setLineDash([4, 4]);
-  ctx.lineWidth = 1;
-  for (const lv of [indicators.rsiUpper, indicators.rsiLower]) {
-    const y = Math.round(yOf(lv)) + 0.5;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-    ctx.stroke();
-  }
-  ctx.setLineDash([]);
-  ctx.globalAlpha = 0.25;
-  const midY = Math.round(yOf(50)) + 0.5;
-  ctx.beginPath();
-  ctx.moveTo(0, midY);
-  ctx.lineTo(w, midY);
-  ctx.stroke();
-  ctx.globalAlpha = 1;
-  // level labels on the right edge (inside the plot, left of the price axis)
-  ctx.font = "10px sans-serif";
-  ctx.fillStyle = indicators.rsiLevelColor;
-  ctx.fillText(String(indicators.rsiUpper), w - 24, yOf(indicators.rsiUpper) - 3);
-  ctx.fillText(String(indicators.rsiLower), w - 24, yOf(indicators.rsiLower) + 11);
-
-  // RSI line
+function pushRsiData(): void {
+  if (!indicators.rsiAdded || !adapter) return;
   const candles = displayCandles.value;
   const closes = candles.map((c) => c.close);
   const rsi = computeRsi(closes, indicators.rsiLength);
-  ctx.strokeStyle = indicators.rsiColor;
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  let started = false;
-  let lastVal: number | null = null;
+  const points: { time: number; value: number }[] = [];
   for (let i = 0; i < candles.length; i++) {
     const v = rsi[i];
     if (v == null || !Number.isFinite(v)) continue;
-    const x = adapter.timeToX(candles[i]!.time);
-    if (x === null || x < -2 || x > w + 2) continue;
-    const y = yOf(v);
-    if (!started) { ctx.moveTo(x, y); started = true; }
-    else ctx.lineTo(x, y);
-    lastVal = v;
+    points.push({ time: candles[i]!.time, value: v });
   }
-  ctx.stroke();
-  // Extended last-value line across the whole pane — the scale tag sits on it
-  if (lastVal !== null) {
-    const y = Math.round(yOf(lastVal)) + 0.5;
-    ctx.strokeStyle = indicators.rsiColor;
-    ctx.globalAlpha = 0.55;
-    ctx.setLineDash([2, 3]);
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.globalAlpha = 1;
+  adapter.setRsiData(points);
+  rsiPaneH.value = adapter.rsiPaneHeight();
+}
+
+function syncRsiIndicator(): void {
+  if (!adapter) return;
+  if (indicators.rsiAdded) {
+    adapter.setRsiStyle(indicators.rsiColor);
+    adapter.setRsiLevels(indicators.rsiUpper, indicators.rsiLower, indicators.rsiLevelColor);
+    pushRsiData();
+  } else {
+    adapter.removeRsi();
+    rsiPaneH.value = 0;
   }
-  rsiLast.value = lastVal;
-}
-
-const rsiCursor = ref<{ y: number; v: number } | null>(null);
-function onRsiPointerMove(e: PointerEvent): void {
-  const pane = rsiPaneEl.value;
-  if (!pane) return;
-  const r = pane.getBoundingClientRect();
-  const y = e.clientY - r.top;
-  if (y < 0 || y > pane.clientHeight) { rsiCursor.value = null; return; }
-  rsiCursor.value = { y, v: ((pane.clientHeight - y) / pane.clientHeight) * 100 };
-}
-const rsiTagTop = computed(() => {
-  const v = rsiLast.value;
-  if (v === null) return 0;
-  return Math.min(rsiPaneH.value - 12, Math.max(2, (rsiPaneH.value * (100 - v)) / 100 - 8));
-});
-
-/** Drag the pane's top edge to resize (TradingView-style). */
-function onRsiResizeStart(e: PointerEvent): void {
-  const pane = rsiPaneEl.value;
-  if (!pane) return;
-  e.preventDefault();
-  const startY = e.clientY;
-  const startH = pane.clientHeight;
-  const move = (ev: PointerEvent): void => {
-    const h = Math.min(420, Math.max(60, startH + (startY - ev.clientY)));
-    rsiPaneH.value = h;
-    pane.style.height = h + "px";
-  };
-  const up = (): void => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", up);
-    localStorage.setItem("tk-rsi-height", String(rsiPaneH.value));
-    scheduleRsiDraw();
-  };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", up);
-}
-
-function scheduleRsiDraw(): void {
-  if (rsiRaf) return;
-  rsiRaf = requestAnimationFrame(() => {
-    rsiRaf = 0;
-    drawRsi();
-  });
 }
 watch(
-  () => [indicators.rsiAdded, indicators.rsiVisible, indicators.rsiLength, indicators.rsiColor, indicators.rsiLevelColor, indicators.rsiUpper, indicators.rsiLower, isDarkTheme.value],
-  () => scheduleRsiDraw()
+  () => [indicators.rsiAdded, indicators.rsiLength, indicators.rsiColor, indicators.rsiUpper, indicators.rsiLower, indicators.rsiLevelColor],
+  () => syncRsiIndicator()
 );
+watch(() => indicators.rsiVisible, () => syncRsiIndicator());
+// Keep the overlay layers above the LWC pane separator when the user drags it
+watch(() => indicators.rsiAdded, () => { nextTick(() => { rsiPaneH.value = adapter?.rsiPaneHeight() ?? 0; }); });
 
 // Indicator toggles don't move the chart — re-project the boxes directly
 watch(
@@ -1144,6 +1039,7 @@ watch(
     if (!adapter) return;
     // Re-anchor the badge after any data change (scale may shift)
     nextTick(updateBadgePosition);
+    if (indicators.rsiAdded) nextTick(pushRsiData);
     if (!prev || prev.length === 0 || next.length === 0) {
       // Fresh history after a symbol/timeframe switch (or first load): the
       // price scale may carry a MANUALLY-dragged range from the previous
@@ -1153,7 +1049,6 @@ watch(
       // its frozen scale.
       adapter.setPriceAutoScale(!replay.active);
       adapter.setData(next);
-      scheduleRsiDraw();
       return;
     }
     // Detect lazy-load prepend (older candles added to front)
@@ -1911,6 +1806,7 @@ function recalcRects(): void {
 
   // Sessions indicator background boxes (same triggers as drawings)
   computeSessionBoxes();
+  if (indicators.rsiAdded) rsiPaneH.value = adapter.rsiPaneHeight();
 
   // Trendlines: endpoints project directly (no min/max — a line keeps its
   // drawn direction; vertical lines with equal times are valid).
@@ -3639,6 +3535,7 @@ onMounted(async () => {
   adapter = createChartAdapter(containerRef.value);
   applyChartStyle();
   adapter.setTheme(themeStore.theme === "dark");
+  applyChartStyle(); // re-apply saved axis/crosshair colors over the theme reset
   if (props.instrument) adapter.setInstrument(props.instrument);
   adapter.setData(displayCandles.value);
   // Measure the price/time scales once LWC has laid out its panes
@@ -5260,134 +5157,40 @@ onBeforeUnmount(() => {
     />
 
     <!-- RSI indicator sub-pane (TradingView-style, under the chart) -->
-    <div v-if="indicators.rsiAdded && indicators.rsiVisible" ref="rsiPaneEl" class="rsi-pane" :style="{ height: rsiPaneH + 'px' }" @pointermove="onRsiPointerMove" @pointerleave="rsiCursor = null">
-      <div v-if="rsiCursor" class="rsi-cursor-line" :style="{ top: rsiCursor.y + 'px' }"></div>
-      <div v-if="rsiCursor" class="rsi-cursor-tag" :style="{ top: rsiCursor.y - 9 + 'px' }">{{ rsiCursor.v.toFixed(2) }}</div>
-      <canvas ref="rsiCanvasEl" class="rsi-canvas"></canvas>
-      <div class="rsi-resize-handle" @pointerdown="onRsiResizeStart($event)"></div>
-      <div class="rsi-legend">
-        <span class="rsi-name" :style="{ color: indicators.rsiColor }">RSI {{ indicators.rsiLength }}</span>
-        <span v-if="rsiLast !== null" class="rsi-last" :style="{ color: indicators.rsiColor }">{{ rsiLast.toFixed(2) }}</span>
-        <button class="rsi-legend-btn" type="button" title="Settings" aria-label="RSI settings" @click="rsiSettingsOpen = !rsiSettingsOpen">
-          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z" /></svg>
-        </button>
-        <button class="rsi-legend-btn" type="button" title="Remove" aria-label="Remove RSI" @click="indicators.rsiAdded = false">
-          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
-        </button>
+    <!-- RSI legend floats over the LWC sub-pane (bottom-left, above the time axis) -->
+    <div v-if="indicators.rsiAdded && instrument" class="rsi-legend" :style="{ bottom: overlayBottom + 6 + 'px' }">
+      <span class="rsi-name" :style="{ color: indicators.rsiColor }">RSI {{ indicators.rsiLength }}</span>
+      <button class="rsi-legend-btn" type="button" title="Settings" aria-label="RSI settings" @click="rsiSettingsOpen = !rsiSettingsOpen">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z" /></svg>
+      </button>
+      <button class="rsi-legend-btn" type="button" title="Remove" aria-label="Remove RSI" @click="indicators.rsiAdded = false">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+      </button>
+    </div>
+    <div v-if="rsiSettingsOpen" class="rsi-settings-backdrop" @click="rsiSettingsOpen = false"></div>
+    <div v-if="rsiSettingsOpen" class="rsi-settings" @click.stop>
+      <div class="cs-label" style="margin-bottom:6px">RSI — settings</div>
+      <div class="cs-row">
+        <span class="cs-cap">Length</span>
+        <input class="rsi-num" type="number" min="2" max="200" v-model.number="indicators.rsiLength" aria-label="RSI length" />
       </div>
-      <!-- last RSI value tag on the right (scale-style) -->
-      <div v-if="rsiLast !== null" class="rsi-value-tag" :style="{ top: rsiTagTop + 'px', background: indicators.rsiColor }">{{ rsiLast.toFixed(2) }}</div>
-      <div v-if="rsiSettingsOpen" class="rsi-settings-backdrop" @click="rsiSettingsOpen = false"></div>
-      <div v-if="rsiSettingsOpen" class="rsi-settings" @click.stop>
-        <div class="cs-label" style="margin-bottom:6px">RSI — settings</div>
-        <div class="cs-row">
-          <span class="cs-cap">Length</span>
-          <input class="rsi-num" type="number" min="2" max="200" v-model.number="indicators.rsiLength" aria-label="RSI length" />
-        </div>
-        <div class="cs-row">
-          <span class="cs-cap">RSI</span>
-          <input type="color" v-model="indicators.rsiColor" aria-label="RSI line color" />
-        </div>
-        <div class="cs-row">
-          <span class="cs-cap">Lines</span>
-          <input type="color" v-model="indicators.rsiLevelColor" aria-label="Level lines color" />
-        </div>
-        <div class="cs-row">
-          <span class="cs-cap">Upper</span>
-          <input class="rsi-num" type="number" min="1" max="100" v-model.number="indicators.rsiUpper" aria-label="Upper level" />
-          <span class="cs-cap">Lower</span>
-          <input class="rsi-num" type="number" min="0" max="99" v-model.number="indicators.rsiLower" aria-label="Lower level" />
-        </div>
+      <div class="cs-row">
+        <span class="cs-cap">RSI</span>
+        <input type="color" v-model="indicators.rsiColor" aria-label="RSI line color" />
+      </div>
+      <div class="cs-row">
+        <span class="cs-cap">Lines</span>
+        <input type="color" v-model="indicators.rsiLevelColor" aria-label="Level lines color" />
+      </div>
+      <div class="cs-row">
+        <span class="cs-cap">Upper</span>
+        <input class="rsi-num" type="number" min="1" max="100" v-model.number="indicators.rsiUpper" aria-label="Upper level" />
+        <span class="cs-cap">Lower</span>
+        <input class="rsi-num" type="number" min="0" max="99" v-model.number="indicators.rsiLower" aria-label="Lower level" />
       </div>
     </div>
 
-    <!-- Demo positions / history / stats panel (under the chart) -->
-    <div v-if="demo.active" class="demo-bottom">
-      <div class="demo-bottom-head">
-        <span class="demo-badge">DEMO</span>
-        <span class="demo-stat">Balance <b>{{ fmtMoney(demo.balance) }}</b></span>
-        <span class="demo-stat">Equity <b>{{ fmtMoney(demo.equity) }}</b></span>
-        <span class="demo-stat">Open P/L <b :class="pnlClass(demo.unrealized)">{{ fmtMoney(demo.unrealized) }}</b></span>
-        <span class="demo-flex" />
-        <button class="demo-reset" title="Reset demo account to $100,000" @click="demo.resetAccount()">Reset</button>
-      </div>
-      <div class="demo-tabs">
-        <button class="demo-tab" :class="{ active: demoTab === 'positions' }" @click="demoTab = 'positions'">Positions ({{ demo.openPositions.length + pendingOrders.length }})</button>
-        <button class="demo-tab" :class="{ active: demoTab === 'history' }" @click="demoTab = 'history'">History ({{ demo.closedPositions.length }})</button>
-        <button class="demo-tab" :class="{ active: demoTab === 'stats' }" @click="demoTab = 'stats'">Stats</button>
-        <span class="demo-flex" />
-        <template v-if="demoTab === 'stats'">
-          <button v-for="p in ['day', 'week', 'month', 'all']" :key="p" class="demo-period" :class="{ active: demoPeriod === p }" @click="demoPeriod = p as any">{{ p === 'day' ? 'Day' : p === 'week' ? 'Week' : p === 'month' ? 'Month' : 'All' }}</button>
-        </template>
-      </div>
-      <div v-if="demoTab === 'positions'" class="demo-table">
-        <div v-if="!demo.openPositions.length && !pendingOrders.length" class="demo-empty">No open positions — place a trade from the toolbar above the chart.</div>
-        <table v-if="demo.openPositions.length">
-          <thead><tr><th>Symbol</th><th>Side</th><th>Lot</th><th>Entry</th><th>SL</th><th>TP</th><th>P/L $</th><th>P/L %</th><th></th></tr></thead>
-          <tbody>
-            <tr v-for="p in demo.openPositions" :key="p.id">
-              <td>{{ p.symbol.replace('_', '/') }}</td>
-              <td :class="p.direction === 'long' ? 'pos' : 'neg'">{{ p.direction === 'long' ? 'LONG' : 'SHORT' }}</td>
-              <td>{{ p.lot }}</td>
-              <td>{{ p.entry }}</td>
-              <td>{{ p.sl ?? '-' }}</td>
-              <td>{{ p.tp ?? '-' }}</td>
-              <td :class="pnlClass(demo.pnlFor(p, p.lastPrice ?? p.entry))">{{ fmtMoney(demo.pnlFor(p, p.lastPrice ?? p.entry)) }}</td>
-              <td :class="pnlClass(((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1))">{{ (((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1) * 100 / p.entry).toFixed(2) }}%</td>
-              <td><button class="demo-close" title="Close position" @click="demo.closeAtMarket(p.id)">✕</button></td>
-            </tr>
-          </tbody>
-        </table>
-        <table v-if="pendingOrders.length">
-          <thead><tr><th colspan="6" style="text-align:left">Pending orders</th><th></th><th></th><th></th></tr></thead>
-          <tbody>
-            <tr v-for="p in pendingOrders" :key="p.id">
-              <td>{{ p.symbol.replace('_', '/') }}</td>
-              <td :class="p.direction === 'long' ? 'pos' : 'neg'">{{ p.direction === 'long' ? 'BUY LIM' : 'SELL LIM' }}</td>
-              <td>{{ p.lot }}</td>
-              <td>{{ p.entry }}</td>
-              <td>{{ p.sl ?? '-' }}</td>
-              <td>{{ p.tp ?? '-' }}</td>
-              <td></td>
-              <td></td>
-              <td><button class="demo-close" title="Delete pending order" @click="demo.removePending(p.id)">✕</button></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-else-if="demoTab === 'history'" class="demo-table">
-        <div v-if="!demo.closedPositions.length" class="demo-empty">No closed trades yet.</div>
-        <table v-else>
-          <thead><tr><th>Symbol</th><th>Side</th><th>Lot</th><th>Entry</th><th>Exit</th><th>Reason</th><th>P/L $</th><th>P/L %</th><th>Closed</th></tr></thead>
-          <tbody>
-            <tr v-for="p in [...demo.closedPositions].reverse()" :key="p.id">
-              <td>{{ p.symbol.replace('_', '/') }}</td>
-              <td :class="p.direction === 'long' ? 'pos' : 'neg'">{{ p.direction === 'long' ? 'LONG' : 'SHORT' }}</td>
-              <td>{{ p.lot }}</td>
-              <td>{{ p.entry }}</td>
-              <td>{{ p.closePrice }}</td>
-              <td>{{ (p.closeReason ?? '').toUpperCase() }}</td>
-              <td :class="pnlClass(p.pnl)">{{ fmtMoney(p.pnl ?? 0) }}</td>
-              <td :class="pnlClass(p.pnlPct)">{{ (p.pnlPct ?? 0) >= 0 ? '+' : '' }}{{ (p.pnlPct ?? 0).toFixed(2) }}%</td>
-              <td>{{ p.closeTime ? new Date(p.closeTime * 1000).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '' }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-else class="demo-table">
-        <div class="demo-stats">
-          <div class="demo-stat-card"><span>Trades</span><b>{{ demoSummary.trades }}</b></div>
-          <div class="demo-stat-card"><span>Wins</span><b>{{ demoSummary.wins }}</b></div>
-          <div class="demo-stat-card"><span>Winrate</span><b>{{ demoSummary.winrate }}%</b></div>
-          <div class="demo-stat-card"><span>Profit factor</span><b>{{ demoSummary.profitFactor ?? '-' }}</b></div>
-          <div class="demo-stat-card"><span :class="pnlClass(demoSummary.profit)">P/L %</span><b :class="pnlClass(demoSummary.profit)">{{ demoSummary.profitPct >= 0 ? '+' : '' }}{{ demoSummary.profitPct.toFixed(2) }}%</b></div>
-          <div class="demo-stat-card"><span>Gross profit</span><b class="pos">{{ fmtMoney(demoSummary.grossProfit) }}</b></div>
-          <div class="demo-stat-card"><span>Gross loss</span><b class="neg">{{ fmtMoney(demoSummary.grossLoss) }}</b></div>
-          <div class="demo-stat-card"><span>Symbols</span><b>{{ demo.tradedSymbols.length }}</b></div>
-        </div>
-      </div>
-    </div>
-
+    <!-- Chart settings
     <!-- Chart settings: TradingView-style gear in the bottom-right corner +
          a centered panel for background (solid/gradient) and candle colors -->
     <button
@@ -5506,26 +5309,10 @@ onBeforeUnmount(() => {
 
 <style scoped>
 /* RSI indicator sub-pane */
-.rsi-pane {
-  position: relative;
-  height: 110px;
-  margin: 8px 8px 8px;
-  margin-top: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  background: var(--chart-bg-gradient);
-  flex-shrink: 0;
-}
-.rsi-canvas {
-  position: absolute;
-  left: 0;
-  top: 0;
-}
 .rsi-legend {
   position: absolute;
-  top: 4px;
-  left: 8px;
+  left: 12px;
+  z-index: 2;
   z-index: 2;
   display: flex;
   align-items: center;
@@ -5551,50 +5338,6 @@ onBeforeUnmount(() => {
 .rsi-legend-btn:hover {
   color: var(--text);
   background: var(--btn-hover);
-}
-.rsi-resize-handle {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 6px;
-  cursor: ns-resize;
-  z-index: 3;
-}
-.rsi-resize-handle:hover {
-  background: rgba(120, 144, 156, 0.25);
-}
-.rsi-cursor-line {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: var(--text-muted);
-  pointer-events: none;
-  z-index: 2;
-}
-.rsi-cursor-tag {
-  position: absolute;
-  right: 4px;
-  z-index: 3;
-  background: #37474f;
-  color: #fff;
-  font-size: 10px;
-  font-weight: 800;
-  padding: 1px 5px;
-  border-radius: 4px;
-  pointer-events: none;
-}
-.rsi-value-tag {
-  position: absolute;
-  right: 4px;
-  z-index: 2;
-  color: #fff;
-  font-size: 10px;
-  font-weight: 800;
-  padding: 1px 5px;
-  border-radius: 4px;
-  pointer-events: none;
 }
 .rsi-settings-backdrop {
   position: fixed;
