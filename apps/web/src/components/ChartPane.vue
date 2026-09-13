@@ -319,7 +319,7 @@ const rsiPaneEl = ref<HTMLElement | null>(null);
 const rsiCanvasEl = ref<HTMLCanvasElement | null>(null);
 /** Pixel height the RSI pane occupies (0 when hidden/removed). The overlay
  *  layers anchor to `overlayBottom` so they never cover the pane. */
-const rsiPaneH = ref(110);
+const rsiPaneH = ref(Math.min(420, Math.max(60, Number(localStorage.getItem("tk-rsi-height")) || 110)));
 const overlayBottom = computed(() => axisBottomH.value + (indicators.rsiAdded && indicators.rsiVisible ? rsiPaneH.value : 0));
 const rsiLast = ref<number | null>(null);
 let rsiRaf = 0;
@@ -416,6 +416,34 @@ function drawRsi(): void {
   }
   ctx.stroke();
   rsiLast.value = lastVal;
+}
+
+const rsiTagTop = computed(() => {
+  const v = rsiLast.value;
+  if (v === null) return 0;
+  return Math.min(rsiPaneH.value - 12, Math.max(2, (rsiPaneH.value * (100 - v)) / 100 - 8));
+});
+
+/** Drag the pane's top edge to resize (TradingView-style). */
+function onRsiResizeStart(e: PointerEvent): void {
+  const pane = rsiPaneEl.value;
+  if (!pane) return;
+  e.preventDefault();
+  const startY = e.clientY;
+  const startH = pane.clientHeight;
+  const move = (ev: PointerEvent): void => {
+    const h = Math.min(420, Math.max(60, startH + (startY - ev.clientY)));
+    rsiPaneH.value = h;
+    pane.style.height = h + "px";
+  };
+  const up = (): void => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    localStorage.setItem("tk-rsi-height", String(rsiPaneH.value));
+    scheduleRsiDraw();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
 }
 
 function scheduleRsiDraw(): void {
@@ -5211,19 +5239,20 @@ onBeforeUnmount(() => {
     <!-- RSI indicator sub-pane (TradingView-style, under the chart) -->
     <div v-if="indicators.rsiAdded && indicators.rsiVisible" ref="rsiPaneEl" class="rsi-pane">
       <canvas ref="rsiCanvasEl" class="rsi-canvas"></canvas>
+      <div class="rsi-resize-handle" @pointerdown="onRsiResizeStart($event)"></div>
       <div class="rsi-legend">
         <span class="rsi-name" :style="{ color: indicators.rsiColor }">RSI {{ indicators.rsiLength }}</span>
         <span v-if="rsiLast !== null" class="rsi-last" :style="{ color: indicators.rsiColor }">{{ rsiLast.toFixed(2) }}</span>
-        <button class="rsi-legend-btn" type="button" title="Hide" aria-label="Hide RSI" @click="indicators.rsiVisible = false">
-          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" /><circle cx="12" cy="12" r="2.6" /></svg>
-        </button>
         <button class="rsi-legend-btn" type="button" title="Settings" aria-label="RSI settings" @click="rsiSettingsOpen = !rsiSettingsOpen">
-          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M12 4v2M12 18v2M4 12h2M18 12h2M6.3 6.3l1.4 1.4M16.3 16.3l1.4 1.4M17.7 6.3l-1.4 1.4M7.7 16.3l-1.4 1.4" /></svg>
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z" /></svg>
         </button>
         <button class="rsi-legend-btn" type="button" title="Remove" aria-label="Remove RSI" @click="indicators.rsiAdded = false">
           <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
         </button>
       </div>
+      <!-- last RSI value tag on the right (scale-style) -->
+      <div v-if="rsiLast !== null" class="rsi-value-tag" :style="{ top: rsiTagTop + 'px', background: indicators.rsiColor }">{{ rsiLast.toFixed(2) }}</div>
+      <div v-if="rsiSettingsOpen" class="rsi-settings-backdrop" @click="rsiSettingsOpen = false"></div>
       <div v-if="rsiSettingsOpen" class="rsi-settings" @click.stop>
         <div class="cs-label" style="margin-bottom:6px">RSI — settings</div>
         <div class="cs-row">
@@ -5497,12 +5526,41 @@ onBeforeUnmount(() => {
   color: var(--text);
   background: var(--btn-hover);
 }
-.rsi-settings {
+.rsi-resize-handle {
   position: absolute;
-  bottom: 100%;
-  left: 8px;
-  z-index: 70;
-  min-width: 230px;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: ns-resize;
+  z-index: 3;
+}
+.rsi-resize-handle:hover {
+  background: rgba(120, 144, 156, 0.25);
+}
+.rsi-value-tag {
+  position: absolute;
+  right: 4px;
+  z-index: 2;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+.rsi-settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 299;
+}
+.rsi-settings {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 300;
+  min-width: 260px;
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid var(--glass-border);
