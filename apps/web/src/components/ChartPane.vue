@@ -721,6 +721,13 @@ function deleteTemplate(): void {
   persistTemplates();
   selectedTpl.value = "";
 }
+/** Re-selecting the SAME template in the dropdown fires no change event —
+ *  clicking the dropdown re-applies it so a customized-but-unsaved chart
+ *  snaps back to the saved template. */
+function reapplySelected(): void {
+  const t = templates.value.find((x) => x.name === selectedTpl.value);
+  if (t) chartStyle.value = JSON.parse(JSON.stringify(t.style));
+}
 function onTemplateChange(): void {
   if (selectedTpl.value === "__defaults__") {
     resetChartStyle();
@@ -5266,7 +5273,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="cs-templates">
-          <select class="cs-select" v-model="selectedTpl" @change="onTemplateChange" aria-label="Template">
+          <select class="cs-select" v-model="selectedTpl" @change="onTemplateChange" @click="reapplySelected" aria-label="Template">
             <option value="" disabled>Template</option>
             <option value="__defaults__">Defaults</option>
             <option v-for="t in templates" :key="t.name" :value="t.name">{{ t.name }}</option>
