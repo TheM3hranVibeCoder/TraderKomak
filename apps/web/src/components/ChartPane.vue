@@ -258,6 +258,7 @@ function computeSessionBoxes(): void {
     lastBoxesJson = j;
     sessionPixels.value = out;
   }
+  scheduleRsiDraw();
 }
 
 /** "09:00" ↔ minutes-of-day helpers for the settings time inputs. */
@@ -312,6 +313,122 @@ function onAddSession(): void {
     newSessName.value = "";
   }
 }
+
+/* ── RSI indicator (sub-pane under the chart) ────────────────────────── */
+const rsiPaneEl = ref<HTMLElement | null>(null);
+const rsiCanvasEl = ref<HTMLCanvasElement | null>(null);
+/** Pixel height the RSI pane occupies (0 when hidden/removed). The overlay
+ *  layers anchor to `overlayBottom` so they never cover the pane. */
+const rsiPaneH = ref(110);
+const overlayBottom = computed(() => axisBottomH.value + (indicators.rsiAdded && indicators.rsiVisible ? rsiPaneH.value : 0));
+const rsiLast = ref<number | null>(null);
+let rsiRaf = 0;
+
+/** Wilder's RSI over the close series. */
+function computeRsi(closes: number[], length: number): (number | null)[] {
+  const out: (number | null)[] = new Array(closes.length).fill(null);
+  if (closes.length <= length) return out;
+  let gain = 0;
+  let loss = 0;
+  for (let i = 1; i <= length; i++) {
+    const d = closes[i]! - closes[i - 1]!;
+    if (d >= 0) gain += d;
+    else loss -= d;
+  }
+  gain /= length;
+  loss /= length;
+  out[length] = loss === 0 ? 100 : 100 - 100 / (1 + gain / loss);
+  for (let i = length + 1; i < closes.length; i++) {
+    const d = closes[i]! - closes[i - 1]!;
+    gain = (gain * (length - 1) + Math.max(d, 0)) / length;
+    loss = (loss * (length - 1) + Math.max(-d, 0)) / length;
+    out[i] = loss === 0 ? 100 : 100 - 100 / (1 + gain / loss);
+  }
+  return out;
+}
+
+function drawRsi(): void {
+  const canvas = rsiCanvasEl.value;
+  const pane = rsiPaneEl.value;
+  if (!canvas || !pane || !adapter) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = pane.clientWidth - axisRightW.value;
+  const h = pane.clientHeight;
+  if (w <= 10 || h <= 10) return;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
+  }
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const styles = getComputedStyle(pane);
+  const textColor = styles.color || "#888";
+
+  // grid lines: upper / lower (dashed) + 50 midline
+  const yOf = (v: number): number => h - (v / 100) * h;
+  ctx.strokeStyle = indicators.rsiLevelColor;
+  ctx.globalAlpha = 0.8;
+  ctx.setLineDash([4, 4]);
+  ctx.lineWidth = 1;
+  for (const lv of [indicators.rsiUpper, indicators.rsiLower]) {
+    const y = Math.round(yOf(lv)) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 0.25;
+  const midY = Math.round(yOf(50)) + 0.5;
+  ctx.beginPath();
+  ctx.moveTo(0, midY);
+  ctx.lineTo(w, midY);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  // level labels on the right edge (inside the plot, left of the price axis)
+  ctx.font = "10px sans-serif";
+  ctx.fillStyle = indicators.rsiLevelColor;
+  ctx.fillText(String(indicators.rsiUpper), w - 24, yOf(indicators.rsiUpper) - 3);
+  ctx.fillText(String(indicators.rsiLower), w - 24, yOf(indicators.rsiLower) + 11);
+
+  // RSI line
+  const candles = displayCandles.value;
+  const closes = candles.map((c) => c.close);
+  const rsi = computeRsi(closes, indicators.rsiLength);
+  ctx.strokeStyle = indicators.rsiColor;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  let started = false;
+  let lastVal: number | null = null;
+  for (let i = 0; i < candles.length; i++) {
+    const v = rsi[i];
+    if (v == null || !Number.isFinite(v)) continue;
+    const x = adapter.timeToX(candles[i]!.time);
+    if (x === null || x < -2 || x > w + 2) continue;
+    const y = yOf(v);
+    if (!started) { ctx.moveTo(x, y); started = true; }
+    else ctx.lineTo(x, y);
+    lastVal = v;
+  }
+  ctx.stroke();
+  rsiLast.value = lastVal;
+}
+
+function scheduleRsiDraw(): void {
+  if (rsiRaf) return;
+  rsiRaf = requestAnimationFrame(() => {
+    rsiRaf = 0;
+    drawRsi();
+  });
+}
+watch(
+  () => [indicators.rsiAdded, indicators.rsiVisible, indicators.rsiLength, indicators.rsiColor, indicators.rsiLevelColor, indicators.rsiUpper, indicators.rsiLower, isDarkTheme.value],
+  () => scheduleRsiDraw()
+);
 
 // Indicator toggles don't move the chart — re-project the boxes directly
 watch(
@@ -623,6 +740,7 @@ function loadChartStyle(): ChartStyle {
 const paneRef = ref<HTMLElement | null>(null);
 const chartStyle = ref<ChartStyle>(loadChartStyle());
 const chartSettingsOpen = ref(false);
+const rsiSettingsOpen = ref(false);
 
 const isDarkTheme = computed(() => themeStore.theme === "dark");
 /** Theme gradient (matches the CSS --chart-bg-gradient of each theme). */
@@ -984,6 +1102,7 @@ watch(
       // its frozen scale.
       adapter.setPriceAutoScale(!replay.active);
       adapter.setData(next);
+      scheduleRsiDraw();
       return;
     }
     // Detect lazy-load prepend (older candles added to front)
@@ -4125,7 +4244,7 @@ onBeforeUnmount(() => {
     <div
       v-if="sessionPixels.length"
       class="session-layer drawing-clip"
-      :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }"
+      :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }"
     >
       <div
         v-for="b in sessionPixels"
@@ -4142,7 +4261,7 @@ onBeforeUnmount(() => {
     <div
       class="drawing-layer drawing-clip"
       :class="{ 'drawing-mode': drawingToolActive }"
-      :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }"
+      :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }"
     >
       <div
         v-for="rect in rectPixels"
@@ -4242,7 +4361,7 @@ onBeforeUnmount(() => {
     <div
       class="drawing-hit-layer drawing-clip"
       :class="{ 'drawing-mode': drawingToolActive || replay.picking }"
-      :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }"
+      :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }"
     >
       <div
         v-for="rect in hitRects"
@@ -4439,7 +4558,7 @@ onBeforeUnmount(() => {
          below the TP line and above the SL line — instead of beside it. -->
     <div
       class="pos-label-layer drawing-clip"
-      :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }"
+      :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }"
     >
       <template v-for="p in posPixels" :key="p.id">
         <template v-if="p.id !== '__pospreview'">
@@ -4484,7 +4603,7 @@ onBeforeUnmount(() => {
           v-if="s.kind === 'vline'"
           class="single-time-tag"
           :class="{ selected: s.selected }"
-          :style="{ left: s.x + 'px', bottom: Math.max(2, axisBottomH / 2 - 9) + 'px' }"
+          :style="{ left: s.x + 'px', bottom: Math.max(2, overlayBottom + axisBottomH / 2 - 9) + 'px' }"
         >{{ fmtAxisTime(s.time) }}</div>
         <div
           v-else-if="s.selected"
@@ -4500,7 +4619,7 @@ onBeforeUnmount(() => {
     <template v-if="snapXhair && drawingToolActive && magnetActive">
       <div
         class="xhair-line v"
-        :style="{ left: snapXhair.x + 'px', bottom: axisBottomH + 'px' }"
+        :style="{ left: snapXhair.x + 'px', bottom: overlayBottom + 'px' }"
       ></div>
       <div
         class="xhair-line h"
@@ -4512,7 +4631,7 @@ onBeforeUnmount(() => {
       >{{ snapXhair.priceText }}</div>
       <div
         class="single-time-tag"
-        :style="{ left: snapXhair.x + 'px', bottom: Math.max(2, axisBottomH / 2 - 9) + 'px' }"
+        :style="{ left: snapXhair.x + 'px', bottom: Math.max(2, overlayBottom + axisBottomH / 2 - 9) + 'px' }"
       >{{ snapXhair.timeText }}</div>
     </template>
 
@@ -4802,7 +4921,7 @@ onBeforeUnmount(() => {
     <div
       v-if="replay.active && replay.picking"
       class="replay-layer drawing-clip"
-      :style="{ right: axisRightW + 'px', bottom: axisBottomH + 'px' }"
+      :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }"
     >
       <div
         v-if="replayVlX !== null"
@@ -4819,7 +4938,7 @@ onBeforeUnmount(() => {
     <!-- Demo trading: entry/SL/TP lines for the active symbol's positions
          and pending orders, with drag strips and price tags on the scale -->
     <template v-if="demo.active">
-      <div class="demo-lines drawing-clip" :style="{ right: axisRightW + 'px', bottom: (axisBottomH + demoBottomH) + 'px' }">
+      <div class="demo-lines drawing-clip" :style="{ right: axisRightW + 'px', bottom: (overlayBottom + demoBottomH) + 'px' }">
         <div
           v-for="l in demoLines"
           :key="l.id + l.level"
@@ -4843,7 +4962,7 @@ onBeforeUnmount(() => {
           </div>
         </template>
       </div>
-      <div class="demo-hit-layer" :class="{ 'drawing-mode': replay.picking }" :style="{ right: axisRightW + 'px', bottom: (axisBottomH + demoBottomH) + 'px' }">
+      <div class="demo-hit-layer" :class="{ 'drawing-mode': replay.picking }" :style="{ right: axisRightW + 'px', bottom: (overlayBottom + demoBottomH) + 'px' }">
         <div
           v-for="l in demoLines"
           :key="'dhit-' + l.id + l.level"
@@ -4852,7 +4971,7 @@ onBeforeUnmount(() => {
           @pointerdown.stop.prevent="onDemoLineDragStart($event, l.id, l.level)"
         ></div>
       </div>
-      <div class="demo-tag-layer" :style="{ bottom: (axisBottomH + demoBottomH) + 'px' }">
+      <div class="demo-tag-layer" :style="{ bottom: (overlayBottom + demoBottomH) + 'px' }">
         <template v-for="l in demoLines" :key="'tag-' + l.id + l.level">
           <div
             v-if="l.y >= 9 && l.y <= demoChartH - 10"
@@ -5089,6 +5208,45 @@ onBeforeUnmount(() => {
       @click="onChartClick"
     />
 
+    <!-- RSI indicator sub-pane (TradingView-style, under the chart) -->
+    <div v-if="indicators.rsiAdded && indicators.rsiVisible" ref="rsiPaneEl" class="rsi-pane">
+      <canvas ref="rsiCanvasEl" class="rsi-canvas"></canvas>
+      <div class="rsi-legend">
+        <span class="rsi-name" :style="{ color: indicators.rsiColor }">RSI {{ indicators.rsiLength }}</span>
+        <span v-if="rsiLast !== null" class="rsi-last" :style="{ color: indicators.rsiColor }">{{ rsiLast.toFixed(2) }}</span>
+        <button class="rsi-legend-btn" type="button" title="Hide" aria-label="Hide RSI" @click="indicators.rsiVisible = false">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" /><circle cx="12" cy="12" r="2.6" /></svg>
+        </button>
+        <button class="rsi-legend-btn" type="button" title="Settings" aria-label="RSI settings" @click="rsiSettingsOpen = !rsiSettingsOpen">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M12 4v2M12 18v2M4 12h2M18 12h2M6.3 6.3l1.4 1.4M16.3 16.3l1.4 1.4M17.7 6.3l-1.4 1.4M7.7 16.3l-1.4 1.4" /></svg>
+        </button>
+        <button class="rsi-legend-btn" type="button" title="Remove" aria-label="Remove RSI" @click="indicators.rsiAdded = false">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+      </div>
+      <div v-if="rsiSettingsOpen" class="rsi-settings" @click.stop>
+        <div class="cs-label" style="margin-bottom:6px">RSI — settings</div>
+        <div class="cs-row">
+          <span class="cs-cap">Length</span>
+          <input class="rsi-num" type="number" min="2" max="200" v-model.number="indicators.rsiLength" aria-label="RSI length" />
+        </div>
+        <div class="cs-row">
+          <span class="cs-cap">RSI</span>
+          <input type="color" v-model="indicators.rsiColor" aria-label="RSI line color" />
+        </div>
+        <div class="cs-row">
+          <span class="cs-cap">Lines</span>
+          <input type="color" v-model="indicators.rsiLevelColor" aria-label="Level lines color" />
+        </div>
+        <div class="cs-row">
+          <span class="cs-cap">Upper</span>
+          <input class="rsi-num" type="number" min="1" max="100" v-model.number="indicators.rsiUpper" aria-label="Upper level" />
+          <span class="cs-cap">Lower</span>
+          <input class="rsi-num" type="number" min="0" max="99" v-model.number="indicators.rsiLower" aria-label="Lower level" />
+        </div>
+      </div>
+    </div>
+
     <!-- Demo positions / history / stats panel (under the chart) -->
     <div v-if="demo.active" class="demo-bottom">
       <div class="demo-bottom-head">
@@ -5184,6 +5342,7 @@ onBeforeUnmount(() => {
       title="Chart settings"
       aria-label="Chart settings"
       :style="{ right: '0px', bottom: '0px', width: axisRightW + 'px', height: axisBottomH + 'px' }"
+      data-corner-gear="true"
       @click="chartSettingsOpen = !chartSettingsOpen"
     >
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -5292,6 +5451,82 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* RSI indicator sub-pane */
+.rsi-pane {
+  position: relative;
+  height: 110px;
+  margin: 0 8px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--chart-bg-gradient);
+  flex-shrink: 0;
+}
+.rsi-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+.rsi-legend {
+  position: absolute;
+  top: 4px;
+  left: 8px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.rsi-name {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.rsi-legend-btn {
+  width: 17px;
+  height: 17px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+.rsi-legend-btn:hover {
+  color: var(--text);
+  background: var(--btn-hover);
+}
+.rsi-settings {
+  position: absolute;
+  bottom: 100%;
+  left: 8px;
+  z-index: 70;
+  min-width: 230px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border);
+  background: var(--bg-panel, #171b26);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  cursor: default;
+}
+.rsi-num {
+  width: 60px;
+  font-size: 11px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 5px;
+}
+.rsi-num:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.cs-label {
+  display: flex;
+  align-items: center;
+}
 /* Chart settings: corner gear + centered panel (TradingView-style) */
 .chart-settings-btn {
   position: absolute;

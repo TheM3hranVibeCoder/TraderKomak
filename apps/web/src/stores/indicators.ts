@@ -135,6 +135,9 @@ export function inSession(def: CustomSession, localMin: number): boolean {
   return localMin >= start || localMin < end;
 }
 
+function HEXc(v: unknown): v is string {
+  return typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v);
+}
 export const useIndicatorsStore = defineStore("indicators", () => {
   const sessionsAdded = ref(false);
   /** Eye toggle — boxes hidden but the indicator stays on the chart. */
@@ -148,6 +151,15 @@ export const useIndicatorsStore = defineStore("indicators", () => {
   );
   /** Built-in sessions: name + color editable, boundaries chained. */
   const defs = ref<SessionDef[]>(SESSIONS.map((s) => ({ ...s })));
+
+  /* ── RSI indicator ─────────────────────────────────────────────────── */
+  const rsiAdded = ref(false);
+  const rsiVisible = ref(true);
+  const rsiLength = ref(14);
+  const rsiColor = ref("#a78bfa");
+  const rsiLevelColor = ref("#78909c");
+  const rsiUpper = ref(70);
+  const rsiLower = ref(30);
   /** User-defined sessions (visitor-local clock). */
   const customs = ref<CustomSession[]>([]);
 
@@ -166,6 +178,13 @@ export const useIndicatorsStore = defineStore("indicators", () => {
         enabled?: Record<string, boolean>;
         defs?: { id: string; name?: string; color?: string }[];
         customs?: CustomSession[];
+        rsiAdded?: boolean;
+        rsiVisible?: boolean;
+        rsiLength?: number;
+        rsiColor?: string;
+        rsiLevelColor?: string;
+        rsiUpper?: number;
+        rsiLower?: number;
       };
       if (typeof p.added === "boolean") sessionsAdded.value = p.added;
       if (typeof p.visible === "boolean") sessionsVisible.value = p.visible;
@@ -186,6 +205,13 @@ export const useIndicatorsStore = defineStore("indicators", () => {
           if (typeof d.color === "string" && /^#[0-9a-fA-F]{6}$/.test(d.color)) target.color = d.color;
         }
       }
+      if (typeof p.rsiAdded === "boolean") rsiAdded.value = p.rsiAdded;
+      if (typeof p.rsiVisible === "boolean") rsiVisible.value = p.rsiVisible;
+      if (typeof p.rsiLength === "number" && p.rsiLength >= 2 && p.rsiLength <= 200) rsiLength.value = Math.round(p.rsiLength);
+      if (HEXc(p.rsiColor)) rsiColor.value = p.rsiColor;
+      if (HEXc(p.rsiLevelColor)) rsiLevelColor.value = p.rsiLevelColor;
+      if (typeof p.rsiUpper === "number") rsiUpper.value = Math.min(100, Math.max(1, p.rsiUpper));
+      if (typeof p.rsiLower === "number") rsiLower.value = Math.min(99, Math.max(0, p.rsiLower));
       if (Array.isArray(p.customs)) {
         for (const c of p.customs) {
           if (c && typeof c.id === "string" && typeof c.name === "string" &&
@@ -205,7 +231,7 @@ export const useIndicatorsStore = defineStore("indicators", () => {
   } catch {}
 
   watch(
-    [sessionsAdded, sessionsVisible, sessionsLabels, sessionsEnabled, defs, customs],
+    [sessionsAdded, sessionsVisible, sessionsLabels, sessionsEnabled, defs, customs, rsiAdded, rsiVisible, rsiLength, rsiColor, rsiLevelColor, rsiUpper, rsiLower],
     () => {
       localStorage.setItem(
         KEY,
@@ -216,6 +242,13 @@ export const useIndicatorsStore = defineStore("indicators", () => {
           enabled: sessionsEnabled.value,
           defs: defs.value.map((d) => ({ id: d.id, name: d.name, color: d.color })),
           customs: customs.value,
+          rsiAdded: rsiAdded.value,
+          rsiVisible: rsiVisible.value,
+          rsiLength: rsiLength.value,
+          rsiColor: rsiColor.value,
+          rsiLevelColor: rsiLevelColor.value,
+          rsiUpper: rsiUpper.value,
+          rsiLower: rsiLower.value,
         })
       );
     },
@@ -261,6 +294,13 @@ export const useIndicatorsStore = defineStore("indicators", () => {
     sessionsEnabled,
     defs,
     customs,
+    rsiAdded,
+    rsiVisible,
+    rsiLength,
+    rsiColor,
+    rsiLevelColor,
+    rsiUpper,
+    rsiLower,
     isEnabled,
     addSessions,
     removeSessions,

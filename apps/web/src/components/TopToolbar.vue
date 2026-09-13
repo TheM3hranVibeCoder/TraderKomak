@@ -185,6 +185,19 @@ function onSearchBlur() {
           <span class="ind-item-name">Sessions</span>
           <span class="ind-item-desc">Market session backgrounds</span>
         </button>
+        <button
+          class="ind-item"
+          type="button"
+          role="menuitemcheckbox"
+          :aria-checked="indicators.rsiAdded"
+          @click="indicators.rsiAdded ? (indicators.rsiAdded = false) : (indicators.rsiAdded = true, indicators.rsiVisible = true)"
+        >
+          <span class="ind-check" :class="{ on: indicators.rsiAdded }">
+            <svg v-if="indicators.rsiAdded" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12l5 5L20 7" /></svg>
+          </span>
+          <span class="ind-item-name">Relative Strength Index</span>
+          <span class="ind-item-desc">RSI momentum oscillator (sub-pane)</span>
+        </button>
       </div>
     </Teleport>
 
