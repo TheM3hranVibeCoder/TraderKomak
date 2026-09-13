@@ -900,6 +900,9 @@ let dataCb: (() => void) | null = null;
 let lazyThrottled = false;
 let interactionEl: HTMLElement | null = null;
 let interactCb: (() => void) | null = null;
+/** Wheel-forwarding over drawing overlays (see onOverlayWheel). */
+let overlayWheelEl: HTMLElement | null = null;
+let overlayWheelCb: ((e: WheelEvent) => void) | null = null;
 /** Per-frame overlay re-projection (see recalcFrame). */
 let recalcRaf = 0;
 let recalcDeadline = 0;
@@ -3332,6 +3335,37 @@ onMounted(async () => {
   interactionEl = el;
   interactCb = onInteract;
 
+  // Wheel-zoom over drawings: the drawing/demo hit layers sit ABOVE the
+  // chart canvas, so a wheel over a rectangle/position never reaches
+  // Lightweight Charts and zoom silently dies. Re-dispatch any wheel whose
+  // target is an overlay onto the chart's own canvas — LWC's zoom handler
+  // receives it as if the cursor were on the candles. Events that already
+  // hit the canvas are left alone (no double zoom).
+  const onOverlayWheel = (e: WheelEvent) => {
+    if ((e.target as HTMLElement)?.tagName === "CANVAS") return;
+    const canvas = el.querySelector("canvas");
+    if (!canvas) return;
+    canvas.dispatchEvent(new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaX: e.deltaX,
+      deltaY: e.deltaY,
+      deltaZ: e.deltaZ,
+      deltaMode: e.deltaMode,
+      clientX: e.clientX,
+      clientY: e.clientY,
+      screenX: e.screenX,
+      screenY: e.screenY,
+      ctrlKey: e.ctrlKey,
+      altKey: e.altKey,
+      shiftKey: e.shiftKey,
+      metaKey: e.metaKey,
+    }));
+  };
+  el.addEventListener("wheel", onOverlayWheel, true);
+  overlayWheelEl = el;
+  overlayWheelCb = onOverlayWheel;
+
   // While any button is held over the chart (pan drag, price-axis scale
   // drag), re-project overlays EVERY frame so they stay glued to the canvas
   // render instead of trailing it by a frame on coarse timeframes.
@@ -3701,6 +3735,9 @@ onBeforeUnmount(() => {
     interactionEl.removeEventListener("pointerdown", interactCb);
     interactionEl.removeEventListener("wheel", interactCb);
     interactionEl.removeEventListener("touchmove", interactCb);
+  }
+  if (overlayWheelEl && overlayWheelCb) {
+    overlayWheelEl.removeEventListener("wheel", overlayWheelCb, true);
   }
   if (chartMouseDownEl && chartMouseDownCb) {
     chartMouseDownEl.removeEventListener("pointerdown", chartMouseDownCb as AnyListener, true);

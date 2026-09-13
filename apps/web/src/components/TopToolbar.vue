@@ -591,15 +591,36 @@ function onSearchBlur() {
   }
 }
 @media (max-width: 640px) {
+  /* Phone header: a two-column grid — the tool group wraps on the left,
+     the Telegram/theme icons sit as a tidy aligned column on the right
+     (with flex-wrap they used to scatter across rows, misaligned). */
+  .toolbar {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 8px 10px;
+    padding: 8px 10px;
+  }
+  .left {
+    grid-column: 1;
+    grid-row: 1;
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .right {
+    grid-column: 2;
+    grid-row: 1;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .telegram-btn,
+  .theme-btn {
+    height: 40px;
+    justify-content: center;
+  }
   /* brand mark keeps the identity, the name frees the row */
   .brand-name {
     display: none;
-  }
-  /* The left group holds search + timeframe + 3 buttons: without wrapping
-     the last button (Indicators) is clipped off-screen on narrow phones. */
-  .left {
-    flex-wrap: wrap;
-    row-gap: 8px;
   }
   .search-box {
     min-width: 110px;
