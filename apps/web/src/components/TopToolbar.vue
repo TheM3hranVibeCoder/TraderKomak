@@ -35,7 +35,13 @@ async function toggleIndicators(): Promise<void> {
   if (indOpen.value) {
     await nextTick();
     const r = indBtnEl.value?.getBoundingClientRect();
-    if (r) indPop.value = { top: r.bottom + 6, left: r.left };
+    if (r) {
+      // Clamp inside the viewport — on phones the button sits at the row's
+      // right edge and an unclamped dropdown would hang half off-screen.
+      const popW = 260; // .indicators-pop min-width + margin
+      const left = Math.max(8, Math.min(r.left, window.innerWidth - popW));
+      indPop.value = { top: r.bottom + 6, left };
+    }
   }
 }
 
@@ -589,6 +595,15 @@ function onSearchBlur() {
   .brand-name {
     display: none;
   }
+  /* The left group holds search + timeframe + 3 buttons: without wrapping
+     the last button (Indicators) is clipped off-screen on narrow phones. */
+  .left {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .search-box {
+    min-width: 110px;
+  }
   .demo-btn span,
   .replay-btn span,
   .ind-label {
@@ -597,7 +612,16 @@ function onSearchBlur() {
   .demo-btn,
   .replay-btn,
   .ind-btn {
-    padding: 0 9px;
+    padding: 0 10px;
+    height: 40px; /* comfortable tap target on touch screens */
+  }
+  /* the dropdown spans nearly the full width so items are easy to tap */
+  .indicators-pop {
+    min-width: 220px;
+    max-width: calc(100vw - 16px);
+  }
+  .ind-item {
+    padding: 12px 10px; /* taller menu rows for touch */
   }
 }
 </style>
