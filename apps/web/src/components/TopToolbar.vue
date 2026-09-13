@@ -30,19 +30,16 @@ const indOpen = ref(false);
 const indBtnEl = ref<HTMLElement | null>(null);
 const indPop = ref<{ top: number; left: number }>({ top: 0, left: 0 });
 
-async function toggleIndicators(): Promise<void> {
-  indOpen.value = !indOpen.value;
-  if (indOpen.value) {
-    await nextTick();
-    const r = indBtnEl.value?.getBoundingClientRect();
-    if (r) {
-      // Clamp inside the viewport — on phones the button sits at the row's
-      // right edge and an unclamped dropdown would hang half off-screen.
-      const popW = 260; // .indicators-pop min-width + margin
-      const left = Math.max(8, Math.min(r.left, window.innerWidth - popW));
-      indPop.value = { top: r.bottom + 6, left };
-    }
+function toggleIndicators(): void {
+  const r = indBtnEl.value?.getBoundingClientRect();
+  if (r) {
+    // Compute the position BEFORE opening — otherwise the pop renders one
+    // frame at (0,0) and "flashes" near the header.
+    const popW = 260; // .indicators-pop min-width + margin
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - popW));
+    indPop.value = { top: r.bottom + 6, left };
   }
+  indOpen.value = !indOpen.value;
 }
 
 function onWindowPointerDown(e: PointerEvent): void {

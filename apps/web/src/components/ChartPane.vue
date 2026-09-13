@@ -1697,51 +1697,15 @@ const axisRightW = ref(0);
 const axisBottomH = ref(0);
 let axisRetry = 0;
 function updateAxisSizes(): void {
-  const c = containerRef.value;
-  if (!c) return;
-  let main: Element | null = null;
-  let area = 0;
-  for (const cv of c.querySelectorAll("canvas")) {
-    const r = cv.getBoundingClientRect();
-    if (r.width * r.height > area) {
-      area = r.width * r.height;
-      main = cv;
-    }
-  }
-  if (!main) return;
-  const r = main.getBoundingClientRect();
-  // LWC may not have laid out its panes yet (canvas still tiny) — a bad
-  // measurement would shrink every overlay to a sliver, so retry instead.
-  if (r.width < c.clientWidth * 0.5) {
-    if (axisRetry < 60) {
-      axisRetry += 1;
-      requestAnimationFrame(updateAxisSizes);
-    }
-    return;
-  }
-  const rightW = Math.max(0, Math.round(c.clientWidth - r.width));
-  const bottomH = Math.max(0, Math.round(c.clientHeight - r.height));
+  if (!adapter) return;
+  // Exact sizes from the chart API — no DOM guessing (v5 panes made the
+  // largest-canvas heuristic unreliable: it measured mid-layout values).
+  const rightW = adapter.priceScaleWidth();
+  const bottomH = adapter.timeScaleHeight();
   const changed = rightW !== axisRightW.value || bottomH !== axisBottomH.value;
   axisRightW.value = rightW;
   axisBottomH.value = bottomH;
-  if (changed) {
-    // The LWC canvas resizes ASYNC after a container layout change (e.g.
-    // the watchlist slide) — the first measurement can still see the old
-    // canvas size, yielding a wildly wrong axis width (382px instead of
-    // 62px) that would permanently clip the overlays. Keep re-measuring
-    // every frame until the value settles, then re-project the overlays.
-    recalcRects();
-    if (axisRetry < 60) {
-      axisRetry += 1;
-      requestAnimationFrame(() => {
-        updateAxisSizes();
-        updateBadgePosition();
-        recalcRects();
-      });
-    }
-  } else {
-    axisRetry = 0;
-  }
+  if (changed) requestAnimationFrame(updateAxisSizes);
 }
 /** True when the event is inside the drawable chart area (not on an axis). */
 function isInChartArea(e: MouseEvent): boolean {
@@ -5155,6 +5119,93 @@ onBeforeUnmount(() => {
       :class="{ 'rect-mode': drawingToolActive }"
       @click="onChartClick"
     />
+
+    <!-- Demo positions / history / stats panel (under the chart) -->
+    <div v-if="demo.active" class="demo-bottom">
+      <div class="demo-bottom-head">
+        <span class="demo-badge">DEMO</span>
+        <span class="demo-stat">Balance <b>{{ fmtMoney(demo.balance) }}</b></span>
+        <span class="demo-stat">Equity <b>{{ fmtMoney(demo.equity) }}</b></span>
+        <span class="demo-stat">Open P/L <b :class="pnlClass(demo.unrealized)">{{ fmtMoney(demo.unrealized) }}</b></span>
+        <span class="demo-flex" />
+        <button class="demo-reset" title="Reset demo account to $100,000" @click="demo.resetAccount()">Reset</button>
+      </div>
+      <div class="demo-tabs">
+        <button class="demo-tab" :class="{ active: demoTab === 'positions' }" @click="demoTab = 'positions'">Positions ({{ demo.openPositions.length + pendingOrders.length }})</button>
+        <button class="demo-tab" :class="{ active: demoTab === 'history' }" @click="demoTab = 'history'">History ({{ demo.closedPositions.length }})</button>
+        <button class="demo-tab" :class="{ active: demoTab === 'stats' }" @click="demoTab = 'stats'">Stats</button>
+        <span class="demo-flex" />
+        <template v-if="demoTab === 'stats'">
+          <button v-for="p in ['day', 'week', 'month', 'all']" :key="p" class="demo-period" :class="{ active: demoPeriod === p }" @click="demoPeriod = p as any">{{ p === 'day' ? 'Day' : p === 'week' ? 'Week' : p === 'month' ? 'Month' : 'All' }}</button>
+        </template>
+      </div>
+      <div v-if="demoTab === 'positions'" class="demo-table">
+        <div v-if="!demo.openPositions.length && !pendingOrders.length" class="demo-empty">No open positions — place a trade from the toolbar above the chart.</div>
+        <table v-if="demo.openPositions.length">
+          <thead><tr><th>Symbol</th><th>Side</th><th>Lot</th><th>Entry</th><th>SL</th><th>TP</th><th>P/L $</th><th>P/L %</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="p in demo.openPositions" :key="p.id">
+              <td>{{ p.symbol.replace('_', '/') }}</td>
+              <td :class="p.direction === 'long' ? 'pos' : 'neg'">{{ p.direction === 'long' ? 'LONG' : 'SHORT' }}</td>
+              <td>{{ p.lot }}</td>
+              <td>{{ p.entry }}</td>
+              <td>{{ p.sl ?? '-' }}</td>
+              <td>{{ p.tp ?? '-' }}</td>
+              <td :class="pnlClass(demo.pnlFor(p, p.lastPrice ?? p.entry))">{{ fmtMoney(demo.pnlFor(p, p.lastPrice ?? p.entry)) }}</td>
+              <td :class="pnlClass(((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1))">{{ (((p.lastPrice ?? p.entry) - p.entry) * (p.direction === 'long' ? 1 : -1) * 100 / p.entry).toFixed(2) }}%</td>
+              <td><button class="demo-close" title="Close position" @click="demo.closeAtMarket(p.id)">✕</button></td>
+            </tr>
+          </tbody>
+        </table>
+        <table v-if="pendingOrders.length">
+          <thead><tr><th colspan="6" style="text-align:left">Pending orders</th><th></th><th></th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="p in pendingOrders" :key="p.id">
+              <td>{{ p.symbol.replace('_', '/') }}</td>
+              <td :class="p.direction === 'long' ? 'pos' : 'neg'">{{ p.direction === 'long' ? 'BUY LIM' : 'SELL LIM' }}</td>
+              <td>{{ p.lot }}</td>
+              <td>{{ p.entry }}</td>
+              <td>{{ p.sl ?? '-' }}</td>
+              <td>{{ p.tp ?? '-' }}</td>
+              <td></td>
+              <td></td>
+              <td><button class="demo-close" title="Delete pending order" @click="demo.removePending(p.id)">✕</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-else-if="demoTab === 'history'" class="demo-table">
+        <div v-if="!demo.closedPositions.length" class="demo-empty">No closed trades yet.</div>
+        <table v-else>
+          <thead><tr><th>Symbol</th><th>Side</th><th>Lot</th><th>Entry</th><th>Exit</th><th>Reason</th><th>P/L $</th><th>P/L %</th><th>Closed</th></tr></thead>
+          <tbody>
+            <tr v-for="p in [...demo.closedPositions].reverse()" :key="p.id">
+              <td>{{ p.symbol.replace('_', '/') }}</td>
+              <td :class="p.direction === 'long' ? 'pos' : 'neg'">{{ p.direction === 'long' ? 'LONG' : 'SHORT' }}</td>
+              <td>{{ p.lot }}</td>
+              <td>{{ p.entry }}</td>
+              <td>{{ p.closePrice }}</td>
+              <td>{{ (p.closeReason ?? '').toUpperCase() }}</td>
+              <td :class="pnlClass(p.pnl)">{{ fmtMoney(p.pnl ?? 0) }}</td>
+              <td :class="pnlClass(p.pnlPct)">{{ (p.pnlPct ?? 0) >= 0 ? '+' : '' }}{{ (p.pnlPct ?? 0).toFixed(2) }}%</td>
+              <td>{{ p.closeTime ? new Date(p.closeTime * 1000).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-else class="demo-table">
+        <div class="demo-stats">
+          <div class="demo-stat-card"><span>Trades</span><b>{{ demoSummary.trades }}</b></div>
+          <div class="demo-stat-card"><span>Wins</span><b>{{ demoSummary.wins }}</b></div>
+          <div class="demo-stat-card"><span>Winrate</span><b>{{ demoSummary.winrate }}%</b></div>
+          <div class="demo-stat-card"><span>Profit factor</span><b>{{ demoSummary.profitFactor ?? '-' }}</b></div>
+          <div class="demo-stat-card"><span :class="pnlClass(demoSummary.profit)">P/L %</span><b :class="pnlClass(demoSummary.profit)">{{ demoSummary.profitPct >= 0 ? '+' : '' }}{{ demoSummary.profitPct.toFixed(2) }}%</b></div>
+          <div class="demo-stat-card"><span>Gross profit</span><b class="pos">{{ fmtMoney(demoSummary.grossProfit) }}</b></div>
+          <div class="demo-stat-card"><span>Gross loss</span><b class="neg">{{ fmtMoney(demoSummary.grossLoss) }}</b></div>
+          <div class="demo-stat-card"><span>Symbols</span><b>{{ demo.tradedSymbols.length }}</b></div>
+        </div>
+      </div>
+    </div>
 
     <!-- RSI indicator sub-pane (TradingView-style, under the chart) -->
     <!-- RSI legend floats over the LWC sub-pane (bottom-left, above the time axis) -->
