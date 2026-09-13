@@ -1040,6 +1040,10 @@ watch(
   () => themeStore.theme,
   (t) => {
     adapter?.setTheme(t === "dark");
+    // setTheme resets axis/crosshair colors to the theme — re-apply the
+    // user's customized colors on top (only non-null ones; defaults keep
+    // following the theme).
+    applyChartStyle();
   }
 );
 
@@ -5180,7 +5184,7 @@ onBeforeUnmount(() => {
         <div class="cs-section">
           <div class="cs-label">
             Background
-            <button class="cs-theme-btn" type="button" title="Follow theme" @click="resetGroup('bg')">⟲ theme</button>
+            <button class="cs-theme-btn" type="button" title="Default" @click="resetGroup('bg')">⟲ theme</button>
           </div>
           <div class="cs-row">
             <span class="cs-cap">Type</span>
@@ -5208,7 +5212,7 @@ onBeforeUnmount(() => {
         <div class="cs-section">
           <div class="cs-label">
             Candles
-            <button class="cs-theme-btn" type="button" title="Follow theme" @click="resetGroup('candles')">⟲ theme</button>
+            <button class="cs-theme-btn" type="button" title="Default" @click="resetGroup('candles')">⟲ theme</button>
           </div>
           <div class="cs-dir-wrap">
             <div class="cs-dir">
@@ -5230,7 +5234,7 @@ onBeforeUnmount(() => {
         <div class="cs-section">
           <div class="cs-label">
             Price & time scale
-            <button class="cs-theme-btn" type="button" title="Follow theme" @click="resetGroup('scales')">⟲ theme</button>
+            <button class="cs-theme-btn" type="button" title="Default" @click="resetGroup('scales')">⟲ theme</button>
           </div>
           <div class="cs-row">
             <span class="cs-cap">Text</span>
@@ -5244,7 +5248,7 @@ onBeforeUnmount(() => {
         <div class="cs-section">
           <div class="cs-label">
             Crosshair
-            <button class="cs-theme-btn" type="button" title="Follow theme" @click="resetGroup('cross')">⟲ theme</button>
+            <button class="cs-theme-btn" type="button" title="Default" @click="resetGroup('cross')">⟲ theme</button>
           </div>
           <div class="cs-row">
             <span class="cs-cap">Vertical</span>
