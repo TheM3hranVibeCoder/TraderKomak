@@ -62,128 +62,173 @@ watch(indSettingsOpen, (open) => {
  *  the run currently in progress extends right to its SCHEDULED end —
  *  e.g. the NY&LN box reaches 17:30, New York's reaches the next Sydney
  *  open — projecting into the future whitespace past the last candle. */
+/** The heavy part: one scan of all candles per session producing TIME-based
+ *  runs (no chart coordinates). Cached — recomputed only when the candle
+ *  data or the session config actually changes, never on pan/zoom/mouse
+ *  events (they only re-PROJECT the cached runs, which is ~40 ops). */
+interface SessionRun {
+  id: string;
+  name: string;
+  color: string;
+  t1: number;
+  t2: number;
+  high: number;
+  low: number;
+  extendTo: number | null; // scheduled end for the in-progress run (live)
+}
+let runsCache: { key: string; runs: SessionRun[] } | null = null;
+let lastBoxesJson = "";
+
 function computeSessionBoxes(): void {
   if (!indicators.sessionsAdded || !indicators.sessionsVisible || !adapter) {
-    sessionPixels.value = [];
+    if (sessionPixels.value.length) sessionPixels.value = [];
+    lastBoxesJson = "";
     return;
   }
   const c = props.candles;
   const n = c.length;
   if (n < 2) {
-    sessionPixels.value = [];
+    if (sessionPixels.value.length) sessionPixels.value = [];
+    lastBoxesJson = "";
     return;
   }
   const chartW = (containerRef.value?.clientWidth ?? 0) - axisRightW.value;
   // bar interval for extending a run to the end of its last candle
   const tfSec = (TIMEFRAME_SECONDS as Record<string, number>)[market.timeframe] ?? Math.max(1, (c[n - 1]!.time - c[n - 2]!.time));
-  const out: SessionBoxPx[] = [];
-  const active = indicators.sessionsEnabled;
 
-  /** End time of the run that contains the LAST candle: its scheduled
-   *  session end (future) — the box draws up to it, not just to the last
-   *  candle. Built-ins: the NEXT LINK of the chain (New York ends at
-   *  Sydney's open, NY&LN at New York's open…) — extending to the
-   *  session's own next occurrence would draw a whole extra day. */
-  const scheduledEndFor = (def: SessionDef, t: number): number => {
-    const nextId = CHAIN_NEXT[def.id];
-    const nextDef = nextId ? indicators.defs.find((d) => d.id === nextId) : undefined;
-    return nextDef ? nextBoundaryAfter(nextDef, t) : nextBoundaryAfter(def, t);
-  };
-  const scheduledEndCustom = (def: CustomSession, t: number): number => {
-    const d = Math.floor(t / 86400);
-    for (const day of [d, d + 1]) {
-      const end = day * 86400 + (def.end - tzOffsetMin(def.tz, day)) * 60;
-      if (end > t) return end;
-    }
-    return t;
-  };
+  // ── Run scan (cached) ────────────────────────────────────────────────
+  // The last candle's high/low are in the key: a forming candle's range
+  // grows tick by tick, and the in-progress box must follow it.
+  const cfgKey = JSON.stringify([
+    indicators.defs.map((d) => [d.id, d.name, d.color]),
+    indicators.customs.map((d) => [d.id, d.name, d.color]),
+    indicators.sessionsEnabled,
+  ]);
+  const cacheKey = [
+    market.instrument,
+    market.timeframe,
+    n,
+    c[0]!.time,
+    c[n - 1]!.time,
+    c[n - 1]!.high,
+    c[n - 1]!.low,
+    cfgKey,
+  ].join("|");
+  if (!runsCache || runsCache.key !== cacheKey) {
+    const runs: SessionRun[] = [];
 
-  /** One contiguous-run scan over `member`: 1 = candle belongs to the
-   *  session. Boxes span the run's high→low. */
-  const scanRuns = (
-    member: (i: number) => boolean,
-    endT: (lastTime: number, isLive: boolean) => number,
-    key: string,
-    name: string,
-    color: string
-  ): void => {
-    let runStart = -1;
-    let runHigh = -Infinity;
-    let runLow = Infinity;
-    const closeRun = (endIdx: number): void => {
-      if (runStart < 0) return;
-      const lastIdx = endIdx - 1;
-      const t1 = c[runStart]!.time;
-      // The scheduled-end extension applies ONLY while data is actually
-      // streaming — when the market is closed (weekend/after close) the
-      // box must stop at the last candle, not reach into the blank area.
-      const streaming =
-        lastIdx === n - 1 &&
-        Date.now() / 1000 - c[lastIdx]!.time < Math.max(tfSec * 2, 120);
-      const t2 = lastIdx === n - 1
-        ? (streaming ? endT(c[lastIdx]!.time, true) : c[lastIdx]!.time + tfSec)
-        : c[lastIdx]!.time + tfSec;
-      runStart = -1;
-      const x1 = adapter!.timeToX(t1);
-      const x2 = adapter!.timeToX(t2);
-      const top = adapter!.getPriceY(runHigh);
-      const bottom = adapter!.getPriceY(runLow);
-      if (x1 === null || x2 === null || top === null || bottom === null) return;
-      const left = Math.max(-2, Math.min(x1, x2));
-      const right = Math.min(chartW + 2, Math.max(x1, x2));
-      const width = right - left;
-      if (width < 1) return;
-      const yTop = Math.min(top, bottom);
-      const yBot = Math.max(top, bottom);
-      out.push({
-        key: key + "-" + t1,
-        name,
-        color,
-        left,
-        width,
-        top: yTop,
-        height: Math.max(2, yBot - yTop),
-        showLabel: width > 56 && indicators.sessionsLabels,
-        labelTop: 3,
-      });
+    /** End time of the run that contains the LAST candle: its scheduled
+     *  session end (future) — the box draws up to it, not just to the last
+     *  candle. Built-ins: the NEXT LINK of the chain (New York ends at
+     *  Sydney's open, NY&LN at New York's open…) — extending to the
+     *  session's own next occurrence would draw a whole extra day. */
+    const scheduledEndFor = (def: SessionDef, t: number): number => {
+      const nextId = CHAIN_NEXT[def.id];
+      const nextDef = nextId ? indicators.defs.find((d) => d.id === nextId) : undefined;
+      return nextDef ? nextBoundaryAfter(nextDef, t) : nextBoundaryAfter(def, t);
     };
-    for (let i = 0; i <= n; i++) {
-      const isIn = i < n && member(i);
-      if (isIn) {
-        if (runStart < 0) {
-          runStart = i;
-          runHigh = -Infinity;
-          runLow = Infinity;
-        }
-        runHigh = Math.max(runHigh, c[i]!.high);
-        runLow = Math.min(runLow, c[i]!.low);
-      } else {
-        closeRun(i);
+    const scheduledEndCustom = (def: CustomSession, t: number): number => {
+      const d = Math.floor(t / 86400);
+      for (const day of [d, d + 1]) {
+        const end = day * 86400 + (def.end - tzOffsetMin(def.tz, day)) * 60;
+        if (end > t) return end;
       }
-    }
-  };
+      return t;
+    };
 
-  // Built-ins: membership by chained market-open boundaries
-  for (const def of indicators.defs) {
-    if (!indicators.isEnabled(def.id)) continue;
-    scanRuns(
-      (i) => sessionKindAt(c[i]!.time) === def.id,
-      (t) => scheduledEndFor(def, t),
-      def.id,
-      def.name,
-      def.color
-    );
+    /** One contiguous-run scan over `member`: true = candle belongs to the
+     *  session. Runs record TIME + high/low only. */
+    const scanRuns = (
+      member: (i: number) => boolean,
+      endT: (lastTime: number) => number,
+      id: string,
+      name: string,
+      color: string
+    ): void => {
+      let runStart = -1;
+      let runHigh = -Infinity;
+      let runLow = Infinity;
+      const closeRun = (endIdx: number): void => {
+        if (runStart < 0) return;
+        const lastIdx = endIdx - 1;
+        const t1 = c[runStart]!.time;
+        // The scheduled-end extension applies ONLY while data is actually
+        // streaming — when the market is closed (weekend/after close) the
+        // box must stop at the last candle, not reach into the blank area.
+        const streaming =
+          lastIdx === n - 1 &&
+          Date.now() / 1000 - c[lastIdx]!.time < Math.max(tfSec * 2, 120);
+        const t2 = c[lastIdx]!.time + tfSec;
+        const extendTo = lastIdx === n - 1 && streaming ? endT(c[lastIdx]!.time) : null;
+        runStart = -1;
+        runs.push({ id, name, color, t1, t2, high: runHigh, low: runLow, extendTo });
+      };
+      for (let i = 0; i <= n; i++) {
+        const isIn = i < n && member(i);
+        if (isIn) {
+          if (runStart < 0) {
+            runStart = i;
+            runHigh = -Infinity;
+            runLow = Infinity;
+          }
+          runHigh = Math.max(runHigh, c[i]!.high);
+          runLow = Math.min(runLow, c[i]!.low);
+        } else {
+          closeRun(i);
+        }
+      }
+    };
+
+    // Built-ins: membership by chained market-open boundaries
+    for (const def of indicators.defs) {
+      if (!indicators.isEnabled(def.id)) continue;
+      scanRuns(
+        (i) => sessionKindAt(c[i]!.time) === def.id,
+        (t) => scheduledEndFor(def, t),
+        def.id,
+        def.name,
+        def.color
+      );
+    }
+    // Custom sessions: free windows in the visitor's local clock
+    for (const def of indicators.customs) {
+      if (!indicators.isEnabled(def.id)) continue;
+      scanRuns(
+        (i) => inSession(def, localMinutesOfDay(def.tz, c[i]!.time)),
+        (t) => scheduledEndCustom(def, t),
+        def.id,
+        def.name,
+        def.color
+      );
+    }
+    runsCache = { key: cacheKey, runs };
   }
-  // Custom sessions: free windows in the visitor's local clock
-  for (const def of indicators.customs) {
-    if (!indicators.isEnabled(def.id)) continue;
-    scanRuns(
-      (i) => inSession(def, localMinutesOfDay(def.tz, c[i]!.time)),
-      (t) => scheduledEndCustom(def, t),
-      def.id,
-      def.name,
-      def.color
-    );
+
+  // ── Projection (cheap: ~40 runs → pixels) ────────────────────────────
+  const out: SessionBoxPx[] = [];
+  for (const run of runsCache.runs) {
+    const x1 = adapter.timeToX(run.t1);
+    const x2 = adapter.timeToX(run.extendTo ?? run.t2);
+    const top = adapter.getPriceY(run.high);
+    const bottom = adapter.getPriceY(run.low);
+    if (x1 === null || x2 === null || top === null || bottom === null) continue;
+    const left = Math.max(-2, Math.min(x1, x2));
+    const right = Math.min(chartW + 2, Math.max(x1, x2));
+    const width = right - left;
+    if (width < 1) continue;
+    const yTop = Math.min(top, bottom);
+    const yBot = Math.max(top, bottom);
+    out.push({
+      key: run.id + "-" + run.t1,
+      name: run.name,
+      color: run.color,
+      left,
+      width,
+      top: yTop,
+      height: Math.max(2, yBot - yTop),
+      showLabel: width > 56 && indicators.sessionsLabels,
+      labelTop: 3,
+    });
   }
   // Label anti-collision: two sessions sharing the same time region and a
   // similar high would put their names on top of each other — stack the
@@ -205,7 +250,14 @@ function computeSessionBoxes(): void {
     placed.push({ l, r, t: b.top + lt, b: b.top + lt + LABEL_H });
     b.labelTop = lt;
   }
-  sessionPixels.value = out;
+  // Only touch the DOM when the geometry actually changed — this function
+  // runs on every mouse move / pan frame, and re-rendering identical divs
+  // hundreds of times per second is what made the chart feel heavy.
+  const j = JSON.stringify(out);
+  if (j !== lastBoxesJson) {
+    lastBoxesJson = j;
+    sessionPixels.value = out;
+  }
 }
 
 /** "09:00" ↔ minutes-of-day helpers for the settings time inputs. */
