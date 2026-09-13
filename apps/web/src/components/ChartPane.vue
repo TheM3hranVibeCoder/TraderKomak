@@ -415,9 +415,32 @@ function drawRsi(): void {
     lastVal = v;
   }
   ctx.stroke();
+  // Extended last-value line across the whole pane — the scale tag sits on it
+  if (lastVal !== null) {
+    const y = Math.round(yOf(lastVal)) + 0.5;
+    ctx.strokeStyle = indicators.rsiColor;
+    ctx.globalAlpha = 0.55;
+    ctx.setLineDash([2, 3]);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
   rsiLast.value = lastVal;
 }
 
+const rsiCursor = ref<{ y: number; v: number } | null>(null);
+function onRsiPointerMove(e: PointerEvent): void {
+  const pane = rsiPaneEl.value;
+  if (!pane) return;
+  const r = pane.getBoundingClientRect();
+  const y = e.clientY - r.top;
+  if (y < 0 || y > pane.clientHeight) { rsiCursor.value = null; return; }
+  rsiCursor.value = { y, v: ((pane.clientHeight - y) / pane.clientHeight) * 100 };
+}
 const rsiTagTop = computed(() => {
   const v = rsiLast.value;
   if (v === null) return 0;
@@ -5237,7 +5260,9 @@ onBeforeUnmount(() => {
     />
 
     <!-- RSI indicator sub-pane (TradingView-style, under the chart) -->
-    <div v-if="indicators.rsiAdded && indicators.rsiVisible" ref="rsiPaneEl" class="rsi-pane">
+    <div v-if="indicators.rsiAdded && indicators.rsiVisible" ref="rsiPaneEl" class="rsi-pane" :style="{ height: rsiPaneH + 'px' }" @pointermove="onRsiPointerMove" @pointerleave="rsiCursor = null">
+      <div v-if="rsiCursor" class="rsi-cursor-line" :style="{ top: rsiCursor.y + 'px' }"></div>
+      <div v-if="rsiCursor" class="rsi-cursor-tag" :style="{ top: rsiCursor.y - 9 + 'px' }">{{ rsiCursor.v.toFixed(2) }}</div>
       <canvas ref="rsiCanvasEl" class="rsi-canvas"></canvas>
       <div class="rsi-resize-handle" @pointerdown="onRsiResizeStart($event)"></div>
       <div class="rsi-legend">
@@ -5484,7 +5509,8 @@ onBeforeUnmount(() => {
 .rsi-pane {
   position: relative;
   height: 110px;
-  margin: 0 8px 8px;
+  margin: 8px 8px 8px;
+  margin-top: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   overflow: hidden;
@@ -5537,6 +5563,27 @@ onBeforeUnmount(() => {
 }
 .rsi-resize-handle:hover {
   background: rgba(120, 144, 156, 0.25);
+}
+.rsi-cursor-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--text-muted);
+  pointer-events: none;
+  z-index: 2;
+}
+.rsi-cursor-tag {
+  position: absolute;
+  right: 4px;
+  z-index: 3;
+  background: #37474f;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 4px;
+  pointer-events: none;
 }
 .rsi-value-tag {
   position: absolute;
