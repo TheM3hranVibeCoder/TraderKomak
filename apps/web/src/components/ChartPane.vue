@@ -721,6 +721,13 @@ function deleteTemplate(): void {
   persistTemplates();
   selectedTpl.value = "";
 }
+function onTemplateChange(): void {
+  if (selectedTpl.value === "__defaults__") {
+    resetChartStyle();
+    return;
+  }
+  applyTemplate();
+}
 const containerRef = ref<HTMLElement | null>(null);
 let adapter: ChartAdapter | null = null;
 let ro: ResizeObserver | null = null;
@@ -5259,12 +5266,12 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="cs-templates">
-          <button class="cs-reset" type="button" title="Apply the theme defaults" @click="resetChartStyle(); selectedTpl = ''">Defaults</button>
-          <select v-if="templates.length" class="cs-select" v-model="selectedTpl" @change="applyTemplate" aria-label="Saved templates">
-            <option value="" disabled>Templates…</option>
+          <select class="cs-select" v-model="selectedTpl" @change="onTemplateChange" aria-label="Template">
+            <option value="" disabled>Template</option>
+            <option value="__defaults__">Defaults</option>
             <option v-for="t in templates" :key="t.name" :value="t.name">{{ t.name }}</option>
           </select>
-          <button v-if="templates.length && selectedTpl" class="cs-del" type="button" title="Delete template" @click="deleteTemplate">🗑</button>
+          <button v-if="selectedTpl && selectedTpl !== '__defaults__'" class="cs-del" type="button" title="Delete this template" @click="deleteTemplate">Delete</button>
           <input class="cs-tpl-name" v-model="tplName" maxlength="24" placeholder="Template name" aria-label="Template name" />
           <button class="cs-save" type="button" title="Save current colors as a template" @click="saveTemplate">Save as</button>
         </div>
@@ -5486,6 +5493,14 @@ onBeforeUnmount(() => {
   font-size: 12px;
   padding: 2px 4px;
   border-radius: 5px;
+}
+.cs-del {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #ef5350;
+  border: 1px solid rgba(239, 83, 80, 0.4);
+  padding: 4px 8px;
+  white-space: nowrap;
 }
 .cs-del:hover {
   background: rgba(242, 54, 69, 0.12);
