@@ -40,6 +40,10 @@ export interface ChartAdapter {
   setInstrument(instrument: string): void;
   /** Restyle the candles (chart-settings panel). Pass theme defaults to reset. */
   setCandleColors(o: { up: string; down: string; borderUp: string; borderDown: string; wickUp: string; wickDown: string }): void;
+  /** Axis text/border colors; null = follow the active theme. */
+  setAxisColors(o: { text: string | null; border: string | null }): void;
+  /** Crosshair line colors; null = follow the active theme. */
+  setCrosshairColors(o: { vert: string | null; horz: string | null }): void;
   getLogicalRange(): { from: number; to: number } | null;
   setLogicalRange(range: { from: number; to: number } | null): void;
   getPriceY(price: number): number | null;
@@ -124,6 +128,7 @@ function themeColors(isDark: boolean) {
 export function createChartAdapter(container: HTMLElement): ChartAdapter {
   const isDarkInitial = document.documentElement.getAttribute("data-theme") !== "light";
   const colors = themeColors(isDarkInitial);
+  let isDarkNow = isDarkInitial;
 
   const chart: IChartApi = createChart(container, {
     layout: {
@@ -191,10 +196,6 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     priceLineColor: "#2962ff",
   });
 
-  // Debug handle for diagnosing timescale/series issues from the console
-  if (typeof window !== "undefined") {
-    (window as unknown as Record<string, unknown>).__tkChart = { chart, series, get data() { return lastData; } };
-  }
 
   let lastData: Candle[] = [];
   /** Flips true after the first non-empty dataset — enables view preservation. */
@@ -422,12 +423,35 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     },
 
     setTheme(isDark: boolean): void {
+      isDarkNow = isDark;
       const c = themeColors(isDark);
       chart.applyOptions({
         layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: c.text },
         grid: { vertLines: { visible: false }, horzLines: { visible: false } },
         rightPriceScale: { borderColor: c.border },
         timeScale: { borderColor: c.border },
+        crosshair: {
+          vertLine: { color: "#758696", labelBackgroundColor: "#2962ff" },
+          horzLine: { color: "#758696", labelBackgroundColor: "#2962ff" },
+        },
+      });
+    },
+
+    setAxisColors(o: { text: string | null; border: string | null }): void {
+      const c = themeColors(isDarkNow);
+      chart.applyOptions({
+        layout: { textColor: o.text ?? c.text },
+        rightPriceScale: { borderColor: o.border ?? c.border },
+        timeScale: { borderColor: o.border ?? c.border },
+      });
+    },
+
+    setCrosshairColors(o: { vert: string | null; horz: string | null }): void {
+      chart.applyOptions({
+        crosshair: {
+          vertLine: { color: o.vert ?? "#758696" },
+          horzLine: { color: o.horz ?? "#758696" },
+        },
       });
     },
     setInstrument(instrument: string): void {

@@ -41,82 +41,6 @@ interface SessionBoxPx {
 const sessionPixels = ref<SessionBoxPx[]>([]);
 const indSettingsOpen = ref(false);
 
-/* ── Chart settings: background (solid/gradient) + candle colors ─────── */
-interface ChartStyle {
-  bgMode: "solid" | "gradient";
-  bgSolid: string;
-  bgTop: string;
-  bgBottom: string;
-  up: string;
-  down: string;
-  borderUp: string;
-  borderDown: string;
-  wickUp: string;
-  wickDown: string;
-}
-const CHART_STYLE_KEY = "tk-chart-style";
-/** Lightweight Charts' own defaults — used by "Reset to theme". */
-const DEFAULT_CANDLES = {
-  up: "#26a69a",
-  down: "#ef5350",
-  borderUp: "#26a69a",
-  borderDown: "#ef5350",
-  wickUp: "#26a69a",
-  wickDown: "#ef5350",
-};
-function defaultChartStyle(): ChartStyle {
-  return {
-    bgMode: "gradient",
-    bgSolid: "#131722",
-    bgTop: "#171a3a",
-    bgBottom: "#0b1120",
-    ...DEFAULT_CANDLES,
-  };
-}
-function loadChartStyle(): ChartStyle {
-  const base = defaultChartStyle();
-  try {
-    const raw = localStorage.getItem(CHART_STYLE_KEY);
-    if (raw) {
-      const p = JSON.parse(raw) as Partial<ChartStyle>;
-      if (p.bgMode === "solid" || p.bgMode === "gradient") base.bgMode = p.bgMode;
-      // legacy "default" value falls through to the gradient theme default
-      for (const k of ["bgSolid", "bgTop", "bgBottom", "up", "down", "borderUp", "borderDown", "wickUp", "wickDown"] as const) {
-        const v = p[k];
-        if (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v)) base[k] = v;
-      }
-    }
-  } catch {}
-  return base;
-}
-const paneRef = ref<HTMLElement | null>(null);
-const chartStyle = ref<ChartStyle>(loadChartStyle());
-const chartSettingsOpen = ref(false);
-
-function applyChartStyle(): void {
-  const s = chartStyle.value;
-  const pane = paneRef.value;
-  if (pane) {
-    pane.style.background =
-      s.bgMode === "solid"
-        ? s.bgSolid
-        : `linear-gradient(180deg, ${s.bgTop} 0%, ${s.bgBottom} 100%)`;
-  }
-  adapter?.setCandleColors({
-    up: s.up,
-    down: s.down,
-    borderUp: s.borderUp,
-    borderDown: s.borderDown,
-    wickUp: s.wickUp,
-    wickDown: s.wickDown,
-  });
-  localStorage.setItem(CHART_STYLE_KEY, JSON.stringify(s));
-}
-watch(chartStyle, applyChartStyle, { deep: true });
-function resetChartStyle(): void {
-  chartStyle.value = defaultChartStyle();
-}
-
 /** While the settings popup is open, any pointerdown outside it (the chart,
  *  watchlist, news…) closes it. The legend buttons are excluded — the gear
  *  toggles itself. */
@@ -630,6 +554,173 @@ function fmtMoney(v: number): string {
 }
 
 const themeStore = useThemeStore();
+
+/* ── Chart settings: background (solid/gradient) + candle/axis/crosshair
+   colors. A `null` color means "follow the active theme" — so the default
+   look is exactly the old light/dark theme, and any picked color overrides
+   it until Defaults is pressed. */
+interface ChartStyle {
+  bgMode: "solid" | "gradient";
+  bgSolid: string | null;
+  bgTop: string | null;
+  bgBottom: string | null;
+  up: string | null;
+  down: string | null;
+  borderUp: string | null;
+  borderDown: string | null;
+  wickUp: string | null;
+  wickDown: string | null;
+  axisText: string | null;
+  axisBorder: string | null;
+  crossVert: string | null;
+  crossHorz: string | null;
+}
+const CHART_STYLE_KEY = "tk-chart-style";
+const TPL_KEY = "tk-chart-templates";
+/** Lightweight Charts' own candle defaults (used when a candle color is null). */
+const DEFAULT_CANDLES = {
+  up: "#26a69a",
+  down: "#ef5350",
+  borderUp: "#26a69a",
+  borderDown: "#ef5350",
+  wickUp: "#26a69a",
+  wickDown: "#ef5350",
+};
+function defaultChartStyle(): ChartStyle {
+  return {
+    bgMode: "gradient",
+    bgSolid: null,
+    bgTop: null,
+    bgBottom: null,
+    up: null,
+    down: null,
+    borderUp: null,
+    borderDown: null,
+    wickUp: null,
+    wickDown: null,
+    axisText: null,
+    axisBorder: null,
+    crossVert: null,
+    crossHorz: null,
+  };
+}
+const HEX = (v: unknown): v is string => typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v);
+function loadChartStyle(): ChartStyle {
+  const base = defaultChartStyle();
+  try {
+    const raw = localStorage.getItem(CHART_STYLE_KEY);
+    if (raw) {
+      const p = JSON.parse(raw) as Partial<ChartStyle>;
+      if (p.bgMode === "solid" || p.bgMode === "gradient") base.bgMode = p.bgMode;
+      for (const k of ["bgSolid", "bgTop", "bgBottom", "up", "down", "borderUp", "borderDown", "wickUp", "wickDown", "axisText", "axisBorder", "crossVert", "crossHorz"] as const) {
+        const v = p[k];
+        if (v === null || HEX(v)) (base[k] as string | null) = v;
+      }
+    }
+  } catch {}
+  return base;
+}
+const paneRef = ref<HTMLElement | null>(null);
+const chartStyle = ref<ChartStyle>(loadChartStyle());
+const chartSettingsOpen = ref(false);
+
+const isDarkTheme = computed(() => themeStore.theme === "dark");
+/** Theme gradient (matches the CSS --chart-bg-gradient of each theme). */
+function themeBgPair(): [string, string] {
+  return isDarkTheme.value ? ["#171a3a", "#0b1120"] : ["#e4e9ff", "#fdf2f8"];
+}
+/** Theme axis text/border (matches chartAdapter's themeColors). */
+function themeAxisPair(): [string, string] {
+  return isDarkTheme.value ? ["#d1d4dc", "#2a2e6a"] : ["#1e1b4b", "#c7d2fe"];
+}
+function eff(v: string | null, theme: string): string {
+  return v ?? theme;
+}
+
+function applyChartStyle(): void {
+  const s = chartStyle.value;
+  const pane = paneRef.value;
+  if (pane) {
+    pane.style.background =
+      s.bgMode === "solid"
+        ? (s.bgSolid ?? themeBgPair()[0])
+        : `linear-gradient(180deg, ${s.bgTop ?? themeBgPair()[0]} 0%, ${s.bgBottom ?? themeBgPair()[1]} 100%)`;
+  }
+  adapter?.setCandleColors({
+    up: s.up ?? DEFAULT_CANDLES.up,
+    down: s.down ?? DEFAULT_CANDLES.down,
+    borderUp: s.borderUp ?? DEFAULT_CANDLES.borderUp,
+    borderDown: s.borderDown ?? DEFAULT_CANDLES.borderDown,
+    wickUp: s.wickUp ?? DEFAULT_CANDLES.wickUp,
+    wickDown: s.wickDown ?? DEFAULT_CANDLES.wickDown,
+  });
+  adapter?.setAxisColors({ text: s.axisText, border: s.axisBorder });
+  adapter?.setCrosshairColors({ vert: s.crossVert, horz: s.crossHorz });
+  localStorage.setItem(CHART_STYLE_KEY, JSON.stringify(s));
+}
+watch(chartStyle, applyChartStyle, { deep: true });
+// Theme flips re-resolve every null color — the default look always follows light/dark
+watch(isDarkTheme, () => applyChartStyle());
+function resetChartStyle(): void {
+  chartStyle.value = defaultChartStyle();
+}
+function applyBodyToGroup(dir: "up" | "down"): void {
+  const s = chartStyle.value;
+  const body = (dir === "up" ? s.up : s.down) ?? (dir === "up" ? DEFAULT_CANDLES.up : DEFAULT_CANDLES.down);
+  if (dir === "up") { s.borderUp = body; s.wickUp = body; }
+  else { s.borderDown = body; s.wickDown = body; }
+}
+function setColor(key: keyof ChartStyle, e: Event): void {
+  const v = (e.target as HTMLInputElement).value;
+  if (HEX(v)) (chartStyle.value[key] as string | null) = v;
+}
+function resetGroup(group: "bg" | "candles" | "scales" | "cross"): void {
+  const s = chartStyle.value;
+  if (group === "bg") { s.bgSolid = null; s.bgTop = null; s.bgBottom = null; s.bgMode = "gradient"; }
+  else if (group === "candles") { s.up = s.down = s.borderUp = s.borderDown = s.wickUp = s.wickDown = null; }
+  else if (group === "scales") { s.axisText = null; s.axisBorder = null; }
+  else { s.crossVert = null; s.crossHorz = null; }
+}
+
+/* ── Chart templates (saved color schemes) ───────────────────────────── */
+interface ChartTemplate {
+  name: string;
+  style: ChartStyle;
+}
+function loadTemplates(): ChartTemplate[] {
+  try {
+    const raw = localStorage.getItem(TPL_KEY);
+    const arr = raw ? (JSON.parse(raw) as ChartTemplate[]) : [];
+    return Array.isArray(arr) ? arr.filter((t) => t && typeof t.name === "string" && t.style) : [];
+  } catch {
+    return [];
+  }
+}
+const templates = ref<ChartTemplate[]>(loadTemplates());
+const tplName = ref("");
+const selectedTpl = ref("");
+function persistTemplates(): void {
+  localStorage.setItem(TPL_KEY, JSON.stringify(templates.value));
+}
+function saveTemplate(): void {
+  const clean = tplName.value.trim().slice(0, 24);
+  const name = clean || `Template ${templates.value.length + 1}`;
+  templates.value = templates.value.filter((t) => t.name !== name);
+  templates.value.push({ name, style: JSON.parse(JSON.stringify(chartStyle.value)) });
+  persistTemplates();
+  tplName.value = "";
+  selectedTpl.value = name;
+}
+function applyTemplate(): void {
+  const t = templates.value.find((x) => x.name === selectedTpl.value);
+  if (t) chartStyle.value = JSON.parse(JSON.stringify(t.style));
+}
+function deleteTemplate(): void {
+  if (!selectedTpl.value) return;
+  templates.value = templates.value.filter((t) => t.name !== selectedTpl.value);
+  persistTemplates();
+  selectedTpl.value = "";
+}
 const containerRef = ref<HTMLElement | null>(null);
 let adapter: ChartAdapter | null = null;
 let ro: ResizeObserver | null = null;
@@ -5087,7 +5178,10 @@ onBeforeUnmount(() => {
           <button class="cs-close" type="button" aria-label="Close" @click="chartSettingsOpen = false">✕</button>
         </div>
         <div class="cs-section">
-          <div class="cs-label">Background</div>
+          <div class="cs-label">
+            Background
+            <button class="cs-theme-btn" type="button" title="Follow theme" @click="resetGroup('bg')">⟲ theme</button>
+          </div>
           <div class="cs-row">
             <span class="cs-cap">Type</span>
             <div class="cs-modes">
@@ -5097,33 +5191,79 @@ onBeforeUnmount(() => {
           </div>
           <div v-if="chartStyle.bgMode === 'solid'" class="cs-row">
             <span class="cs-cap">Color</span>
-            <input type="color" v-model="chartStyle.bgSolid" aria-label="Background color" />
+            <input type="color" :value="eff(chartStyle.bgSolid, themeBgPair()[0])" @input="setColor('bgSolid', $event)" aria-label="Background color" />
           </div>
           <template v-if="chartStyle.bgMode === 'gradient'">
             <div class="cs-row">
               <span class="cs-cap">Top</span>
-              <input type="color" v-model="chartStyle.bgTop" aria-label="Gradient top color" />
+              <input type="color" :value="eff(chartStyle.bgTop, themeBgPair()[0])" @input="setColor('bgTop', $event)" aria-label="Gradient top color" />
             </div>
             <div class="cs-row">
               <span class="cs-cap">Bottom</span>
-              <input type="color" v-model="chartStyle.bgBottom" aria-label="Gradient bottom color" />
+              <input type="color" :value="eff(chartStyle.bgBottom, themeBgPair()[1])" @input="setColor('bgBottom', $event)" aria-label="Gradient bottom color" />
             </div>
-            <div class="cs-preview" :style="{ background: `linear-gradient(180deg, ${chartStyle.bgTop} 0%, ${chartStyle.bgBottom} 100%)` }"></div>
+            <div class="cs-preview" :style="{ background: `linear-gradient(180deg, ${eff(chartStyle.bgTop, themeBgPair()[0])} 0%, ${eff(chartStyle.bgBottom, themeBgPair()[1])} 100%)` }"></div>
           </template>
         </div>
         <div class="cs-section">
-          <div class="cs-label">Candles</div>
-          <div class="cs-candles">
-            <label class="cs-candle"><input type="color" v-model="chartStyle.up" /><span>Body ▲</span></label>
-            <label class="cs-candle"><input type="color" v-model="chartStyle.down" /><span>Body ▼</span></label>
-            <label class="cs-candle"><input type="color" v-model="chartStyle.borderUp" /><span>Border ▲</span></label>
-            <label class="cs-candle"><input type="color" v-model="chartStyle.borderDown" /><span>Border ▼</span></label>
-            <label class="cs-candle"><input type="color" v-model="chartStyle.wickUp" /><span>Wick ▲</span></label>
-            <label class="cs-candle"><input type="color" v-model="chartStyle.wickDown" /><span>Wick ▼</span></label>
+          <div class="cs-label">
+            Candles
+            <button class="cs-theme-btn" type="button" title="Follow theme" @click="resetGroup('candles')">⟲ theme</button>
+          </div>
+          <div class="cs-dir-wrap">
+            <div class="cs-dir">
+              <span class="cs-dir-cap up">▲ Long</span>
+              <label class="cs-candle"><input type="color" :value="eff(chartStyle.up, DEFAULT_CANDLES.up)" @input="setColor('up', $event)" /><span>Body</span></label>
+              <label class="cs-candle"><input type="color" :value="eff(chartStyle.borderUp, DEFAULT_CANDLES.borderUp)" @input="setColor('borderUp', $event)" /><span>Border</span></label>
+              <label class="cs-candle"><input type="color" :value="eff(chartStyle.wickUp, DEFAULT_CANDLES.wickUp)" @input="setColor('wickUp', $event)" /><span>Wick</span></label>
+              <button class="cs-apply" type="button" title="Apply the body color to border & wick" @click="applyBodyToGroup('up')">Apply body ⇄</button>
+            </div>
+            <div class="cs-dir">
+              <span class="cs-dir-cap down">▼ Short</span>
+              <label class="cs-candle"><input type="color" :value="eff(chartStyle.down, DEFAULT_CANDLES.down)" @input="setColor('down', $event)" /><span>Body</span></label>
+              <label class="cs-candle"><input type="color" :value="eff(chartStyle.borderDown, DEFAULT_CANDLES.borderDown)" @input="setColor('borderDown', $event)" /><span>Border</span></label>
+              <label class="cs-candle"><input type="color" :value="eff(chartStyle.wickDown, DEFAULT_CANDLES.wickDown)" @input="setColor('wickDown', $event)" /><span>Wick</span></label>
+              <button class="cs-apply" type="button" title="Apply the body color to border & wick" @click="applyBodyToGroup('down')">Apply body ⇄</button>
+            </div>
           </div>
         </div>
-        <div class="cs-foot">
-          <button class="cs-reset" type="button" @click="resetChartStyle">Reset to theme</button>
+        <div class="cs-section">
+          <div class="cs-label">
+            Price & time scale
+            <button class="cs-theme-btn" type="button" title="Follow theme" @click="resetGroup('scales')">⟲ theme</button>
+          </div>
+          <div class="cs-row">
+            <span class="cs-cap">Text</span>
+            <input type="color" :value="eff(chartStyle.axisText, themeAxisPair()[0])" @input="setColor('axisText', $event)" aria-label="Axis text color" />
+          </div>
+          <div class="cs-row">
+            <span class="cs-cap">Border</span>
+            <input type="color" :value="eff(chartStyle.axisBorder, themeAxisPair()[1])" @input="setColor('axisBorder', $event)" aria-label="Axis border color" />
+          </div>
+        </div>
+        <div class="cs-section">
+          <div class="cs-label">
+            Crosshair
+            <button class="cs-theme-btn" type="button" title="Follow theme" @click="resetGroup('cross')">⟲ theme</button>
+          </div>
+          <div class="cs-row">
+            <span class="cs-cap">Vertical</span>
+            <input type="color" :value="eff(chartStyle.crossVert, '#758696')" @input="setColor('crossVert', $event)" aria-label="Crosshair vertical color" />
+          </div>
+          <div class="cs-row">
+            <span class="cs-cap">Horizontal</span>
+            <input type="color" :value="eff(chartStyle.crossHorz, '#758696')" @input="setColor('crossHorz', $event)" aria-label="Crosshair horizontal color" />
+          </div>
+        </div>
+        <div class="cs-templates">
+          <button class="cs-reset" type="button" title="Apply the theme defaults" @click="resetChartStyle(); selectedTpl = ''">Defaults</button>
+          <select v-if="templates.length" class="cs-select" v-model="selectedTpl" @change="applyTemplate" aria-label="Saved templates">
+            <option value="" disabled>Templates…</option>
+            <option v-for="t in templates" :key="t.name" :value="t.name">{{ t.name }}</option>
+          </select>
+          <button v-if="templates.length && selectedTpl" class="cs-del" type="button" title="Delete template" @click="deleteTemplate">🗑</button>
+          <input class="cs-tpl-name" v-model="tplName" maxlength="24" placeholder="Template name" aria-label="Template name" />
+          <button class="cs-save" type="button" title="Save current colors as a template" @click="saveTemplate">Save as</button>
         </div>
       </div>
     </template>
@@ -5155,15 +5295,15 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
   z-index: 60;
-  background: rgba(0, 0, 0, 0.35);
+  background: transparent;
 }
 .chart-settings-panel {
   position: absolute;
   z-index: 61;
-  left: 50%;
-  top: 45%;
-  transform: translate(-50%, -50%);
-  width: min(360px, calc(100% - 32px));
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: min(320px, calc(100% - 24px));
   padding: 12px 14px;
   border-radius: 12px;
   border: 1px solid var(--glass-border);
@@ -5247,6 +5387,44 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border);
   margin-top: 6px;
 }
+.cs-dir-wrap {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.cs-dir {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.cs-dir-cap {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+.cs-dir-cap.up { color: #26a69a; }
+.cs-dir-cap.down { color: #ef5350; }
+.cs-candle span {
+  flex: 1;
+}
+.cs-apply {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+.cs-apply:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
 .cs-candles {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -5270,11 +5448,78 @@ onBeforeUnmount(() => {
   background: transparent;
   cursor: pointer;
 }
-.cs-foot {
+.cs-theme-btn {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 9.5px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+.cs-theme-btn:hover {
+  color: var(--accent);
+  background: var(--btn-hover);
+}
+.cs-templates {
   padding-top: 10px;
   border-top: 1px solid var(--border);
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cs-select {
+  max-width: 110px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg-panel-solid, #171b26);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 4px;
+  cursor: pointer;
+}
+.cs-del {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 5px;
+}
+.cs-del:hover {
+  background: rgba(242, 54, 69, 0.12);
+}
+.cs-tpl-name {
+  flex: 1;
+  min-width: 80px;
+  font-size: 11px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 7px;
+}
+.cs-tpl-name:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.cs-save {
+  border: none;
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cs-save:hover {
+  filter: brightness(1.12);
 }
 .cs-reset {
   border: 1px solid var(--border);
