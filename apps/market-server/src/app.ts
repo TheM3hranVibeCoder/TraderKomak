@@ -21,6 +21,8 @@ import { MarketHub } from "./websocket/hub.js";
 import { ChatRoom } from "./chat/chatRoom.js";
 import { registerHealthRoute } from "./routes/health.js";
 import { registerCandlesRoute } from "./routes/candles.js";
+import { DukascopyStream } from "./dukascopy/stream.js";
+import { getHistory as dukascopyHistory } from "./dukascopy/client.js";
 import { registerNewsRoute } from "./routes/news.js";
 import { providerOf } from "@traderkomak/shared";
 
@@ -80,12 +82,19 @@ export async function createMarketServer(config: AppConfig): Promise<MarketServe
       count: number,
       toIso?: string
     ) {
+      if (providerOf(instrument) === "dukascopy") {
+        // Dukascopy history is already exact-timeframe (seconds come from
+        // tick files) — resolveHistory passes it through unchanged.
+        const duka = await dukascopyHistory(instrument, timeframe, count, toIso ? Math.floor(Date.parse(toIso) / 1000) : undefined);
+        return duka.candles;
+      }
       const client = providerOf(instrument) === "binance" ? binanceRest : oandaRest;
       return client.getNativeCandles(instrument, timeframe, count, toIso);
     },
   };
 
   const feed = new CandleFeed(historyRouter, feedLog, new CandlePersist(config.dataDir, feedLog));
+  const dukascopyStream = new DukascopyStream(feedLog);
   const hub = new MarketHub(feed, oandaStream, hubLog, binanceStream);
 
   // Live-data pipeline (both providers → normalized tick → feed + watchlist)
@@ -97,29 +106,36 @@ export async function createMarketServer(config: AppConfig): Promise<MarketServe
     feed.handleTick(tick);
     hub.onPriceTick(tick);
   });
+  dukascopyStream.on("tick", (tick) => {
+    feed.handleTick(tick);
+    hub.onPriceTick(tick);
+  });
   feed.on("candle", (event) => hub.onCandleEvent(event));
 
   // Aggregate per-provider statuses into one upstream status for clients
-  const providerStatus: Record<"oanda" | "binance", "connected" | "reconnecting" | "offline"> = {
+  const providerStatus: Record<"oanda" | "binance" | "dukascopy", "connected" | "reconnecting" | "offline"> = {
     oanda: "offline",
     binance: "offline",
+    dukascopy: "offline",
   };
   function aggregateStatus(): "connected" | "reconnecting" | "offline" {
     if (
       providerStatus.oanda === "connected" ||
-      providerStatus.binance === "connected"
+      providerStatus.binance === "connected" ||
+      providerStatus.dukascopy === "connected"
     ) {
       return "connected";
     }
     if (
       providerStatus.oanda === "reconnecting" ||
-      providerStatus.binance === "reconnecting"
+      providerStatus.binance === "reconnecting" ||
+      providerStatus.dukascopy === "reconnecting"
     ) {
       return "reconnecting";
     }
     return "offline";
   }
-  function onProviderStatus(p: "oanda" | "binance") {
+  function onProviderStatus(p: "oanda" | "binance" | "dukascopy") {
     return (s: "connected" | "reconnecting" | "offline") => {
       providerStatus[p] = s;
       hub.setUpstreamStatus(aggregateStatus());
@@ -127,6 +143,7 @@ export async function createMarketServer(config: AppConfig): Promise<MarketServe
   }
   oandaStream.on("status", onProviderStatus("oanda"));
   binanceStream.on("status", onProviderStatus("binance"));
+  dukascopyStream.on("status", onProviderStatus("dukascopy"));
 
   registerHealthRoute(app);
   registerCandlesRoute(app, { rest: historyRouter, feed });
@@ -146,8 +163,10 @@ export async function createMarketServer(config: AppConfig): Promise<MarketServe
     if (instruments.length > 0) {
       oandaStream.setInstruments(instruments.filter((i) => providerOf(i) === "oanda"));
       binanceStream.setInstruments(instruments.filter((i) => providerOf(i) === "binance"));
+      dukascopyStream.setInstruments(instruments.filter((i) => providerOf(i) === "dukascopy"));
     }
     oandaStream.start();
+    dukascopyStream.start();
     hub.startPingLoop();
     await app.listen({ port: config.port, host: config.host });
   }
@@ -157,6 +176,7 @@ export async function createMarketServer(config: AppConfig): Promise<MarketServe
     hub.closeAll();
     chatRoomRef?.closeAll();
     await oandaStream.stop();
+    await dukascopyStream.stop();
     await binanceStream.stopAll();
     await app.close();
   }

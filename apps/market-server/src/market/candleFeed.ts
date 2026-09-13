@@ -232,7 +232,7 @@ export class CandleFeed extends EventEmitter {
       // provider's convention or the active candle mismatches native history.
       aggregator: new CandleAggregator(
         timeframe,
-        providerOf(instrument) === "binance" ? binanceBucketStart : oandaAlignedBucketStart
+        providerOf(instrument) === "oanda" ? oandaAlignedBucketStart : binanceBucketStart
       ),
       buffer: [],
       subscribers: 0,
@@ -316,9 +316,9 @@ export class CandleFeed extends EventEmitter {
       }
 
       const nowBucketSec =
-        (providerOf(session.instrument) === "binance"
-          ? binanceBucketStart(Date.now(), seconds)
-          : oandaAlignedBucketStart(Date.now(), seconds)) / 1000;
+        (providerOf(session.instrument) === "oanda"
+          ? oandaAlignedBucketStart(Date.now(), seconds)
+          : binanceBucketStart(Date.now(), seconds)) / 1000;
       // Seed the ACTIVE bucket from native history so a freshly created
       // session continues OANDA's in-progress candle instead of building one
       // from zero. `>=` tolerates minor clock skew between us and OANDA.

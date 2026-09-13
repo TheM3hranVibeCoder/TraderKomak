@@ -40,10 +40,23 @@ export const SUPPORTED_BINANCE = [
   "DOGEUSDT",
 ] as const;
 
+/** Dukascopy bank datafeed symbols (free public data, UTC-based).
+ *  Canonical form prefixed "D_" over the OANDA-style pair, e.g. D_XAU_USD
+ *  — display strips the prefix, so D_XAU_USD renders as "XAU/USD". */
+export const SUPPORTED_DUKASCOPY = [
+  "D_EUR_USD",
+  "D_GBP_USD",
+  "D_USD_JPY",
+  "D_XAU_USD",
+  "D_XAG_USD",
+  "D_BTC_USD",
+] as const;
+
 /** Every symbol the app accepts, any provider. */
 export const SEARCHABLE_INSTRUMENTS: readonly string[] = [
   ...SUPPORTED_INSTRUMENTS,
   ...SUPPORTED_BINANCE,
+  ...SUPPORTED_DUKASCOPY,
 ];
 
 export type Instrument = (typeof SUPPORTED_INSTRUMENTS)[number];
@@ -53,13 +66,22 @@ export type AnyInstrument = Instrument | BinanceSymbol;
 /** Default instrument used on first load. Configuration, not hard-coding. */
 export const DEFAULT_INSTRUMENT: Instrument = "XAU_USD";
 
-export type ProviderId = "oanda" | "binance";
+export type ProviderId = "oanda" | "binance" | "dukascopy";
 
 const BINANCE_SET: ReadonlySet<string> = new Set(SUPPORTED_BINANCE);
+const DUKASCOPY_SET: ReadonlySet<string> = new Set(SUPPORTED_DUKASCOPY);
 
 /** Which provider owns a canonical instrument. Unknown → oanda. */
 export function providerOf(instrument: string): ProviderId {
-  return BINANCE_SET.has(normalizeInstrument(instrument)) ? "binance" : "oanda";
+  const norm = normalizeInstrument(instrument);
+  if (BINANCE_SET.has(norm)) return "binance";
+  if (DUKASCOPY_SET.has(norm)) return "dukascopy";
+  return "oanda";
+}
+
+/** D_XAU_USD → "XAUUSD" (the datafeed's concatenated symbol). */
+export function dukasSymbolOf(instrument: string): string {
+  return normalizeInstrument(instrument).replace(/^D_/, "").replace(/_/g, "");
 }
 
 const JPY_QUOTE = new Set(["USD_JPY", "EUR_JPY", "GBP_JPY", "AUD_JPY"]);
@@ -75,7 +97,7 @@ const OANDA_CRYPTO_PRECISION: Record<string, number> = {
 
 /** Human-friendly display: EUR_USD → "EUR/USD", BTCUSDT → "BTC/USDT". */
 export function displayInstrument(instrument: string): string {
-  const norm = normalizeInstrument(instrument);
+  const norm = normalizeInstrument(instrument).replace(/^D_/, "");
   if (!norm.includes("_")) {
     // Crypto: split a known quote suffix off the base
     const quotes = ["USDT", "USDC", "FDUSD", "TUSD"];
@@ -96,7 +118,7 @@ export function displayInstrument(instrument: string): string {
  * - smaller caps (SOL/XRP/ADA/DOGE): 4 · everything else: 5
  */
 export function instrumentPrecision(instrument: string): number {
-  const norm = normalizeInstrument(instrument);
+  const norm = normalizeInstrument(instrument).replace(/^D_/, "");
   const override = OANDA_CRYPTO_PRECISION[norm];
   if (override !== undefined) return override;
   if (JPY_QUOTE.has(norm)) return 3;
@@ -116,7 +138,7 @@ function isFinitePricePrecisionJpy(instrument: string): boolean {
  * Crypto / indices / energy have no pip convention — 1.0 (whole point).
  */
 export function instrumentPipSize(instrument: string): number {
-  const norm = normalizeInstrument(instrument);
+  const norm = normalizeInstrument(instrument).replace(/^D_/, "");
   if (JPY_QUOTE.has(norm)) return 0.01;
   if (METAL.has(norm)) return 0.01;
   if (norm === "BTC_USD" || norm === "ETH_USD" || CRYPTO_MAJOR.has(norm) || CRYPTO_MINOR.has(norm)) return 1;

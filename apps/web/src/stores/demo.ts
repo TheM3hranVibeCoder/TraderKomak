@@ -289,6 +289,7 @@ export const useDemoStore = defineStore("demo", () => {
   function isClosed(symbol = market.instrument): boolean {
     // Crypto trades 24/7 — never closed
     if (providerOf(symbol) === "binance") return false;
+    if (providerOf(symbol) === "dukascopy" && symbol.includes("BTC")) return false;
     const now = Date.now();
     const DAY = 86400000;
     const mid = Math.floor(now / DAY) * DAY;

@@ -401,7 +401,7 @@ onBeforeUnmount(() => {
                 <span v-if="idx === 0"> / </span>
               </template>
             </span>
-            <span class="watch-sub">{{ providerOf(inst) === "binance" ? "BINANCE" : "OANDA" }}</span>
+            <span class="watch-sub">{{ providerOf(inst) === "binance" ? "BINANCE" : providerOf(inst) === "dukascopy" ? "DUKASCOPY" : "OANDA" }}</span>
           </div>
           <div class="watch-right">
             <span class="watch-price">{{ formatPrice(inst, watchlist.prices.get(inst)?.mid ?? null) }}</span>

@@ -1230,9 +1230,12 @@ function updateCountdown() {
   // UTC-aligned (Monday weeks, calendar months). Using the wrong convention
   // counts down to a moment where no candle ever opens (e.g. a Binance 4h
   // showing 1:37 instead of 0:37 — exactly one hour of NY-offset drift).
-  const isBinance = providerOf(market.instrument) === "binance";
+  // Dukascopy is UTC-aligned like Binance (its history is built on UTC buckets)
+  const isUtcAligned =
+    providerOf(market.instrument) === "binance" ||
+    providerOf(market.instrument) === "dukascopy";
   let next: number;
-  if (isBinance) {
+  if (isUtcAligned) {
     if (sec === 2592000) {
       // Next calendar month, 00:00 UTC
       const d = new Date(now);
@@ -4000,7 +4003,7 @@ onBeforeUnmount(() => {
           {{ part }}
           <span v-if="idx === 0"> / </span>
         </template>
-        - {{ instrument && providerOf(instrument) === "binance" ? "BINANCE" : "OANDA" }}
+        - {{ instrument && providerOf(instrument) === "binance" ? "BINANCE" : providerOf(instrument) === "dukascopy" ? "DUKASCOPY" : "OANDA" }}
       </span>
     </div>
 
