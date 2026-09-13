@@ -5300,10 +5300,10 @@ onBeforeUnmount(() => {
 .chart-settings-panel {
   position: absolute;
   z-index: 61;
-  left: 12px;
+  left: 50%;
   top: 50%;
-  transform: translateY(-50%);
-  width: min(320px, calc(100% - 24px));
+  transform: translate(-50%, -50%);
+  width: min(360px, calc(100% - 32px));
   padding: 12px 14px;
   border-radius: 12px;
   border: 1px solid var(--glass-border);
