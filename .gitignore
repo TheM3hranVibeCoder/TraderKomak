@@ -14,3 +14,9 @@ coverage/
 # Local agent tooling (installed skills)
 .agents/
 .claude/
+
+*.log
+web-tmp/
+btc_site.json
+deployed30.json
+.tk-*.mjs
