@@ -693,13 +693,28 @@ function toggleReplay(): void {
   .right {
     grid-column: 2;
     grid-row: 1;
+    display: flex;
     flex-direction: column;
-    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    align-self: center;
+    /* never stretch to the row height — no phantom gaps between the icons */
+    height: max-content;
   }
+  /* Exactly stacked, identical, flush buttons — kills the desktop
+     margin-right hack that misaligned the column on phones. */
   .telegram-btn,
   .theme-btn {
+    width: 40px;
     height: 40px;
+    min-width: 40px;
+    margin: 0;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
     justify-content: center;
+    flex-shrink: 0;
   }
   /* Identity = the profile chip, stuck to the far LEFT of the header;
      the brand text makes room for it on phones. */
