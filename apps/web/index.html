@@ -2,6 +2,14 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- Apply the saved theme BEFORE first paint — otherwise the CSS dark
+         default flashes black for light-theme users on every refresh. -->
+    <script>
+      try {
+        var t = localStorage.getItem("tk-theme");
+        if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>TraderKomak — Live Forex & Crypto Charts and Analysis</title>
     <meta name="description" content="Free real-time forex & crypto charts with market session indicators, demo trading, replay mode and a live community chat — built for traders." />
