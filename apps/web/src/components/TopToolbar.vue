@@ -687,9 +687,18 @@ function toggleReplay(): void {
   .left {
     grid-column: 1;
     grid-row: 1;
-    flex-wrap: wrap;
-    row-gap: 8px;
+    /* One tidy row — indicators always sits beside replay. Narrow phones
+       scroll the row horizontally instead of wrapping it below. */
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px;
   }
+  .left::-webkit-scrollbar { display: none; }
+  .left > * { flex-shrink: 0; }
+  .profile-name { max-width: 72px; }
   .right {
     grid-column: 2;
     grid-row: 1;
@@ -732,7 +741,7 @@ function toggleReplay(): void {
   .demo-btn,
   .replay-btn,
   .ind-btn {
-    padding: 0 10px;
+    padding: 0 9px;
     height: 40px; /* comfortable tap target on touch screens */
   }
   /* the dropdown spans nearly the full width so items are easy to tap */
