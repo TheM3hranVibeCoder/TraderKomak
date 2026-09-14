@@ -1042,7 +1042,9 @@ onBeforeUnmount(() => {
   background: var(--glass-bg-hover);
   max-width: 100%;
   overflow: hidden;
+  cursor: pointer;
 }
+.msg-quote:hover { background: rgba(59, 130, 246, 0.12); }
 .q-from {
   font-size: 10.5px;
   font-weight: 700;
