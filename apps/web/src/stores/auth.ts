@@ -1,0 +1,158 @@
+import { defineStore } from "pinia";
+import { ref, computed } from "vue";
+import { supabase, supabaseReady } from "@/services/supabase";
+
+export type AuthStatus = "guest" | "needs-username" | "ready" | "loading";
+
+export interface Profile {
+  username: string;
+  avatarUrl: string | null;
+}
+
+const USERNAME_RE = /^[a-zA-Z0-9_]+$/;
+
+export function validateUsername(raw: string): string | null {
+  const u = raw.trim();
+  if (u.length < 5) return "Username must be at least 5 characters";
+  if (u.length > 20) return "Username must be at most 20 characters";
+  if (!USERNAME_RE.test(u)) return "Only letters, numbers and _ are allowed";
+  return null;
+}
+
+export const useAuthStore = defineStore("auth", () => {
+  const status = ref<AuthStatus>(supabaseReady ? "loading" : "guest");
+  const userId = ref<string | null>(null);
+  const email = ref<string | null>(null);
+  const profile = ref<Profile | null>(null);
+  const authModalOpen = ref(false);
+  /** Error message shown inside the username step. */
+  const claimError = ref<string | null>(null);
+  const claiming = ref(false);
+
+  const signedIn = computed(() => status.value === "ready");
+
+  async function init(): Promise<void> {
+    if (!supabaseReady) return;
+    const sb = supabase();
+    const { data } = await sb.auth.getSession();
+    await applySession(data.session);
+    sb.auth.onAuthStateChange((_evt, session) => {
+      void applySession(session);
+    });
+  }
+
+  async function applySession(session: { user: { id: string; email?: string | null; user_metadata?: Record<string, unknown> } | null } | null): Promise<void> {
+    if (!session?.user) {
+      userId.value = null;
+      email.value = null;
+      profile.value = null;
+      status.value = "guest";
+      return;
+    }
+    userId.value = session.user.id;
+    email.value = session.user.email ?? null;
+
+    const { data: row, error } = await supabase()
+      .from("profiles")
+      .select("username, avatar_url")
+      .eq("user_id", session.user.id)
+      .maybeSingle();
+    if (error) {
+      console.error("profile load failed", error);
+      status.value = "guest";
+      return;
+    }
+    if (row) {
+      profile.value = { username: row.username, avatarUrl: row.avatar_url ?? null };
+      status.value = "ready";
+    } else {
+      status.value = "needs-username";
+    }
+  }
+
+  function signInWithGoogle(): void {
+    if (!supabaseReady) return;
+    void supabase().auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+  }
+
+  async function signOut(): Promise<void> {
+    if (supabaseReady) await supabase().auth.signOut();
+    userId.value = null;
+    email.value = null;
+    profile.value = null;
+    status.value = "guest";
+    authModalOpen.value = false;
+  }
+
+  /** Returns null on success, or an error string ("taken" / validation). */
+  async function claimUsername(raw: string): Promise<string | null> {
+    const invalid = validateUsername(raw);
+    if (invalid) return invalid;
+    if (!userId.value) return "Not signed in";
+    claiming.value = true;
+    claimError.value = null;
+    try {
+      const sb = supabase();
+      const username = raw.trim();
+      // Unique index on username_lower is the real guard; the select just
+      // gives a friendlier pre-check (also drives the live availability UI).
+      const { data: existing } = await sb
+        .from("profiles")
+        .select("user_id")
+        .eq("username_lower", username.toLowerCase())
+        .maybeSingle();
+      if (existing) return "That username is already taken";
+      const { error } = await sb.from("profiles").insert({
+        user_id: userId.value,
+        username,
+        username_lower: username.toLowerCase(),
+      });
+      if (error) {
+        if ((error as { code?: string }).code === "23505") return "That username is already taken";
+        console.error("claim failed", error);
+        return "Could not save username — try again";
+      }
+      profile.value = { username, avatarUrl: null };
+      status.value = "ready";
+      authModalOpen.value = false;
+      return null;
+    } finally {
+      claiming.value = false;
+    }
+  }
+
+  async function checkUsernameAvailable(raw: string): Promise<boolean | null> {
+    const invalid = validateUsername(raw);
+    if (invalid || !supabaseReady) return null;
+    const { data } = await supabase()
+      .from("profiles")
+      .select("user_id")
+      .eq("username_lower", raw.trim().toLowerCase())
+      .maybeSingle();
+    return !data;
+  }
+
+  function openAuthModal(): void {
+    authModalOpen.value = true;
+  }
+
+  return {
+    status,
+    signedIn,
+    userId,
+    email,
+    profile,
+    authModalOpen,
+    claimError,
+    claiming,
+    init,
+    signInWithGoogle,
+    signOut,
+    claimUsername,
+    checkUsernameAvailable,
+    openAuthModal,
+  };
+});

@@ -4,6 +4,7 @@ import { useMarketStore } from "@/stores/market";
 import { useThemeStore } from "@/stores/theme";
 import { useWatchlistStore } from "@/stores/watchlist";
 import { useChatStore } from "@/stores/chat";
+import { useAuthStore } from "@/stores/auth";
 import { useNewsStore } from "@/stores/news";
 import NewsPanel from "@/components/NewsPanel.vue";
 import TopToolbar from "@/components/TopToolbar.vue";
@@ -18,6 +19,19 @@ const theme = useThemeStore();
 const watchlist = useWatchlistStore();
 const chat = useChatStore();
 const news = useNewsStore();
+const auth = useAuthStore();
+
+// Signed-in identity drives the chat nickname; re-join when it lands.
+watch(
+  () => auth.status,
+  (s) => {
+    if (s === "ready" && auth.profile) {
+      if (chat.nick !== auth.profile.username) chat.setNick(auth.profile.username);
+    } else if (s === "needs-username") {
+      auth.authModalOpen = true;
+    }
+  }
+);
 
 // The right column shows one panel at a time
 watch(
@@ -53,6 +67,7 @@ function toggleNews(): void {
 onMounted(() => {
   void theme.theme;
   market.init();
+  void auth.init();
 });
 
 onBeforeUnmount(() => {
