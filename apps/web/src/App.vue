@@ -49,6 +49,17 @@ onMounted(() => {
   onResize();
   window.addEventListener("resize", onResize);
 });
+
+/** Collapsing the rail on phones must also close whichever panel is open,
+ *  otherwise it would hang there over the chart with its rail gone. */
+function toggleRail(): void {
+  railOpen.value = !railOpen.value;
+  if (!railOpen.value) {
+    watchlist.isOpen = false;
+    chat.setOpen(false);
+    news.setOpen(false);
+  }
+}
 onBeforeUnmount(() => window.removeEventListener("resize", onResize));
 const gate = computed(() => {
   if (auth.status === "ready" || auth.status === "needs-username") return false;
@@ -155,7 +166,7 @@ function onTimeframeChange(next: Timeframe): void {
         class="edge-handle right"
         type="button"
         :aria-label="railOpen ? 'Hide panels' : 'Show watchlist / chat / news'"
-        @click="railOpen = !railOpen"
+        @click="toggleRail"
       >
         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path :d="railOpen ? 'M10 6l6 6-6 6' : 'M14 6l-6 6 6 6'" />
