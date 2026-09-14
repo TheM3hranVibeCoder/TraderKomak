@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import type { ChatMessage } from "@traderkomak/shared";
 import { ChatClient, type ChatStatus } from "@/services/chatClient";
+import { supabase, supabaseReady } from "@/services/supabase";
 
 const NICK_KEY = "tk-chat-nick";
 const ADMIN_KEY = "tk-chat-admin";
@@ -20,8 +21,31 @@ export const useChatStore = defineStore("chat", () => {
   const error = ref<string | null>(null);
   const mutes = ref<{ nick: string; until?: number }[]>([]);
   const bans = ref<{ nick: string; ips?: string[] }[]>([]);
+  const rawOnline = ref<string[]>([]);
+  const rawKnown = ref<{ nick: string; lastSeen: number; online: boolean }[]>([]);
+  /** Usernames that exist in Supabase profiles — Google-signed-in users.
+   *  Legacy pick-a-nickname users are not in there, so they are filtered
+   *  out of the roster/members/admin lists. */
+  const validNicks = ref<Set<string>>(new Set());
   const onlineNicks = ref<string[]>([]);
   const knownNicks = ref<{ nick: string; lastSeen: number; online: boolean }[]>([]);
+
+  function applyNickFilter(): void {
+    onlineNicks.value = rawOnline.value.filter((n) => validNicks.value.has(n.toLowerCase()));
+    knownNicks.value = rawKnown.value.filter((k) => validNicks.value.has(k.nick.toLowerCase()));
+  }
+
+  async function refreshValidNicks(): Promise<void> {
+    if (!supabaseReady) return;
+    try {
+      const { data, error } = await supabase().from("profiles").select("username");
+      if (error) return;
+      validNicks.value = new Set((data ?? []).map((r) => String(r.username).toLowerCase()));
+      applyNickFilter();
+    } catch {}
+  }
+  void refreshValidNicks();
+  setInterval(() => void refreshValidNicks(), 5 * 60_000);
   /** Epoch ms when this user's mute lifts (0 = not muted). */
   const mutedUntil = ref<number>(0);
   /** Epoch ms when the 15s chat cooldown lifts (0 = can send now). */
@@ -104,10 +128,13 @@ function addHealListeners(): void {
           );
           if (pIdx >= 0) {
             const p = pendingLocal.splice(pIdx, 1)[0]!;
+            // An old server drops the reply field on the echo — merge the
+            // local quote snapshot so the reply block never flashes away.
+            const merged = p.reply && !msg.reply ? { ...msg, reply: p.reply } : msg;
             const i = messages.value.findIndex((m) => m.id === p.localId);
             if (i >= 0) {
               const next = [...messages.value];
-              next[i] = msg;
+              next[i] = merged;
               messages.value = next;
             } else {
               messages.value = [...messages.value, msg];
@@ -140,8 +167,9 @@ function addHealListeners(): void {
       },
       onOnline: (count, nicks, known) => {
         online.value = count;
-        onlineNicks.value = nicks;
-        knownNicks.value = known;
+        rawOnline.value = nicks;
+        rawKnown.value = known;
+        applyNickFilter();
       },
       onStatus: (s) => {
         status.value = s;
@@ -195,6 +223,14 @@ function addHealListeners(): void {
       }
       client?.rejoin();
     }, 30_000);
+  }
+
+  /** Called when the signed-in user's profile has is_admin: stores the
+   *  moderator key fetched from Supabase and upgrades the connection. */
+  function setAdminKey(key: string): void {
+    try { localStorage.setItem(ADMIN_KEY, key); } catch {}
+    isAdmin.value = true;
+    ensureClient();
   }
 
   /** Manual probe (banned screen "Try again") — force a fresh join. */
@@ -266,7 +302,7 @@ function addHealListeners(): void {
 
   /** Optimistic-echo bookkeeping: placeholders we rendered for our own
    *  sends, replaced by the server broadcast (deduped in onChat). */
-  const pendingLocal: { localId: string; from: string; text?: string; img?: string }[] = [];
+  const pendingLocal: { localId: string; from: string; text?: string; img?: string; reply?: ChatMessage["reply"] }[] = [];
 
   /** Image + caption text in one message. */
   function sendChat(text: string | undefined, img: string | undefined): boolean {
@@ -291,7 +327,13 @@ function addHealListeners(): void {
             : undefined,
         },
       ];
-      pendingLocal.push({ localId, from: nick.value, text, img });
+      pendingLocal.push({
+        localId,
+        from: nick.value,
+        text,
+        img,
+        reply: reply ? { id: reply.id, from: reply.from, text: reply.text?.slice(0, 80), img: reply.img ? true : undefined } : undefined,
+      });
       setTimeout(() => {
         const i = pendingLocal.findIndex((p) => p.localId === localId);
         if (i >= 0) pendingLocal.splice(i, 1);
@@ -335,6 +377,7 @@ function addHealListeners(): void {
     probeConnection,
     ensureClient,
     setNick,
+    setAdminKey,
     setOpen,
     sendText,
     sendImage,

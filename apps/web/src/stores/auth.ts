@@ -1,12 +1,15 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { supabase, supabaseReady } from "@/services/supabase";
+import { useChatStore } from "@/stores/chat";
 
 export type AuthStatus = "guest" | "needs-username" | "ready" | "loading";
 
 export interface Profile {
   username: string;
   avatarUrl: string | null;
+  /** Room owner/admin flag — set in the Supabase profiles table. */
+  isAdmin?: boolean;
 }
 
 const USERNAME_RE = /^[a-zA-Z0-9_]+$/;
@@ -112,7 +115,7 @@ export const useAuthStore = defineStore("auth", () => {
 
     const { data: row, error } = await supabase()
       .from("profiles")
-      .select("username, avatar_url")
+      .select("username, avatar_url, is_admin")
       .eq("user_id", session.user.id)
       .maybeSingle();
     if (error) {
@@ -122,9 +125,19 @@ export const useAuthStore = defineStore("auth", () => {
       return;
     }
     if (row) {
-      profile.value = { username: row.username, avatarUrl: row.avatar_url ?? null };
+      profile.value = { username: row.username, avatarUrl: row.avatar_url ?? null, isAdmin: !!row.is_admin };
       try { localStorage.setItem(PROFILE_KEY, JSON.stringify(profile.value)); } catch {}
       status.value = "ready";
+      // Supabase-driven admin: fetch the moderator key from the
+      // admin-only table and upgrade the chat connection with it.
+      if (profile.value.isAdmin) {
+        const { data: keyRow } = await supabase()
+          .from("admin_settings")
+          .select("admin_key")
+          .eq("id", 1)
+          .maybeSingle();
+        if (keyRow?.admin_key) useChatStore().setAdminKey(String(keyRow.admin_key));
+      }
     } else {
       status.value = "needs-username";
     }

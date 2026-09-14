@@ -9,6 +9,8 @@ create table if not exists public.profiles (
   username text not null check (char_length(username) between 5 and 20),
   username_lower text not null,
   avatar_url text,
+  -- room owner/admin flag (set manually for your own account, see below)
+  is_admin boolean not null default false,
   created_at timestamptz not null default now()
 );
 
@@ -67,3 +69,30 @@ create policy "own settings all"
   on public.user_settings for all
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+
+-- ============ ADMIN (owner) SETUP ============
+-- 1) Flag your own account as admin (run once, after your first Google
+--    login created the profile row):
+--    update public.profiles set is_admin = true where username = 'YOUR_USERNAME';
+--
+-- 2) Store the chat moderator key (the CHAT_ADMIN_KEY value you set on the
+--    market server) so the admin account receives it automatically:
+create table if not exists public.admin_settings (
+  id int primary key,
+  admin_key text not null
+);
+alter table public.admin_settings enable row level security;
+-- Readable ONLY by profiles flagged is_admin (no other policies exist,
+-- so everyone else is denied by RLS).
+drop policy if exists "admin reads key" on public.admin_settings;
+create policy "admin reads key"
+  on public.admin_settings for select
+  using (
+    exists (
+      select 1 from public.profiles p
+      where p.user_id = auth.uid() and p.is_admin = true
+    )
+  );
+-- insert the key (replace 'your-chat-admin-key' with your CHAT_ADMIN_KEY):
+-- insert into public.admin_settings (id, admin_key) values (1, 'your-chat-admin-key')
+--   on conflict (id) do update set admin_key = excluded.admin_key;
