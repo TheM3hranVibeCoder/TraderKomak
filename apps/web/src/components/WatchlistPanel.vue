@@ -403,12 +403,10 @@ onBeforeUnmount(() => {
             </span>
             <span class="watch-sub">{{ providerOf(inst) === "binance" ? "BINANCE" : providerOf(inst) === "dukascopy" ? "DUKASCOPY" : "OANDA" }}</span>
           </div>
-          <div class="watch-right">
-            <span class="watch-price">{{ formatPrice(inst, watchlist.prices.get(inst)?.mid ?? null) }}</span>
-            <span class="watch-change" :class="changeClass(watchlist.prices.get(inst)! )">
-              {{ changeText(watchlist.prices.get(inst)! ) }}
-            </span>
-          </div>
+          <span class="watch-price">{{ formatPrice(inst, watchlist.prices.get(inst)?.mid ?? null) }}</span>
+          <span class="watch-change" :class="changeClass(watchlist.prices.get(inst)! )">
+            {{ changeText(watchlist.prices.get(inst)! ) }}
+          </span>
           <button class="watch-remove" @click.stop="watchlist.remove(inst)" title="Remove">✕</button>
         </div>
       </TransitionGroup>
@@ -721,15 +719,9 @@ onBeforeUnmount(() => {
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
-.watch-right {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 2px;
-  width: 92px;
-  flex-shrink: 0;
-}
 .watch-price {
+  width: 74px;
+  flex-shrink: 0;
   font-weight: 800;
   font-size: 12px;
   color: var(--text);
@@ -737,6 +729,8 @@ onBeforeUnmount(() => {
   text-align: right;
 }
 .watch-change {
+  width: 56px;
+  flex-shrink: 0;
   font-size: 10px;
   font-weight: 800;
   padding: 2px 0;
