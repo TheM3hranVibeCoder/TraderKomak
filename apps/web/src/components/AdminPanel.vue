@@ -36,6 +36,10 @@ const filteredUsers = computed(() => {
   return allUsers.value.filter((u) => u.nick.toLowerCase().includes(q));
 });
 
+function isSelf(nick: string): boolean {
+  return nick.toLowerCase() === chat.nick.toLowerCase();
+}
+
 function mute(nick: string, minutes: number): void {
   chat.moderate("mute", nick, minutes);
 }
@@ -94,15 +98,18 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           <div v-for="u in filteredUsers" :key="u.nick" class="user-row">
             <span class="dot" :class="u.online ? 'on' : 'off'"></span>
             <span class="user-nick">{{ u.nick }}</span>
-            <span v-if="bannedSet.has(u.nick.toLowerCase())" class="user-flag banned">banned</span>
-            <span v-else-if="mutedSet.has(u.nick.toLowerCase())" class="user-flag muted">muted</span>
-            <span v-else-if="u.online" class="user-flag live">online</span>
-            <div class="user-actions">
-              <button class="act amber" :disabled="bannedSet.has(u.nick.toLowerCase())" @click="mute(u.nick, 10)">Mute 10m</button>
-              <button class="act amber dark" :disabled="bannedSet.has(u.nick.toLowerCase())" @click="mute(u.nick, 1440)">Mute 24h</button>
-              <button v-if="bannedSet.has(u.nick.toLowerCase())" class="act green" @click="unban(u.nick)">Unban</button>
-              <button v-else class="act red" @click="ban(u.nick)">Ban</button>
-            </div>
+            <span v-if="isSelf(u.nick)" class="user-flag you">you</span>
+            <template v-else>
+              <span v-if="bannedSet.has(u.nick.toLowerCase())" class="user-flag banned">banned</span>
+              <span v-else-if="mutedSet.has(u.nick.toLowerCase())" class="user-flag muted">muted</span>
+              <span v-else-if="u.online" class="user-flag live">online</span>
+              <div class="user-actions">
+                <button class="act amber" :disabled="bannedSet.has(u.nick.toLowerCase())" @click="mute(u.nick, 10)">Mute 10m</button>
+                <button class="act amber dark" :disabled="bannedSet.has(u.nick.toLowerCase())" @click="mute(u.nick, 1440)">Mute 24h</button>
+                <button v-if="bannedSet.has(u.nick.toLowerCase())" class="act green" @click="unban(u.nick)">Unban</button>
+                <button v-else class="act red" @click="ban(u.nick)">Ban</button>
+              </div>
+            </template>
           </div>
         </div>
 
@@ -283,6 +290,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 .user-flag.live { background: linear-gradient(135deg, #34d399, #10b981); }
 .user-flag.muted { background: linear-gradient(135deg, #fbbf24, #f59e0b); }
 .user-flag.banned { background: linear-gradient(135deg, #fb7185, #ef4444); }
+.user-flag.you { background: linear-gradient(135deg, #8b5cf6, #6366f1); }
 .user-actions { display: flex; gap: 6px; }
 .act {
   padding: 5.5px 11px;
@@ -300,4 +308,10 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 .act.amber.dark { background: linear-gradient(135deg, #f59e0b, #ea7c1c); }
 .act.red { background: linear-gradient(135deg, #fb7185, #ef4444); }
 .act.green { background: linear-gradient(135deg, #34d399, #10b981); }
+@media (max-width: 480px) {
+  .admin-stats { grid-template-columns: repeat(2, 1fr); }
+  .admin-tabs { flex-wrap: wrap; }
+  .user-actions { flex-direction: column; gap: 4px; }
+  .act { width: 100%; }
+}
 </style>

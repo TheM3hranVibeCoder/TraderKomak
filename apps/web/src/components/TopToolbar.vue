@@ -407,14 +407,7 @@ function toggleReplay(): void {
   border-bottom: 1px solid var(--border);
   background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(139, 92, 246, 0.1));
 }
-.profile-pop-head::before {
-  content: "";
-  width: 34px;
-  height: 4px;
-  border-radius: 99px;
-  margin-bottom: 2px;
-  background: var(--accent-gradient);
-}
+
 .profile-pop-name {
   font-size: 13px;
   font-weight: 700;
@@ -660,6 +653,15 @@ function toggleReplay(): void {
   }
   }
 @media (max-width: 640px) {
+  .profile-pop {
+    left: 0;
+    transform: none;
+    min-width: 200px;
+    max-width: calc(100vw - 24px);
+  }
+  .profile-name { max-width: 90px; }
+  /* chat panel overlay */
+  .toolbar { position: relative; z-index: 60; }
   /* Phone header: a two-column grid — the tool group wraps on the left,
      the Telegram/theme icons sit as a tidy aligned column on the right
      (with flex-wrap they used to scatter across rows, misaligned). */

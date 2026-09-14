@@ -165,4 +165,8 @@ onUnmounted(() => {
 .stat .l { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; opacity: 0.92; }
 .roast { margin: 0 0 10px; font-size: 13.5px; font-style: italic; color: #c9cfe4; min-height: 18px; }
 .until { margin: 0; font-size: 11.5px; color: #6f778f; }
+@media (max-width: 480px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .banned-card { padding: 26px 18px 20px; }
+}
 </style>
