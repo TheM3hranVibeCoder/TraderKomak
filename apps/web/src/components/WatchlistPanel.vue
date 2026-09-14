@@ -724,24 +724,27 @@ onBeforeUnmount(() => {
 .watch-right {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: stretch;
   gap: 2px;
-  min-width: 76px;
+  width: 92px;
+  flex-shrink: 0;
 }
 .watch-price {
   font-weight: 800;
   font-size: 12px;
   color: var(--text);
   font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 .watch-change {
   font-size: 10px;
   font-weight: 800;
-  padding: 2px 7px;
+  padding: 2px 0;
   border-radius: 99px;
   font-variant-numeric: tabular-nums;
   background: var(--btn-bg);
   color: var(--text-muted);
+  text-align: center;
 }
 .watch-change.up {
   background: rgba(45, 212, 167, 0.14);
