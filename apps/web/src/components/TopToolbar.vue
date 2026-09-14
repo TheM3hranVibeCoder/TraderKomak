@@ -679,7 +679,9 @@ function toggleReplay(): void {
      (with flex-wrap they used to scatter across rows, misaligned). */
   .toolbar {
     display: flex;
-    align-items: center;
+    /* Top-align: tools hug the top of the header, the stacked
+       telegram/theme column hangs below — free space stays at the BOTTOM. */
+    align-items: flex-start;
     gap: 6px;
     padding: 8px 10px;
   }
@@ -699,7 +701,8 @@ function toggleReplay(): void {
   .left::-webkit-scrollbar { display: none; }
   .left > *, .right > * { flex-shrink: 0; }
   .right {
-    flex-direction: row;
+    flex-direction: column;
+    align-items: center;
     gap: 6px;
     height: max-content;
   }
