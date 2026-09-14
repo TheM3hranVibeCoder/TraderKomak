@@ -5,6 +5,7 @@ import { useThemeStore } from "@/stores/theme";
 import { useWatchlistStore } from "@/stores/watchlist";
 import { useChatStore } from "@/stores/chat";
 import { useAuthStore } from "@/stores/auth";
+import { startCloudSync } from "@/services/cloudSync";
 import { useNewsStore } from "@/stores/news";
 import NewsPanel from "@/components/NewsPanel.vue";
 import TopToolbar from "@/components/TopToolbar.vue";
@@ -75,6 +76,7 @@ function toggleNews(): void {
 onMounted(() => {
   void theme.theme;
   void auth.init();
+  startCloudSync();
   // Only connect market data once the gate lets the user in.
   watch(gate, (blocked) => {
     if (!blocked) market.init();
@@ -98,7 +100,10 @@ function onTimeframeChange(next: Timeframe): void {
 <template>
   <div class="app" :data-theme="theme.theme">
     <h1 class="sr-only">TraderKomak — live forex and crypto charting platform</h1>
-    <LandingPage v-if="gate" />
+    <div v-if="auth.status === 'loading'" class="boot-splash" aria-hidden="true">
+      <img src="/favicon.png" alt="" width="72" height="72" />
+    </div>
+    <LandingPage v-else-if="gate" />
     <AuthModal v-if="auth.authModalOpen" />
     <template v-else>
     <TopToolbar
@@ -160,6 +165,22 @@ function onTimeframeChange(next: Timeframe): void {
 </template>
 
 <style scoped>
+.boot-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(160deg, #f2f6ff 0%, #e9efff 45%, #f4effe 100%);
+}
+.boot-splash img {
+  animation: boot-pulse 1.1s ease-in-out infinite;
+}
+@keyframes boot-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.96); }
+  50% { opacity: 1; transform: scale(1); }
+}
 /* Screen-reader-only: present for landmarks/SEO, invisible on screen */
 .sr-only {
   position: absolute;
