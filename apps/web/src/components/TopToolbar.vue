@@ -6,7 +6,6 @@ import { useDemoStore } from "@/stores/demo";
 import { useThemeStore } from "@/stores/theme";
 import { useIndicatorsStore } from "@/stores/indicators";
 import { useAuthStore } from "@/stores/auth";
-import AuthModal from "./AuthModal.vue";
 import { SUPPORTED_INSTRUMENTS, normalizeInstrument } from "@traderkomak/shared";
 import type { Timeframe } from "@traderkomak/shared";
 
@@ -105,6 +104,41 @@ function onSearchBlur() {
     <div class="left">
       <div class="brand">
         <span class="brand-name">TraderKomak</span>
+      </div>
+      <!-- Account chip: sits between the brand and the symbol search -->
+      <div v-if="auth.signedIn" ref="profileEl" class="profile-wrap">
+        <button
+          class="profile-chip"
+          type="button"
+          :aria-expanded="profileOpen"
+          title="Account"
+          @click="profileOpen = !profileOpen"
+        >
+          <img
+            v-if="auth.profile?.avatarUrl"
+            class="profile-avatar"
+            :src="auth.profile.avatarUrl"
+            alt=""
+            referrerpolicy="no-referrer"
+          />
+          <span v-else class="profile-avatar profile-initial">{{
+            (auth.profile?.username ?? "?").charAt(0).toUpperCase()
+          }}</span>
+          <span class="profile-name">{{ auth.profile?.username }}</span>
+        </button>
+        <div v-if="profileOpen" class="profile-pop" role="menu">
+          <div class="profile-pop-head">
+            <div class="profile-pop-name">{{ auth.profile?.username }}</div>
+            <div class="profile-pop-mail">{{ auth.email }}</div>
+          </div>
+          <button class="profile-act" type="button" role="menuitem" @click="auth.signOut(); profileOpen = false">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <path d="M16 17l5-5-5-5M21 12H9" />
+            </svg>
+            Log out
+          </button>
+        </div>
       </div>
       <div class="search-box">
         <span class="search-icon">
@@ -214,55 +248,6 @@ function onSearchBlur() {
     </Teleport>
 
     <div class="right">
-      <!-- Account: profile chip when signed in, sign-in button otherwise -->
-      <div v-if="auth.signedIn" ref="profileEl" class="profile-wrap">
-        <button
-          class="profile-chip"
-          type="button"
-          :aria-expanded="profileOpen"
-          title="Account"
-          @click="profileOpen = !profileOpen"
-        >
-          <img
-            v-if="auth.profile?.avatarUrl"
-            class="profile-avatar"
-            :src="auth.profile.avatarUrl"
-            alt=""
-            referrerpolicy="no-referrer"
-          />
-          <span v-else class="profile-avatar profile-initial">{{
-            (auth.profile?.username ?? "?").charAt(0).toUpperCase()
-          }}</span>
-          <span class="profile-name">{{ auth.profile?.username }}</span>
-        </button>
-        <div v-if="profileOpen" class="profile-pop" role="menu">
-          <div class="profile-pop-head">
-            <div class="profile-pop-name">{{ auth.profile?.username }}</div>
-            <div class="profile-pop-mail">{{ auth.email }}</div>
-          </div>
-          <button class="profile-act" type="button" role="menuitem" @click="auth.signOut(); profileOpen = false">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-              <path d="M16 17l5-5-5-5M21 12H9" />
-            </svg>
-            Log out
-          </button>
-        </div>
-      </div>
-      <button
-        v-else
-        class="signin-btn"
-        type="button"
-        title="Sign in with Google"
-        @click="auth.openAuthModal()"
-      >
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
-          <path d="M10 17l5-5-5-5M15 12H3" />
-        </svg>
-        <span>Sign in</span>
-      </button>
-      <AuthModal v-if="auth.authModalOpen" />
       <!-- Telegram channel link -->
       <a
         class="telegram-btn"
@@ -530,26 +515,6 @@ function onSearchBlur() {
   cursor: pointer;
 }
 .profile-act:hover { background: var(--btn-hover); color: var(--offline); }
-.signin-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 34px;
-  padding: 0 12px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--glass-border);
-  background: var(--glass-bg);
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 200ms;
-  flex-shrink: 0;
-}
-.signin-btn:hover {
-  border-color: var(--accent);
-  background: var(--btn-hover);
-}
 .telegram-btn {
   display: inline-flex;
   align-items: center;

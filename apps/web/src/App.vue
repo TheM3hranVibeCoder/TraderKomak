@@ -12,6 +12,9 @@ import ChartPane from "@/components/ChartPane.vue";
 import WatchlistPanel from "@/components/WatchlistPanel.vue";
 import ChatPanel from "@/components/ChatPanel.vue";
 import DrawingToolbar from "@/components/DrawingToolbar.vue";
+import LandingPage from "@/components/LandingPage.vue";
+import AuthModal from "@/components/AuthModal.vue";
+import { computed } from "vue";
 import type { Timeframe } from "@traderkomak/shared";
 
 const market = useMarketStore();
@@ -20,6 +23,11 @@ const watchlist = useWatchlistStore();
 const chat = useChatStore();
 const news = useNewsStore();
 const auth = useAuthStore();
+
+// Gate: charts only for signed-in users with a username picked. While the
+// session is still restoring ("loading") we also show the landing — it
+// flips to the app within a moment for returning users.
+const gate = computed(() => auth.status !== "ready");
 
 // Signed-in identity drives the chat nickname; re-join when it lands.
 watch(
@@ -66,8 +74,11 @@ function toggleNews(): void {
 
 onMounted(() => {
   void theme.theme;
-  market.init();
   void auth.init();
+  // Only connect market data once the gate lets the user in.
+  watch(gate, (blocked) => {
+    if (!blocked) market.init();
+  }, { immediate: true });
 });
 
 onBeforeUnmount(() => {
@@ -87,6 +98,9 @@ function onTimeframeChange(next: Timeframe): void {
 <template>
   <div class="app" :data-theme="theme.theme">
     <h1 class="sr-only">TraderKomak — live forex and crypto charting platform</h1>
+    <LandingPage v-if="gate" />
+    <AuthModal v-if="auth.authModalOpen" />
+    <template v-else>
     <TopToolbar
       :instrument="market.instrument"
       :timeframe="market.timeframe"
@@ -140,6 +154,7 @@ function onTimeframeChange(next: Timeframe): void {
         </button>
       </nav>
     </main>
+    </template>
     <footer class="sr-only">TraderKomak — traderkomak.ir</footer>
   </div>
 </template>
