@@ -163,7 +163,12 @@ watch(
   (open) => {
     if (open) {
       chat.ensureClient();
-      void nextTick(() => (chat.nick ? inputEl.value?.focus() : nickDraft.value && null));
+      // Auto-focusing pops the on-screen keyboard on phones and glitches
+      // the panel open — only focus on pointer devices.
+      const coarse = window.matchMedia("(pointer: coarse)").matches;
+      if (!coarse) {
+        void nextTick(() => (chat.nick ? inputEl.value?.focus() : nickDraft.value && null));
+      }
     }
   }
 );

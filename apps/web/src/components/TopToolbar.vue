@@ -653,7 +653,7 @@ function toggleReplay(): void {
     gap: 8px;
   }
   }
-@media (max-width: 640px) {
+@media (max-width: 768px) {
   /* Phone: full-width sheet pinned just under the header. The toolbar's
      backdrop-filter makes it the containing block for position:fixed, so
      these insets are relative to the header itself — the dropdown can
@@ -701,9 +701,13 @@ function toggleReplay(): void {
     height: 40px;
     justify-content: center;
   }
-  /* brand mark keeps the identity, the name frees the row */
-  .brand-name {
+  /* Identity = the profile chip, stuck to the far LEFT of the header;
+     the brand text makes room for it on phones. */
+  .brand {
     display: none;
+  }
+  .profile-wrap {
+    order: -1;
   }
     .demo-btn span,
   .replay-btn span,

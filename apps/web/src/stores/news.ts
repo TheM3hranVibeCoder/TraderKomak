@@ -3,6 +3,9 @@ import { ref, computed } from "vue";
 import { fetchNews, type NewsItem } from "@/services/newsService";
 
 const OPEN_KEY = "tk-news-open";
+/** Browser-local copy of the weekly feed: once fetched, the panel always
+ *  has news — even offline, blocked upstream or server restart. */
+const CACHE_KEY = "tk-news-cache";
 const ALARM_WINDOW_MS = 15 * 60_000; // red alarm when a High is ≤ 15 min away
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -28,20 +31,41 @@ export const useNewsStore = defineStore("news", () => {
     now.value = Date.now();
   }, 1000);
 
+  // Hydrate from the local cache before anything else — the panel opens
+  // with the last known week instantly, online or not.
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as { fetchedAt: number; items: NewsItem[] };
+      if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0) {
+        items.value = parsed.items;
+        fetchedAt.value = parsed.fetchedAt ?? 0;
+      }
+    }
+  } catch {}
+
+  function saveCache(): void {
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ fetchedAt: fetchedAt.value, items: items.value }));
+    } catch {}
+  }
+
   async function refresh(): Promise<void> {
     try {
       const feed = await fetchNews();
       // An empty result (weekend rollover, transient upstream) must not
       // wipe the panel — keep showing the last known week.
       if (feed.items.length === 0) {
-        error.value = "No news in the feed yet — retrying";
+        if (!items.value.length) error.value = "No news in the feed yet — retrying";
         return;
       }
       items.value = feed.items;
       fetchedAt.value = feed.fetchedAt;
       error.value = null;
+      saveCache();
     } catch {
-      error.value = "News feed unavailable";
+      // Cached week on hand → stay quiet (stale data beats an error box).
+      if (!items.value.length) error.value = "News feed unavailable";
     }
   }
 
