@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount, nextTick, computed } from "vue";
+import { ref, watch, onMounted, onBeforeUnmount, nextTick, computed, onUnmounted } from "vue";
 import { createChartAdapter, type ChartAdapter } from "@/chart/chartAdapter";
 import { useThemeStore } from "@/stores/theme";
 import { useMarketStore } from "@/stores/market";
@@ -685,6 +685,13 @@ function loadChartStyle(): ChartStyle {
 }
 const paneRef = ref<HTMLElement | null>(null);
 const chartStyle = ref<ChartStyle>(loadChartStyle());
+// Cloud sync (another device / fresh login) rewrote the style keys — reload.
+function onCloudStyle(): void {
+  chartStyle.value = loadChartStyle();
+  templates.value = loadTemplates();
+}
+window.addEventListener("tk-chart-style", onCloudStyle);
+onUnmounted(() => window.removeEventListener("tk-chart-style", onCloudStyle));
 const chartSettingsOpen = ref(false);
 const rsiSettingsOpen = ref(false);
 
@@ -721,6 +728,7 @@ function applyChartStyle(): void {
   adapter?.setAxisColors({ text: s.axisText, border: s.axisBorder });
   adapter?.setCrosshairColors({ vert: s.crossVert, horz: s.crossHorz });
   localStorage.setItem(CHART_STYLE_KEY, JSON.stringify(s));
+  window.dispatchEvent(new CustomEvent("tk-local-change", { detail: { key: "chart-style" } }));
 }
 watch(chartStyle, applyChartStyle, { deep: true });
 // Theme flips re-resolve every null color — the default look always follows light/dark
@@ -765,6 +773,7 @@ const tplName = ref("");
 const selectedTpl = ref("");
 function persistTemplates(): void {
   localStorage.setItem(TPL_KEY, JSON.stringify(templates.value));
+  window.dispatchEvent(new CustomEvent("tk-local-change", { detail: { key: "chart-templates" } }));
 }
 function saveTemplate(): void {
   const clean = tplName.value.trim().slice(0, 24);

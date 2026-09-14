@@ -9,6 +9,22 @@ const emit = defineEmits<{ (e: "update:modelValue", value: Timeframe): void }>()
 const themeStore = useThemeStore();
 const open = ref(false);
 const dropdownRef = ref<HTMLElement | null>(null);
+const triggerRef = ref<HTMLElement | null>(null);
+/** Viewport coords for the teleported menu (computed BEFORE opening so it
+ *  never flashes at (0,0), and clamped so phones never cut it off). */
+const pop = ref({ top: 0, left: 0 });
+
+function toggleMenu(): void {
+  if (!open.value) {
+    const r = triggerRef.value?.getBoundingClientRect();
+    if (r) {
+      const menuW = 220;
+      const left = Math.max(8, Math.min(r.left, window.innerWidth - menuW - 8));
+      pop.value = { top: r.bottom + 6, left };
+    }
+  }
+  open.value = !open.value;
+}
 
 function label(tf: Timeframe): string {
   return TIMEFRAME_LABELS[tf] ?? tf;
@@ -29,8 +45,10 @@ function select(tf: Timeframe) {
 }
 
 function onClickOutside(e: MouseEvent) {
-  if (!dropdownRef.value) return;
-  if (!dropdownRef.value.contains(e.target as Node)) open.value = false;
+  const t = e.target as Node;
+  if (dropdownRef.value?.contains(t)) return;
+  if (triggerRef.value?.contains(t)) return;
+  open.value = false;
 }
 onMounted(() => document.addEventListener("click", onClickOutside));
 onBeforeUnmount(() => document.removeEventListener("click", onClickOutside));
@@ -51,11 +69,14 @@ onBeforeUnmount(() => document.removeEventListener("click", onClickOutside));
       </button>
     </div>
 
-    <!-- Dropdown for all timeframes sorted small→big -->
-    <div class="dropdown" ref="dropdownRef">
+    <!-- Dropdown for all timeframes sorted small→big. The menu TELEPORTS
+         to <body>: the phone header scrolls its tools row (overflow-x),
+         which would otherwise clip the menu shut. -->
+    <div class="dropdown">
       <button
+        ref="triggerRef"
         class="dropdown-trigger"
-        @click.stop="open = !open"
+        @click.stop="toggleMenu"
         @keydown.esc.stop="open = false"
         :aria-expanded="open"
         aria-haspopup="listbox"
@@ -68,7 +89,14 @@ onBeforeUnmount(() => document.removeEventListener("click", onClickOutside));
         </span>
       </button>
 
-      <div v-if="open" class="dropdown-menu" @keydown.esc.stop="open = false">
+      <Teleport to="body">
+        <div
+          v-if="open"
+          ref="dropdownRef"
+          class="dropdown-menu"
+          :style="{ top: pop.top + 'px', left: pop.left + 'px' }"
+          @keydown.esc.stop="open = false"
+        >
         <div class="menu-header">Timeframes</div>
         <button
           v-for="tf in TIMEFRAMES"
@@ -93,7 +121,8 @@ onBeforeUnmount(() => document.removeEventListener("click", onClickOutside));
             {{ isFav(tf) ? "★" : "☆" }}
           </span>
         </button>
-      </div>
+        </div>
+      </Teleport>
     </div>
   </div>
 </template>
@@ -176,10 +205,9 @@ onBeforeUnmount(() => document.removeEventListener("click", onClickOutside));
   transform: rotate(180deg);
 }
 .dropdown-menu {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
+  position: fixed;
   min-width: 200px;
+  max-width: calc(100vw - 16px);
   background: var(--bg-panel);
   backdrop-filter: blur(22px) saturate(1.3);
   -webkit-backdrop-filter: blur(22px) saturate(1.3);

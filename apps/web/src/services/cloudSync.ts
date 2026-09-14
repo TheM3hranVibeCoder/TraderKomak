@@ -13,6 +13,10 @@ import { useDrawingsStore } from "@/stores/drawings";
 import { useMarketStore } from "@/stores/market";
 
 interface CloudData {
+  chart?: {
+    style?: Record<string, unknown> | null;
+    templates?: unknown;
+  };
   drawings?: {
     rects?: Record<string, unknown[]>;
     lines?: Record<string, unknown[]>;
@@ -35,6 +39,10 @@ function snapshot(): CloudData {
   const w = useWatchlistStore();
   const m = useMarketStore();
   return {
+    chart: {
+      style: JSON.parse(localStorage.getItem("tk-chart-style") ?? "null") as Record<string, unknown> | null,
+      templates: JSON.parse(localStorage.getItem("tk-chart-templates") ?? "null") as unknown,
+    },
     drawings: {
       rects: JSON.parse(JSON.stringify(d.drawings)),
       lines: JSON.parse(JSON.stringify(d.lines)),
@@ -70,6 +78,19 @@ function applyLocal(cloud: CloudData): void {
     const d = useDrawingsStore();
     const w = useWatchlistStore();
     const m = useMarketStore();
+
+    if (cloud.chart && typeof cloud.chart === "object") {
+      if (cloud.chart.style && typeof cloud.chart.style === "object") {
+        try {
+          localStorage.setItem("tk-chart-style", JSON.stringify(cloud.chart.style));
+          // ChartPane reloads its style/templates on this event.
+          window.dispatchEvent(new CustomEvent("tk-chart-style"));
+        } catch {}
+      }
+      if (Array.isArray(cloud.chart.templates)) {
+        try { localStorage.setItem("tk-chart-templates", JSON.stringify(cloud.chart.templates)); } catch {}
+      }
+    }
 
     if (cloud.drawings && typeof cloud.drawings === "object") {
       const src = cloud.drawings;
@@ -146,6 +167,8 @@ export function startCloudSync(): void {
       watch(() => [d.drawings, d.lines, d.polys, d.positions, d.singles], onChange, { deep: true });
       watch(() => [...w.instruments], onChange);
       watch(() => [m.instrument, m.timeframe], onChange);
+      // ChartPane announces chart-style / template writes.
+      window.addEventListener("tk-local-change", onChange as EventListener);
     },
     { immediate: true }
   );
