@@ -678,17 +678,17 @@ function toggleReplay(): void {
      the Telegram/theme icons sit as a tidy aligned column on the right
      (with flex-wrap they used to scatter across rows, misaligned). */
   .toolbar {
-    display: grid;
-    grid-template-columns: 1fr auto;
+    display: flex;
     align-items: center;
-    gap: 8px 10px;
+    gap: 6px;
     padding: 8px 10px;
   }
+  /* One compact row for EVERYTHING — tools then telegram/theme. No stacked
+     column = no dead vertical space in the header. Narrow phones scroll
+     the row horizontally (scrollbar hidden). */
   .left {
-    grid-column: 1;
-    grid-row: 1;
-    /* One tidy row — indicators always sits beside replay. Narrow phones
-       scroll the row horizontally instead of wrapping it below. */
+    flex: 1;
+    min-width: 0;
     flex-wrap: nowrap;
     gap: 6px;
     overflow-x: auto;
@@ -697,22 +697,13 @@ function toggleReplay(): void {
     padding-bottom: 2px;
   }
   .left::-webkit-scrollbar { display: none; }
-  .left > * { flex-shrink: 0; }
-  .profile-name { max-width: 72px; }
+  .left > *, .right > * { flex-shrink: 0; }
   .right {
-    grid-column: 2;
-    grid-row: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
+    flex-direction: row;
     gap: 6px;
-    align-self: center;
-    /* never stretch to the row height — no phantom gaps between the icons */
     height: max-content;
   }
-  /* Exactly stacked, identical, flush buttons — kills the desktop
-     margin-right hack that misaligned the column on phones. */
+  .profile-name { max-width: 72px; }
   .telegram-btn,
   .theme-btn {
     width: 40px;
