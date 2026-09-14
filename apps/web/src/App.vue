@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, watch } from "vue";
+import { onMounted, onBeforeUnmount, watch, computed, ref } from "vue";
 import { useMarketStore } from "@/stores/market";
 import { useThemeStore } from "@/stores/theme";
 import { useWatchlistStore } from "@/stores/watchlist";
@@ -17,7 +17,6 @@ import DrawingToolbar from "@/components/DrawingToolbar.vue";
 import LandingPage from "@/components/LandingPage.vue";
 import AuthModal from "@/components/AuthModal.vue";
 import BannedPage from "@/components/BannedPage.vue";
-import { computed } from "vue";
 import type { Timeframe } from "@traderkomak/shared";
 
 const market = useMarketStore();
@@ -32,6 +31,25 @@ const auth = useAuthStore();
 // (flag survives on the device) so a refresh never flashes the landing —
 // guests (no flag) get the landing instantly, nothing leaks.
 const wasAuth = wasAuthOnDevice() || authInFlight();
+
+// Phone: the drawing-tools column and the watchlist/chat/news rail start
+// collapsed so the chart gets the full width; the edge arrows toggle them.
+const isPhone = ref(false);
+const toolsOpen = ref(false);
+const railOpen = ref(false);
+function onResize(): void {
+  const phone = window.innerWidth <= 640;
+  if (phone && !isPhone.value) {
+    toolsOpen.value = false;
+    railOpen.value = false;
+  }
+  isPhone.value = phone;
+}
+onMounted(() => {
+  onResize();
+  window.addEventListener("resize", onResize);
+});
+onBeforeUnmount(() => window.removeEventListener("resize", onResize));
 const gate = computed(() => {
   if (auth.status === "ready" || auth.status === "needs-username") return false;
   if (auth.status === "loading") return !wasAuth;
@@ -119,7 +137,30 @@ function onTimeframeChange(next: Timeframe): void {
       @update:instrument="onInstrumentChange"
       @update:timeframe="onTimeframeChange"
     />
-    <main class="main">
+    <main class="main" :class="{ 'tools-open': toolsOpen, 'rail-open': railOpen }">
+      <button
+        v-if="isPhone"
+        class="edge-handle left"
+        type="button"
+        :aria-label="toolsOpen ? 'Hide drawing tools' : 'Show drawing tools'"
+        :title="toolsOpen ? 'Hide drawing tools' : 'Show drawing tools'"
+        @click="toolsOpen = !toolsOpen"
+      >
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path :d="toolsOpen ? 'M14 6l-6 6 6 6' : 'M10 6l6 6-6 6'" />
+        </svg>
+      </button>
+      <button
+        v-if="isPhone"
+        class="edge-handle right"
+        type="button"
+        :aria-label="railOpen ? 'Hide panels' : 'Show watchlist / chat / news'"
+        @click="railOpen = !railOpen"
+      >
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path :d="railOpen ? 'M10 6l6 6-6 6' : 'M14 6l-6 6 6 6'" />
+        </svg>
+      </button>
       <DrawingToolbar />
       <ChartPane :candles="market.candles" :is-loading="market.isLoading" :error="market.error" :instrument="market.instrument" />
       <WatchlistPanel />
@@ -172,6 +213,52 @@ function onTimeframeChange(next: Timeframe): void {
 </template>
 
 <style scoped>
+.edge-handle { display: none; }
+@media (max-width: 640px) {
+  .edge-handle {
+    display: flex;
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 56;
+    width: 22px;
+    height: 46px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    background: var(--bg-panel-solid);
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  }
+  .edge-handle.left { left: 0; border-radius: 0 10px 10px 0; border-left: none; }
+  .edge-handle.right { right: 0; border-radius: 10px 0 0 10px; border-right: none; }
+  .edge-handle:active { color: var(--text); }
+
+  /* Collapse columns: drawing tools slide away to the left, the
+     watchlist/chat/news rail to the right — chart gets the full width. */
+  :deep(.drawing-toolbar) {
+    transition: width 280ms cubic-bezier(0.32, 0.72, 0, 1), min-width 280ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .main:not(.tools-open) :deep(.drawing-toolbar) {
+    width: 0;
+    min-width: 0;
+    padding-left: 0;
+    padding-right: 0;
+    border-right-color: transparent;
+    overflow: hidden;
+  }
+  .right-rail {
+    transition: width 280ms cubic-bezier(0.32, 0.72, 0, 1), min-width 280ms cubic-bezier(0.32, 0.72, 0, 1);
+    overflow: hidden;
+  }
+  .main:not(.rail-open) .right-rail {
+    width: 0;
+    min-width: 0;
+    border-left-color: transparent;
+  }
+}
 /* Screen-reader-only: present for landmarks/SEO, invisible on screen */
 .sr-only {
   position: absolute;

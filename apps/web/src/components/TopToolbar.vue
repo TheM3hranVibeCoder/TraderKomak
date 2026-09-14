@@ -654,11 +654,23 @@ function toggleReplay(): void {
   }
   }
 @media (max-width: 640px) {
+  /* Phone: full-width sheet pinned just under the header. The toolbar's
+     backdrop-filter makes it the containing block for position:fixed, so
+     these insets are relative to the header itself — the dropdown can
+     never overflow the screen or sit half over the chart. */
   .profile-pop {
-    left: 0;
+    position: fixed;
+    top: calc(100% + 6px);
+    left: 10px;
+    right: 10px;
+    min-width: 0;
+    max-width: none;
     transform: none;
-    min-width: 200px;
-    max-width: calc(100vw - 24px);
+    animation: pop-in-m 0.16s ease both;
+  }
+  @keyframes pop-in-m {
+    from { opacity: 0; transform: translateY(-5px) scale(0.98); }
+    to { opacity: 1; transform: none; }
   }
   .profile-name { max-width: 90px; }
 
