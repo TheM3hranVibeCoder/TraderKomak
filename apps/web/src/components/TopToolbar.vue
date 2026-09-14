@@ -8,7 +8,6 @@ import { useIndicatorsStore } from "@/stores/indicators";
 import { useAuthStore } from "@/stores/auth";
 import { useChatStore } from "@/stores/chat";
 import AdminPanel from "./AdminPanel.vue";
-import { SUPPORTED_INSTRUMENTS, normalizeInstrument } from "@traderkomak/shared";
 import type { Timeframe } from "@traderkomak/shared";
 
 const props = defineProps<{
@@ -80,27 +79,6 @@ function toggleReplay(): void {
   else replay.begin();
 }
 
-const search = ref("");
-
-function onSearchEnter() {
-  const q = search.value.trim();
-  if (!q) return;
-  const norm = normalizeInstrument(q);
-  const exact = SUPPORTED_INSTRUMENTS.find((s) => normalizeInstrument(s) === norm);
-  if (exact) {
-    emit("update:instrument", normalizeInstrument(exact));
-  } else {
-    // Try to find partial match
-    const upper = q.toUpperCase().replace(/[^A-Z0-9]/g, "");
-    const found = SUPPORTED_INSTRUMENTS.find((s) => s.replace("_", "").includes(upper));
-    if (found) emit("update:instrument", found);
-  }
-  search.value = "";
-}
-
-function onSearchBlur() {
-  // Keep for future, no dropdown now
-}
 </script>
 
 <template>
@@ -109,7 +87,7 @@ function onSearchBlur() {
       <div class="brand">
         <span class="brand-name">TraderKomak</span>
       </div>
-      <!-- Account chip: sits between the brand and the symbol search -->
+      <!-- Account chip: sits between the brand and the timeframe selector -->
       <div v-if="auth.signedIn" ref="profileEl" class="profile-wrap">
         <button
           class="profile-chip"
@@ -150,26 +128,6 @@ function onSearchBlur() {
             Log out
           </button>
         </div>
-      </div>
-      <div class="search-box">
-        <span class="search-icon">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-            <circle cx="11" cy="11" r="7" />
-            <path d="M20 20l-3.5-3.5" />
-          </svg>
-        </span>
-        <input
-          v-model="search"
-          type="text"
-          autocomplete="off"
-          spellcheck="false"
-          aria-label="Search symbol"
-          @keydown.enter="onSearchEnter"
-          @blur="onSearchBlur"
-          :placeholder="props.instrument.replace('_', '').toLowerCase()"
-          class="search-input"
-        />
-        <button v-if="search" class="search-clear" type="button" aria-label="Clear search" @click="search = ''">✕</button>
       </div>
       <TimeframeSelector :model-value="timeframe" @update:model-value="emit('update:timeframe', $event)" />
       <!-- Replay mode: pick a point on the chart, hide the right side, then
@@ -370,77 +328,11 @@ function onSearchBlur() {
   -webkit-text-fill-color: transparent;
   white-space: nowrap;
 }
-.search-box {
-  position: relative;
-  width: 190px;
-  flex-shrink: 0;
-}
-.search-icon {
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--text-muted);
-  display: grid;
-  place-items: center;
-  pointer-events: none;
-}
-.search-icon svg {
-  display: block;
-}
 .theme-icon {
   display: grid;
   place-items: center;
   line-height: 0;
   color: var(--text);
-}
-.search-input {
-  width: 100%;
-  padding: 8px 30px 8px 30px;
-  border-radius: 11px;
-  border: 1px solid var(--glass-border);
-  background: var(--glass-bg);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 700;
-  outline: none;
-  transition: all 180ms;
-  box-shadow: var(--card-shadow);
-  text-transform: lowercase;
-}
-.search-input::placeholder {
-  color: var(--text-muted);
-  opacity: 0.9;
-  text-transform: lowercase;
-}
-.search-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15), var(--glow-accent);
-}
-.search-clear {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  background: var(--btn-bg);
-  border: none;
-  border-radius: 50%;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 9px;
-}
-/* extend the 18px visual dot to a 26px+ hit target */
-.search-clear::after {
-  content: "";
-  position: absolute;
-  inset: -4px;
-  border-radius: 50%;
 }
 .profile-wrap {
   position: relative;
@@ -766,13 +658,7 @@ function onSearchBlur() {
   .left {
     gap: 8px;
   }
-  /* search flexes into the freed space instead of a fixed width */
-  .search-box {
-    flex: 1;
-    min-width: 90px;
-    width: auto;
   }
-}
 @media (max-width: 640px) {
   /* Phone header: a two-column grid — the tool group wraps on the left,
      the Telegram/theme icons sit as a tidy aligned column on the right
@@ -805,10 +691,7 @@ function onSearchBlur() {
   .brand-name {
     display: none;
   }
-  .search-box {
-    min-width: 110px;
-  }
-  .demo-btn span,
+    .demo-btn span,
   .replay-btn span,
   .ind-label {
     display: none;

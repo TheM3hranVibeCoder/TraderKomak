@@ -27,6 +27,19 @@ function setWasAuth(v: boolean): void {
     else localStorage.removeItem(WASAUTH_KEY);
   } catch {}
 }
+const PROFILE_KEY = "tk-profile-cache";
+
+function loadCachedProfile(): Profile | null {
+  try {
+    const raw = localStorage.getItem(PROFILE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Profile;
+      if (parsed && typeof parsed.username === "string") return parsed;
+    }
+  } catch {}
+  return null;
+}
+
 export function wasAuthOnDevice(): boolean {
   try { return localStorage.getItem(WASAUTH_KEY) === "1"; } catch { return false; }
 }
@@ -43,7 +56,7 @@ export const useAuthStore = defineStore("auth", () => {
   const status = ref<AuthStatus>(supabaseReady ? "loading" : "guest");
   const userId = ref<string | null>(null);
   const email = ref<string | null>(null);
-  const profile = ref<Profile | null>(null);
+  const profile = ref<Profile | null>(loadCachedProfile());
   const authModalOpen = ref(false);
   /** Error message shown inside the username step. */
   const claimError = ref<string | null>(null);
@@ -100,6 +113,7 @@ export const useAuthStore = defineStore("auth", () => {
     }
     if (row) {
       profile.value = { username: row.username, avatarUrl: row.avatar_url ?? null };
+      try { localStorage.setItem(PROFILE_KEY, JSON.stringify(profile.value)); } catch {}
       status.value = "ready";
     } else {
       status.value = "needs-username";
@@ -121,6 +135,7 @@ export const useAuthStore = defineStore("auth", () => {
     profile.value = null;
     status.value = "guest";
     setWasAuth(false);
+    try { localStorage.removeItem(PROFILE_KEY); } catch {}
     authModalOpen.value = false;
   }
 

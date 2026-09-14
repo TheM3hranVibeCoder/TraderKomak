@@ -16,6 +16,7 @@ import ChatPanel from "@/components/ChatPanel.vue";
 import DrawingToolbar from "@/components/DrawingToolbar.vue";
 import LandingPage from "@/components/LandingPage.vue";
 import AuthModal from "@/components/AuthModal.vue";
+import BannedPage from "@/components/BannedPage.vue";
 import { computed } from "vue";
 import type { Timeframe } from "@traderkomak/shared";
 
@@ -110,6 +111,7 @@ function onTimeframeChange(next: Timeframe): void {
     <h1 class="sr-only">TraderKomak — live forex and crypto charting platform</h1>
     <LandingPage v-if="gate" />
     <AuthModal v-if="auth.authModalOpen" />
+    <BannedPage v-if="chat.banned" />
     <template v-else>
     <TopToolbar
       :instrument="market.instrument"

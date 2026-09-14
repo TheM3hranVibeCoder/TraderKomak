@@ -8,6 +8,7 @@ const ADMIN_KEY = "tk-chat-admin";
 const OPEN_KEY = "tk-chat-open";
 /** Epoch seconds of the last chat message this user has seen. */
 const LASTSEEN_KEY = "tk-chat-lastseen";
+const BANNED_KEY = "tk-chat-banned";
 
 export const useChatStore = defineStore("chat", () => {
   const messages = ref<ChatMessage[]>([]);
@@ -25,6 +26,11 @@ export const useChatStore = defineStore("chat", () => {
   const mutedUntil = ref<number>(0);
   /** Epoch ms when the 15s chat cooldown lifts (0 = can send now). */
   const rateWaitUntil = ref<number>(0);
+  /** Set when the server rejects/boots this user for a ban. Persists so the
+   *  banned screen survives refreshes until the ban is lifted. */
+  const banned = ref<boolean>(localStorage.getItem(BANNED_KEY) === "1");
+  /** Epoch ms when the ban was first seen on this device (for the stats UI). */
+  const bannedAt = ref<number>(Number(localStorage.getItem("tk-chat-banned-at")) || 0);
   /** Unread messages while the panel is closed + the ts of the first one
    *  (opening the panel jumps straight to it). */
   const unread = ref<number>(0);
@@ -70,6 +76,12 @@ function addHealListeners(): void {
     // picked a nickname yet.
     client = new ChatClient({
       onHistory: (list) => {
+        // History arriving means the join was accepted — the ban is over.
+        if (banned.value) {
+          banned.value = false;
+          bannedAt.value = 0;
+          try { localStorage.removeItem(BANNED_KEY); localStorage.removeItem("tk-chat-banned-at"); } catch {}
+        }
         messages.value = list;
         if (open.value && nick.value) {
           // Panel open with a nick = the user can actually read the list.
@@ -116,6 +128,16 @@ function addHealListeners(): void {
         status.value = s;
       },
       onError: (msg) => {
+        if (/banned/i.test(msg)) {
+          banned.value = true;
+          if (!bannedAt.value) bannedAt.value = Date.now();
+          try {
+            localStorage.setItem(BANNED_KEY, "1");
+            localStorage.setItem("tk-chat-banned-at", String(bannedAt.value));
+          } catch {}
+          error.value = null;
+          return;
+        }
         error.value = msg;
         setTimeout(() => {
           if (error.value === msg) error.value = null;
@@ -138,6 +160,27 @@ function addHealListeners(): void {
     });
     clientAdminKey = currentKey;
     client.connect(nick.value, currentKey);
+    startBanProbe();
+  }
+
+  /** While banned, quietly re-join every 30s — the moment the ban is
+   *  lifted the join succeeds, history arrives and banned clears. */
+  let banProbeTimer: ReturnType<typeof setInterval> | null = null;
+  function startBanProbe(): void {
+    if (banProbeTimer) return;
+    banProbeTimer = setInterval(() => {
+      if (!banned.value) {
+        clearInterval(banProbeTimer!);
+        banProbeTimer = null;
+        return;
+      }
+      client?.ensureFresh();
+    }, 30_000);
+  }
+
+  /** Manual probe (banned screen "Try again") — force a fresh join. */
+  function probeConnection(): void {
+    client?.ensureFresh();
   }
 
   function setNick(value: string): boolean {
@@ -240,6 +283,9 @@ function addHealListeners(): void {
     knownNicks,
     mutedUntil,
     rateWaitUntil,
+    banned,
+    bannedAt,
+    probeConnection,
     ensureClient,
     setNick,
     setOpen,

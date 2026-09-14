@@ -29,12 +29,27 @@ let errorTimer: ReturnType<typeof setTimeout> | null = null;
 const offlineNicks = computed(() => chat.knownNicks.filter((k) => !k.online));
 
 /** Sticker set — sent as `sticker:<emoji>` text and rendered large. */
-const STICKERS = ["🚀", "📈", "📉", "💰", "🔥", "😂", "👍", "🙌", "😱", "🤯", "🧠", "☕", "🦅", "🐂", "🐻", "💎", "⏰", "🎯", "✅", "❌", "🤝", "👀", "🥂", "😎"];
+const STICKERS = [
+  "🚀", "📈", "📉", "💰", "🔥", "😂", "👍", "🙌", "😱", "🤯", "🧠", "☕",
+  "🦅", "🐂", "🐻", "💎", "⏰", "🎯", "✅", "❌", "🤝", "👀", "🥂", "😎",
+  "🐋", "🦈", "💸", "🤑", "📊", "🕯️", "⚡", "🌙", "☀️", "🥇", "🛢️", "🏦",
+  "😮‍💨", "🥲", "🤖", "🐐", "🍀", "🧨", "🍻", "🙋", "🙏", "💪", "👑", "🐸",
+];
 const showStickers = ref(false);
 
 function pickSticker(st: string): void {
   showStickers.value = false;
   if (chat.sendChat("sticker:" + st, undefined)) scrollTop();
+}
+
+let flashTimer: ReturnType<typeof setTimeout> | null = null;
+function jumpTo(id: string): void {
+  const el = listEl.value?.querySelector(`[data-id="${CSS.escape(id)}"]`) as HTMLElement | null;
+  if (!el) return; // original was pruned — stay put, like Telegram
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  el.classList.add("flash");
+  if (flashTimer) clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => el.classList.remove("flash"), 1600);
 }
 
 function startReply(m: ChatMessage): void {
@@ -307,7 +322,7 @@ onBeforeUnmount(() => {
           >⛔ {{ b.nick }} ✕</span>
         </div>
         <div ref="listEl" class="chat-list" @scroll="onListScroll">
-          <div v-for="m in chat.messages" :key="m.id" class="msg" :class="{ system: m.from === '' }" :data-ts="m.ts">
+          <div v-for="m in chat.messages" :key="m.id" class="msg" :class="{ system: m.from === '' }" :data-ts="m.ts" :data-id="m.id">
             <template v-if="m.from === ''">
               <span class="sys-text">— {{ m.text }} —</span>
             </template>
@@ -316,13 +331,6 @@ onBeforeUnmount(() => {
                 <span class="msg-from">{{ m.from }}</span>
                 <span v-if="m.owner" class="owner-badge">OWNER</span>
                 <span class="msg-time">{{ timeLabel(m.ts) }}</span>
-                <button
-                  v-if="m.from !== ''"
-                  class="msg-mod msg-reply-btn"
-                  title="Reply"
-                  aria-label="Reply to this message"
-                  @click="startReply(m)"
-                >↩</button>
                 <span v-if="chat.isAdmin" class="msg-actions">
                   <template v-if="chat.nick !== m.from">
                     <button
@@ -334,8 +342,14 @@ onBeforeUnmount(() => {
                   </template>
                   <button class="msg-del" title="Delete message" @click="chat.deleteMessage(m.id)">✕</button>
                 </span>
+                <button
+                  class="msg-reply-btn"
+                  title="Reply"
+                  aria-label="Reply to this message"
+                  @click="startReply(m)"
+                >↩</button>
               </div>
-              <div v-if="m.reply" class="msg-quote">
+              <div v-if="m.reply" class="msg-quote" role="button" tabindex="0" title="Jump to the original message" @click="jumpTo(m.reply.id)" @keydown.enter="jumpTo(m.reply.id)">
                 <span class="q-from">↩ {{ m.reply.from }}</span>
                 <span class="q-text">{{ m.reply.text || (m.reply.img ? "📷 photo" : "") }}</span>
               </div>
@@ -986,10 +1000,18 @@ onBeforeUnmount(() => {
 /* ── Replies ── */
 .msg-reply-btn {
   margin-left: auto;
+  width: 24px;
+  height: 20px;
+  font-size: 13px;
   opacity: 0;
   transition: opacity 0.12s ease;
 }
 .msg:hover .msg-reply-btn { opacity: 1; }
+.msg.flash { animation: msg-flash 1.6s ease; }
+@keyframes msg-flash {
+  0%, 60% { background: rgba(59, 130, 246, 0.16); border-radius: 8px; }
+  100% { background: transparent; }
+}
 .msg-quote {
   display: flex;
   flex-direction: column;
@@ -1046,7 +1068,7 @@ onBeforeUnmount(() => {
 
 /* ── Stickers ── */
 .msg-text.sticker {
-  font-size: 38px;
+  font-size: 30px;
   line-height: 1.15;
   background: transparent;
   border: none;
@@ -1054,21 +1076,21 @@ onBeforeUnmount(() => {
 }
 .sticker-pop {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 4px;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
   margin: 0 10px 8px;
-  padding: 8px;
+  padding: 6px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--bg-panel-solid);
 }
 .sticker-cell {
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
-  font-size: 22px;
+  font-size: 16px;
   line-height: 1;
-  padding: 6px 0;
+  padding: 4px 0;
   cursor: pointer;
   transition: background 0.12s ease, transform 0.12s ease;
 }
