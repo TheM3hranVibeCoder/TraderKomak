@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from "vue";
 import { useChatStore } from "@/stores/chat";
+import { useAuthStore } from "@/stores/auth";
 import type { ChatMessage } from "@traderkomak/shared";
 import { compressImage } from "@/utils/image";
 
 const chat = useChatStore();
+const auth = useAuthStore();
 
 const draft = ref("");
 const pendingImg = ref<string | null>(null);
@@ -271,19 +273,13 @@ onBeforeUnmount(() => {
 
       <!-- Nickname gate -->
       <div v-if="!chat.nick" class="nick-gate">
-        <p class="nick-hint">Pick a nickname to join the public room — talk charts, share screenshots and trade ideas.</p>
-        <div class="nick-row">
-          <input
-            v-model="nickDraft"
-            class="nick-input"
-            type="text"
-            maxlength="20"
-            placeholder="Your nickname"
-            aria-label="Choose a nickname"
-            @keydown.enter="confirmNick"
-          />
-          <button class="nick-go" @click="confirmNick">Join</button>
-        </div>
+        <template v-if="auth.signedIn">
+          <p class="nick-hint">Setting up your chat identity…</p>
+        </template>
+        <template v-else>
+          <p class="nick-hint">Sign in with Google to join the public room — talk charts, share screenshots and trade ideas under your own username.</p>
+          <button class="nick-go" @click="auth.openAuthModal()">Sign in with Google</button>
+        </template>
         <p v-if="chat.error" class="chat-error">{{ fmtError(chat.error) }}</p>
         <p class="nick-note">Signals and ideas shared here come from other users — not financial advice. Be kind, no spam.</p>
       </div>
@@ -341,8 +337,15 @@ onBeforeUnmount(() => {
                     <button class="msg-mod ban" title="Ban (permanent)" @click="chat.moderate('ban', m.from)">⛔</button>
                   </template>
                   <button class="msg-del" title="Delete message" @click="chat.deleteMessage(m.id)">✕</button>
+                  <button
+                    class="msg-reply-btn"
+                    title="Reply"
+                    aria-label="Reply to this message"
+                    @click="startReply(m)"
+                  >↩</button>
                 </span>
                 <button
+                  v-else
                   class="msg-reply-btn"
                   title="Reply"
                   aria-label="Reply to this message"
@@ -998,14 +1001,30 @@ onBeforeUnmount(() => {
 }
 
 /* ── Replies ── */
+.msg-actions {
+  display: inline-grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 2px 3px;
+  justify-items: end;
+  align-items: center;
+}
 .msg-reply-btn {
   margin-left: auto;
   width: 24px;
   height: 20px;
-  font-size: 13px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
   opacity: 0;
-  transition: opacity 0.12s ease;
+  transition: opacity 0.12s ease, background 0.12s ease;
 }
+/* admin grid: reply sits directly under the ✕ (3rd column, 2nd row) */
+.msg-actions .msg-reply-btn { grid-column: 3; }
+.msg-reply-btn:hover { background: rgba(59, 130, 246, 0.15); }
 .msg:hover .msg-reply-btn { opacity: 1; }
 .msg.flash { animation: msg-flash 1.6s ease; }
 @keyframes msg-flash {

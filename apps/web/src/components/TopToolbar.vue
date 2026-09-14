@@ -260,6 +260,7 @@ function toggleReplay(): void {
 
 <style scoped>
 .toolbar {
+  z-index: 120; /* whole header subtree above chart overlays (legend 61, popups 299) so the profile dropdown never hides behind the chart */
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -660,8 +661,7 @@ function toggleReplay(): void {
     max-width: calc(100vw - 24px);
   }
   .profile-name { max-width: 90px; }
-  /* chat panel overlay */
-  .toolbar { position: relative; z-index: 60; }
+
   /* Phone header: a two-column grid — the tool group wraps on the left,
      the Telegram/theme icons sit as a tidy aligned column on the right
      (with flex-wrap they used to scatter across rows, misaligned). */

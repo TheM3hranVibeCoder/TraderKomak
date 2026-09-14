@@ -174,13 +174,13 @@ function addHealListeners(): void {
         banProbeTimer = null;
         return;
       }
-      client?.ensureFresh();
+      client?.rejoin();
     }, 30_000);
   }
 
   /** Manual probe (banned screen "Try again") — force a fresh join. */
   function probeConnection(): void {
-    client?.ensureFresh();
+    client?.rejoin();
   }
 
   function setNick(value: string): boolean {

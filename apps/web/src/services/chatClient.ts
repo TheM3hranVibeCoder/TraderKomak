@@ -150,6 +150,20 @@ export class ChatClient {
    * throttle background timers, so the connection may have silently died
    * while the user was away.
    */
+  /** Force a fresh dial + join even when the socket looks healthy. Used by
+   *  the ban probe: a rejected join leaves the socket OPEN and "fresh", so
+   *  ensureFresh() would never re-send the join after an unban. */
+  rejoin(): void {
+    this.closedByUser = false;
+    this.attempt = 0;
+    this.joined = false;
+    if (this.ws) {
+      try { this.ws.close(4000, "rejoin"); } catch {}
+      this.ws = null;
+    }
+    this.dial();
+  }
+
   ensureFresh(): void {
     if (
       this.ws &&
@@ -211,11 +225,14 @@ export class ChatClient {
       this.stopPing();
       this.ws = null;
       this.joined = false;
-      // 4003 = banned — stop reconnecting, the server will refuse anyway.
+      // 4003 = banned (pre-connect IP ban) — stop the auto-reconnect loop;
+      // the ban probe's rejoin() revives the socket after an unban.
       if (ev.code === 4003) {
         this.handlers.onError("You are banned from this room");
         this.handlers.onStatus("offline");
         this.closedByUser = true;
+        this.ws = null;
+        this.joined = false;
         return;
       }
       if (this.closedByUser) return;
