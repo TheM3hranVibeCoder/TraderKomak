@@ -12,8 +12,15 @@ export const useNewsStore = defineStore("news", () => {
   const fetchedAt = ref<number>(0);
   const open = ref<boolean>(localStorage.getItem(OPEN_KEY) === "1");
   const error = ref<string | null>(null);
-  /** Local-midnight epoch of the day being viewed (index into the feed). */
-  const dayOffset = ref<number>(new Date().getDay()); // open on Today
+  /** Local-midnight epoch of the day being viewed. Tracked as a timestamp
+   *  (not a feed index) so the panel opens on the REAL today — an async
+   *  feed can never shift it to a neighbouring day for a moment. */
+  const selectedStart = ref<number>(todayLocalStart());
+
+  function todayLocalStart(): number {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  }
 
   /** 1s ticker drives all countdowns and the Today label. */
   const now = ref<number>(Date.now());
@@ -41,40 +48,38 @@ export const useNewsStore = defineStore("news", () => {
   /** Pick the day the panel opens on: TODAY if it has news, otherwise the
    *  most recent day that does, otherwise the next upcoming one. */
   function goToRelevantDay(): void {
-    const list = days.value;
-    if (!list.length) return;
-    const d = new Date(now.value);
-    const todayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    // Open on the real today when it has events; otherwise snap to the
+    // nearest day that does (weekend rollover → the feed's first day).
+    const todayStart = todayLocalStart();
     const hasItems = (start: number) =>
       items.value.some((it) => it.date >= start && it.date < start + 86_400_000);
-    const idx = list.findIndex((x) => x.start === todayStart);
-    if (idx >= 0 && hasItems(list[idx]!.start)) {
-      dayOffset.value = idx;
+    if (hasItems(todayStart)) {
+      selectedStart.value = todayStart;
       return;
     }
-    // The feed range can sit fully in the future (weekend rollover → next
-    // week) or fully in the past — clamp to its nearest edge.
-    if (todayStart < list[0]!.start) {
-      dayOffset.value = 0;
+    const starts = days.value.map((x) => x.start);
+    if (!starts.length) return;
+    if (todayStart < starts[0]!) {
+      selectedStart.value = starts[0]!;
       return;
     }
-    if (todayStart > list[list.length - 1]!.start) {
-      dayOffset.value = list.length - 1;
+    if (todayStart > starts[starts.length - 1]!) {
+      selectedStart.value = starts[starts.length - 1]!;
       return;
     }
-    for (let i = idx; i >= 0; i--) {
-      if (hasItems(list[i]!.start)) {
-        dayOffset.value = i;
+    for (let st = todayStart - 86_400_000; st >= starts[0]!; st -= 86_400_000) {
+      if (hasItems(st)) {
+        selectedStart.value = st;
         return;
       }
     }
-    for (let i = idx + 1; i < list.length; i++) {
-      if (hasItems(list[i]!.start)) {
-        dayOffset.value = i;
+    for (let st = todayStart + 86_400_000; st <= starts[starts.length - 1]!; st += 86_400_000) {
+      if (hasItems(st)) {
+        selectedStart.value = st;
         return;
       }
     }
-    dayOffset.value = Math.max(0, idx);
+    selectedStart.value = todayStart;
   }
 
   function setOpen(v: boolean): void {
@@ -116,16 +121,16 @@ export const useNewsStore = defineStore("news", () => {
   });
 
   const selectedDay = computed(() => {
-    const list = days.value;
-    if (!list.length) return null;
-    const idx = Math.min(Math.max(dayOffset.value, 0), list.length - 1);
-    return list[idx];
+    const d = new Date(selectedStart.value);
+    return {
+      key: `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`,
+      start: selectedStart.value,
+      label: `${DAY_NAMES[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`,
+    };
   });
 
   const dayItems = computed(() => {
-    const sel = selectedDay.value;
-    if (!sel) return [];
-    const start = sel.start;
+    const start = selectedStart.value;
     const end = start + 86_400_000;
     return items.value.filter((it) => it.date >= start && it.date < end).sort((a, b) => a.date - b.date);
   });
@@ -157,8 +162,7 @@ export const useNewsStore = defineStore("news", () => {
   });
 
   function shiftDay(dir: -1 | 1): void {
-    const idx = Math.min(Math.max(dayOffset.value + dir, 0), Math.max(days.value.length - 1, 0));
-    dayOffset.value = idx;
+    selectedStart.value += dir * 86_400_000;
   }
 
   return {
@@ -170,10 +174,10 @@ export const useNewsStore = defineStore("news", () => {
     days,
     selectedDay,
     dayItems,
+    selectedStart,
     nearestHigh,
     alarmActive,
     alarmLabel,
-    dayOffset,
     shiftDay,
     setOpen,
     goToRelevantDay,

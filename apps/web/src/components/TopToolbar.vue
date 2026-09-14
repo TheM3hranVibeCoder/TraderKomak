@@ -486,20 +486,42 @@ function onSearchBlur() {
 }
 .profile-pop {
   position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  min-width: 200px;
+  top: calc(100% + 10px);
+  /* Drop from the middle of the profile chip */
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 220px;
   padding: 6px;
-  border-radius: var(--radius-md);
+  border-radius: 14px;
   border: 1px solid var(--border);
   background: var(--bg-panel-solid);
   box-shadow: var(--card-shadow);
   z-index: 60;
+  overflow: hidden;
+  animation: pop-in 0.16s ease both;
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-5px) scale(0.97); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
 }
 .profile-pop-head {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 2px;
+  padding: 12px 10px 11px;
   margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(139, 92, 246, 0.1));
+}
+.profile-pop-head::before {
+  content: "";
+  width: 34px;
+  height: 4px;
+  border-radius: 99px;
+  margin-bottom: 2px;
+  background: var(--accent-gradient);
 }
 .profile-pop-name {
   font-size: 13px;
@@ -516,15 +538,18 @@ function onSearchBlur() {
 .profile-act {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 9px 10px;
   border: none;
-  border-radius: 8px;
+  border-radius: 9px;
   background: transparent;
   color: var(--text-muted);
   font-size: 12.5px;
+  font-weight: 600;
   cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 .profile-act:hover { background: var(--btn-hover); color: var(--text); }
 .profile-act.admin { color: var(--accent); }

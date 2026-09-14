@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from "vue";
 import { useChatStore } from "@/stores/chat";
+import type { ChatMessage } from "@traderkomak/shared";
 import { compressImage } from "@/utils/image";
 
 const chat = useChatStore();
@@ -26,6 +27,23 @@ const fileEl = ref<HTMLInputElement | null>(null);
 let errorTimer: ReturnType<typeof setTimeout> | null = null;
 
 const offlineNicks = computed(() => chat.knownNicks.filter((k) => !k.online));
+
+/** Sticker set — sent as `sticker:<emoji>` text and rendered large. */
+const STICKERS = ["🚀", "📈", "📉", "💰", "🔥", "😂", "👍", "🙌", "😱", "🤯", "🧠", "☕", "🦅", "🐂", "🐻", "💎", "⏰", "🎯", "✅", "❌", "🤝", "👀", "🥂", "😎"];
+const showStickers = ref(false);
+
+function pickSticker(st: string): void {
+  showStickers.value = false;
+  if (chat.sendChat("sticker:" + st, undefined)) scrollTop();
+}
+
+function startReply(m: ChatMessage): void {
+  chat.setReply(m);
+  void nextTick(() => inputEl.value?.focus());
+}
+function quoteText(m: ChatMessage): string {
+  return m.text ? (m.text.startsWith("sticker:") ? m.text.slice(8) + " sticker" : m.text) : m.img ? "📷 photo" : "";
+}
 
 function onDocClick(e: MouseEvent): void {
   const t = e.target as HTMLElement;
@@ -298,6 +316,13 @@ onBeforeUnmount(() => {
                 <span class="msg-from">{{ m.from }}</span>
                 <span v-if="m.owner" class="owner-badge">OWNER</span>
                 <span class="msg-time">{{ timeLabel(m.ts) }}</span>
+                <button
+                  v-if="m.from !== ''"
+                  class="msg-mod msg-reply-btn"
+                  title="Reply"
+                  aria-label="Reply to this message"
+                  @click="startReply(m)"
+                >↩</button>
                 <span v-if="chat.isAdmin" class="msg-actions">
                   <template v-if="chat.nick !== m.from">
                     <button
@@ -310,6 +335,10 @@ onBeforeUnmount(() => {
                   <button class="msg-del" title="Delete message" @click="chat.deleteMessage(m.id)">✕</button>
                 </span>
               </div>
+              <div v-if="m.reply" class="msg-quote">
+                <span class="q-from">↩ {{ m.reply.from }}</span>
+                <span class="q-text">{{ m.reply.text || (m.reply.img ? "📷 photo" : "") }}</span>
+              </div>
               <img
                 v-if="m.img"
                 :src="m.img"
@@ -318,7 +347,11 @@ onBeforeUnmount(() => {
                 loading="lazy"
                 @click="openImage(m.img!)"
               />
-              <div v-if="m.text" class="msg-text msg-caption">{{ m.text }}</div>
+              <div
+                v-if="m.text"
+                class="msg-text msg-caption"
+                :class="{ sticker: m.text.startsWith('sticker:') }"
+              >{{ m.text.startsWith('sticker:') ? m.text.slice(8) : m.text }}</div>
             </template>
           </div>
         </div>
@@ -333,7 +366,21 @@ onBeforeUnmount(() => {
           <button class="pending-remove" title="Remove image" aria-label="Remove attached image" @click="clearPending">✕</button>
           <span class="pending-hint">Add a caption, then send</span>
         </div>
+        <div v-if="chat.replyTo" class="reply-bar">
+          <span class="rb-text">Replying to <b>{{ chat.replyTo.from }}</b>: {{ quoteText(chat.replyTo).slice(0, 60) }}</span>
+          <button class="rb-x" title="Cancel reply" aria-label="Cancel reply" @click="chat.clearReply()">✕</button>
+        </div>
+        <div v-if="showStickers" class="sticker-pop">
+          <button v-for="st in STICKERS" :key="st" class="sticker-cell" type="button" @click="pickSticker(st)">{{ st }}</button>
+        </div>
         <div class="chat-input-row">
+          <button class="attach" title="Stickers" aria-label="Send a sticker" @click="showStickers = !showStickers">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M8.5 10h.01M15.5 10h.01" />
+              <path d="M8.5 14.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8" />
+            </svg>
+          </button>
           <button class="attach" title="Attach a chart screenshot" aria-label="Attach image" @click="onAttachClick">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
               <rect x="3" y="5" width="18" height="14" rx="2.5" />
@@ -935,4 +982,95 @@ onBeforeUnmount(() => {
     box-shadow: -12px 0 28px rgba(0, 0, 0, 0.28);
   }
 }
+
+/* ── Replies ── */
+.msg-reply-btn {
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.msg:hover .msg-reply-btn { opacity: 1; }
+.msg-quote {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 3px 0 5px;
+  padding: 5px 9px;
+  border-left: 2px solid var(--accent);
+  border-radius: 6px;
+  background: var(--glass-bg-hover);
+  max-width: 100%;
+  overflow: hidden;
+}
+.q-from {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.q-text {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.reply-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 10px 6px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--accent);
+  border-radius: 7px;
+  background: var(--glass-bg-hover);
+}
+.rb-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rb-text b { color: var(--accent); font-weight: 700; }
+.rb-x {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.rb-x:hover { color: var(--text); }
+
+/* ── Stickers ── */
+.msg-text.sticker {
+  font-size: 38px;
+  line-height: 1.15;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+}
+.sticker-pop {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+  margin: 0 10px 8px;
+  padding: 8px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-panel-solid);
+}
+.sticker-cell {
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
+  padding: 6px 0;
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+.sticker-cell:hover { background: var(--glass-bg-hover); transform: scale(1.15); }
 </style>

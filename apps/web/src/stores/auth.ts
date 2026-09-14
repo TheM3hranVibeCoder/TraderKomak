@@ -10,6 +10,26 @@ export interface Profile {
 }
 
 const USERNAME_RE = /^[a-zA-Z0-9_]+$/;
+/** Sliding login window: each visit re-marks this stamp; if the user stays
+ *  away longer than 7 days the session is dropped and they sign in again. */
+const LASTVISIT_KEY = "tk-auth-lastvisit";
+const SESSION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+/** Render hint for the app gate: "was logged in on this device" — lets the
+ *  app render optimistically during session restore (no landing flash). */
+const WASAUTH_KEY = "tk-was-auth";
+
+function markVisit(): void {
+  try { localStorage.setItem(LASTVISIT_KEY, String(Date.now())); } catch {}
+}
+function setWasAuth(v: boolean): void {
+  try {
+    if (v) localStorage.setItem(WASAUTH_KEY, "1");
+    else localStorage.removeItem(WASAUTH_KEY);
+  } catch {}
+}
+export function wasAuthOnDevice(): boolean {
+  try { return localStorage.getItem(WASAUTH_KEY) === "1"; } catch { return false; }
+}
 
 export function validateUsername(raw: string): string | null {
   const u = raw.trim();
@@ -34,6 +54,15 @@ export const useAuthStore = defineStore("auth", () => {
   async function init(): Promise<void> {
     if (!supabaseReady) return;
     const sb = supabase();
+    // Sliding 7-day window: read the PREVIOUS visit stamp first, then
+    // re-mark — each visit extends the window by another 7 days.
+    const last = Number(localStorage.getItem(LASTVISIT_KEY)) || 0;
+    const expired = last && Date.now() - last > SESSION_WINDOW_MS;
+    markVisit();
+    if (expired) {
+      try { await sb.auth.signOut(); } catch {}
+      try { localStorage.removeItem(LASTVISIT_KEY); } catch {}
+    }
     const { data } = await sb.auth.getSession();
     await applySession(data.session);
     sb.auth.onAuthStateChange((_evt, session) => {
@@ -47,10 +76,16 @@ export const useAuthStore = defineStore("auth", () => {
       email.value = null;
       profile.value = null;
       status.value = "guest";
+      setWasAuth(false);
       return;
     }
     userId.value = session.user.id;
     email.value = session.user.email ?? null;
+    setWasAuth(true);
+    markVisit();
+    // Optimistic: let the app in while the profile row is fetched —
+    // a returning user never waits on the network to see the chart.
+    status.value = "ready";
 
     const { data: row, error } = await supabase()
       .from("profiles")
@@ -60,6 +95,7 @@ export const useAuthStore = defineStore("auth", () => {
     if (error) {
       console.error("profile load failed", error);
       status.value = "guest";
+      setWasAuth(false);
       return;
     }
     if (row) {
@@ -84,6 +120,7 @@ export const useAuthStore = defineStore("auth", () => {
     email.value = null;
     profile.value = null;
     status.value = "guest";
+    setWasAuth(false);
     authModalOpen.value = false;
   }
 

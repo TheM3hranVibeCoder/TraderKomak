@@ -204,9 +204,12 @@ export class ChatRoom {
       case "join":
         this.join(conn, String(msg.nick ?? ""), typeof msg.adminKey === "string" ? msg.adminKey : undefined);
         return;
-      case "chat":
-        this.onChat(conn, String(msg.text ?? ""), typeof msg.img === "string" ? msg.img : undefined);
+      case "chat": {
+        const r = msg.reply as Record<string, unknown> | undefined;
+        const replyId = r && typeof r.id === "string" ? r.id.slice(0, 64) : undefined;
+        this.onChat(conn, String(msg.text ?? ""), typeof msg.img === "string" ? msg.img : undefined, replyId);
         return;
+      }
       case "delete":
         this.onDelete(conn, String(msg.id ?? ""));
         return;
@@ -260,7 +263,7 @@ export class ChatRoom {
     // No join/leave notices — page refreshes would spam the room.
   }
 
-  private onChat(conn: Conn, text: string, img?: string): void {
+  private onChat(conn: Conn, text: string, img?: string, replyId?: string): void {
     if (!conn.nick) return; // must join first
     if (this.isMutedNick(conn.nick)) {
       const m = this.mod.mutes.find((x) => x.nick.toLowerCase() === conn.nick!.toLowerCase());
@@ -283,6 +286,14 @@ export class ChatRoom {
     const cleanImg = this.sanitizeImage(img);
     if (!cleanText && !cleanImg) return;
 
+    // Reply quote: resolve the referenced message server-side and store a
+    // small excerpt so every client can render the quote from history.
+    let reply: ChatMessage["reply"];
+    if (replyId) {
+      const q = this.history.find((m) => m.id === replyId);
+      if (q) reply = { id: q.id, from: q.from, text: q.text?.slice(0, 80), img: q.img ? true : undefined };
+    }
+
     const message: ChatMessage = {
       id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       from: conn.nick,
@@ -290,6 +301,7 @@ export class ChatRoom {
       img: cleanImg,
       ts: Math.floor(now / 1000),
       owner: conn.admin || undefined,
+      reply,
     };
     this.history.push(message);
     if (this.history.length > HISTORY_CAP) this.history.splice(0, this.history.length - HISTORY_CAP);

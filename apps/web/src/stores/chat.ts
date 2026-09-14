@@ -193,10 +193,20 @@ function addHealListeners(): void {
     return true;
   }
 
+  /** Message being replied to (quote bar above the composer). */
+  const replyTo = ref<ChatMessage | null>(null);
+  function setReply(m: ChatMessage): void {
+    replyTo.value = m;
+  }
+  function clearReply(): void {
+    replyTo.value = null;
+  }
+
   /** Image + caption text in one message. */
   function sendChat(text: string | undefined, img: string | undefined): boolean {
     if (!client || (!text && !img)) return false;
-    client.sendChat(text, img);
+    client.sendChat(text, img, replyTo.value?.id);
+    replyTo.value = null;
     return true;
   }
 
@@ -236,6 +246,9 @@ function addHealListeners(): void {
     sendText,
     sendImage,
     sendChat,
+    replyTo,
+    setReply,
+    clearReply,
     deleteMessage,
     moderate,
     leave,

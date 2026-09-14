@@ -227,6 +227,9 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
   min-height: 0;
   overflow-y: auto;
   padding: 2px 20px 18px;
+  /* Keep Muted/Banned tabs as tall as the Users tab with ~8 rows, so the
+     panel doesn't shrink when switching tabs */
+  min-height: 380px;
 }
 .admin-search {
   width: 100%;

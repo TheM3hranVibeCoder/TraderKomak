@@ -95,6 +95,16 @@ export type ServerMessage =
    Framing: JSON text frames, one object per frame.
    A message carries either text, an inline image (data URL) or both. */
 
+/** Quote block attached to a chat message (a reply). The excerpt is cut
+ *  server-side so clients can render the quote without a history lookup. */
+export interface ChatReplyRef {
+  id: string;
+  from: string;
+  text?: string;
+  /** True when the quoted message was a photo (no text). */
+  img?: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   from: string;
@@ -104,6 +114,8 @@ export interface ChatMessage {
   ts: number;
   /** True when the author is the room owner/moderator. */
   owner?: boolean;
+  /** The message this one replies to, if any. */
+  reply?: ChatReplyRef;
 }
 
 export interface ChatJoinMessage {
@@ -140,6 +152,7 @@ export interface ChatBroadcastMessage {
   img?: string;
   ts: number;
   owner?: boolean;
+  reply?: ChatReplyRef;
 }
 
 export interface ChatOnlineMessage {

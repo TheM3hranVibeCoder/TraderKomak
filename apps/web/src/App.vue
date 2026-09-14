@@ -6,6 +6,7 @@ import { useWatchlistStore } from "@/stores/watchlist";
 import { useChatStore } from "@/stores/chat";
 import { useAuthStore } from "@/stores/auth";
 import { startCloudSync } from "@/services/cloudSync";
+import { wasAuthOnDevice } from "@/stores/auth";
 import { useNewsStore } from "@/stores/news";
 import NewsPanel from "@/components/NewsPanel.vue";
 import TopToolbar from "@/components/TopToolbar.vue";
@@ -26,9 +27,15 @@ const news = useNewsStore();
 const auth = useAuthStore();
 
 // Gate: charts only for signed-in users with a username picked. While the
-// session is still restoring ("loading") we also show the landing — it
-// flips to the app within a moment for returning users.
-const gate = computed(() => auth.status !== "ready");
+// session is still restoring we optimistically let returning users in
+// (flag survives on the device) so a refresh never flashes the landing —
+// guests (no flag) get the landing instantly, nothing leaks.
+const wasAuth = wasAuthOnDevice();
+const gate = computed(() => {
+  if (auth.status === "ready" || auth.status === "needs-username") return false;
+  if (auth.status === "loading") return !wasAuth;
+  return true;
+});
 
 // Signed-in identity drives the chat nickname; re-join when it lands.
 watch(
@@ -78,8 +85,9 @@ onMounted(() => {
   void auth.init();
   startCloudSync();
   // Only connect market data once the gate lets the user in.
-  watch(gate, (blocked) => {
+  watch(gate, (blocked, was) => {
     if (!blocked) market.init();
+    else if (was === false) market.destroy();
   }, { immediate: true });
 });
 
@@ -100,10 +108,7 @@ function onTimeframeChange(next: Timeframe): void {
 <template>
   <div class="app" :data-theme="theme.theme">
     <h1 class="sr-only">TraderKomak — live forex and crypto charting platform</h1>
-    <div v-if="auth.status === 'loading'" class="boot-splash" aria-hidden="true">
-      <img src="/favicon.png" alt="" width="72" height="72" />
-    </div>
-    <LandingPage v-else-if="gate" />
+    <LandingPage v-if="gate" />
     <AuthModal v-if="auth.authModalOpen" />
     <template v-else>
     <TopToolbar
@@ -165,22 +170,6 @@ function onTimeframeChange(next: Timeframe): void {
 </template>
 
 <style scoped>
-.boot-splash {
-  position: fixed;
-  inset: 0;
-  z-index: 400;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(160deg, #f2f6ff 0%, #e9efff 45%, #f4effe 100%);
-}
-.boot-splash img {
-  animation: boot-pulse 1.1s ease-in-out infinite;
-}
-@keyframes boot-pulse {
-  0%, 100% { opacity: 0.55; transform: scale(0.96); }
-  50% { opacity: 1; transform: scale(1); }
-}
 /* Screen-reader-only: present for landmarks/SEO, invisible on screen */
 .sr-only {
   position: absolute;
