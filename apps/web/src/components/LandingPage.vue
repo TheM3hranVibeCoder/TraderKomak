@@ -6,46 +6,17 @@ const auth = useAuthStore();
 
 <template>
   <div class="landing">
-    <!-- Decorative candlestick skyline, pure CSS/SVG so it needs no assets -->
-    <svg class="landing-chart" viewBox="0 0 1200 420" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
-      <g class="candles" stroke-width="0">
-        <g v-for="(c, i) in 42" :key="i" :transform="`translate(${i * 29 + 6}, 0)`">
-          <rect
-            class="wick"
-            :x="13"
-            :y="140 + Math.abs(Math.sin(i * 1.7)) * 90"
-            width="3"
-            :height="90 + Math.abs(Math.cos(i * 2.3)) * 120"
-          />
-          <rect
-            :class="['body', i % 3 === 0 ? 'down' : 'up']"
-            x="4"
-            :y="170 + Math.abs(Math.sin(i * 1.7)) * 80"
-            width="21"
-            :height="40 + Math.abs(Math.cos(i * 2.1)) * 90"
-            rx="2.5"
-          />
-        </g>
-      </g>
-      <path
-        class="trendline"
-        d="M0 340 C 180 320 300 260 480 240 S 800 200 960 130 S 1120 90 1200 60"
-        fill="none"
-      />
-    </svg>
+    <!-- soft floating glows over a light gradient -->
+    <div class="glow glow-a" aria-hidden="true"></div>
+    <div class="glow glow-b" aria-hidden="true"></div>
+    <div class="glow glow-c" aria-hidden="true"></div>
 
     <div class="landing-center">
-      <div class="landing-logo" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M3 17l5-6 4 3 6-8" />
-          <path d="M15 6h4v4" />
-          <path d="M3 21h18" />
-        </svg>
-      </div>
+      <img class="landing-logo" src="/favicon.svg" alt="" width="86" height="86" />
       <h1 class="landing-title">TraderKomak</h1>
       <p class="landing-sub">
         Live forex &amp; crypto charts — sessions, indicators, replay mode and a
-        trader community. Sign in to make the market yours.
+        trader community.
       </p>
       <button class="google-btn" type="button" @click="auth.signInWithGoogle()">
         <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true">
@@ -56,9 +27,6 @@ const auth = useAuthStore();
         </svg>
         Sign in with Google
       </button>
-      <p class="landing-note">
-        Your username, chat identity, drawings and watchlist follow your account.
-      </p>
     </div>
   </div>
 </template>
@@ -72,26 +40,32 @@ const auth = useAuthStore();
   align-items: center;
   justify-content: center;
   background:
-    radial-gradient(1100px 600px at 18% -8%, rgba(59, 130, 246, 0.22), transparent 55%),
-    radial-gradient(900px 500px at 85% 110%, rgba(139, 92, 246, 0.18), transparent 55%),
-    linear-gradient(165deg, #0a1020 0%, #0d1220 45%, #120e26 100%);
-  color: #e8eaf2;
+    radial-gradient(1200px 700px at 12% -10%, #dbe9ff 0%, transparent 55%),
+    radial-gradient(1000px 600px at 88% 108%, #e7dcff 0%, transparent 55%),
+    linear-gradient(160deg, #f2f6ff 0%, #e9efff 45%, #f4effe 100%);
+  color: #1f2430;
 }
-.landing-chart {
+.glow {
   position: absolute;
-  inset: auto 0 0 0;
-  width: 100%;
-  height: 52%;
-  opacity: 0.5;
+  border-radius: 50%;
+  filter: blur(60px);
+  opacity: 0.55;
   pointer-events: none;
 }
-.landing-chart .wick { fill: rgba(148, 163, 205, 0.35); }
-.landing-chart .body.up { fill: rgba(45, 212, 167, 0.5); }
-.landing-chart .body.down { fill: rgba(248, 113, 113, 0.5); }
-.landing-chart .trendline {
-  stroke: rgba(99, 102, 241, 0.6);
-  stroke-width: 2.5;
-  stroke-dasharray: 7 7;
+.glow-a {
+  width: 420px; height: 420px;
+  left: -120px; top: -140px;
+  background: rgba(96, 148, 255, 0.35);
+}
+.glow-b {
+  width: 480px; height: 480px;
+  right: -160px; bottom: -180px;
+  background: rgba(150, 110, 255, 0.3);
+}
+.glow-c {
+  width: 260px; height: 260px;
+  right: 18%; top: 8%;
+  background: rgba(45, 212, 167, 0.22);
 }
 .landing-center {
   position: relative;
@@ -106,28 +80,23 @@ const auth = useAuthStore();
   to { opacity: 1; transform: none; }
 }
 .landing-logo {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 62px;
-  height: 62px;
-  border-radius: 18px;
-  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 50%, #8b5cf6 100%);
-  color: #fff;
-  box-shadow: 0 10px 34px rgba(59, 130, 246, 0.4);
-  margin-bottom: 18px;
+  display: block;
+  margin: 0 auto 20px;
+  border-radius: 20px;
+  filter: drop-shadow(0 14px 34px rgba(59, 130, 246, 0.35));
 }
 .landing-title {
   margin: 0 0 10px;
   font-size: 34px;
   font-weight: 800;
   letter-spacing: -0.5px;
+  color: #171c2b;
 }
 .landing-sub {
-  margin: 0 0 26px;
+  margin: 0 0 28px;
   font-size: 14.5px;
   line-height: 1.65;
-  color: #9aa3bc;
+  color: #5a6378;
 }
 .google-btn {
   display: inline-flex;
@@ -136,18 +105,13 @@ const auth = useAuthStore();
   padding: 13px 26px;
   border: none;
   border-radius: 12px;
-  background: #fff;
+  background: #ffffff;
   color: #1f2430;
   font-size: 15px;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 8px 28px rgba(30, 60, 130, 0.18);
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
-.google-btn:hover { transform: translateY(-1px); box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45); }
-.landing-note {
-  margin: 20px 0 0;
-  font-size: 12px;
-  color: #6f778f;
-}
+.google-btn:hover { transform: translateY(-1px); box-shadow: 0 12px 34px rgba(30, 60, 130, 0.26); }
 </style>
