@@ -6,6 +6,8 @@ import { useDemoStore } from "@/stores/demo";
 import { useThemeStore } from "@/stores/theme";
 import { useIndicatorsStore } from "@/stores/indicators";
 import { useAuthStore } from "@/stores/auth";
+import { useChatStore } from "@/stores/chat";
+import AdminPanel from "./AdminPanel.vue";
 import { SUPPORTED_INSTRUMENTS, normalizeInstrument } from "@traderkomak/shared";
 import type { Timeframe } from "@traderkomak/shared";
 
@@ -24,6 +26,8 @@ const demo = useDemoStore();
 const themeStore = useThemeStore();
 const indicators = useIndicatorsStore();
 const auth = useAuthStore();
+const chat = useChatStore();
+const adminOpen = ref(false);
 
 // Profile chip dropdown (username + sign out)
 const profileOpen = ref(false);
@@ -131,6 +135,13 @@ function onSearchBlur() {
             <div class="profile-pop-name">{{ auth.profile?.username }}</div>
             <div class="profile-pop-mail">{{ auth.email }}</div>
           </div>
+          <button v-if="chat.isAdmin" class="profile-act admin" type="button" role="menuitem" @click="adminOpen = true; profileOpen = false">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z" />
+              <path d="M12 8v4M12 15.5h.01" />
+            </svg>
+            Admin panel
+          </button>
           <button class="profile-act" type="button" role="menuitem" @click="auth.signOut(); profileOpen = false">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -286,6 +297,7 @@ function onSearchBlur() {
       </button>
     </div>
   </header>
+  <AdminPanel v-if="adminOpen" @close="adminOpen = false" />
 </template>
 
 <style scoped>
@@ -514,7 +526,9 @@ function onSearchBlur() {
   font-size: 12.5px;
   cursor: pointer;
 }
-.profile-act:hover { background: var(--btn-hover); color: var(--offline); }
+.profile-act:hover { background: var(--btn-hover); color: var(--text); }
+.profile-act.admin { color: var(--accent); }
+.profile-act.admin:hover { color: var(--accent-hover); }
 .telegram-btn {
   display: inline-flex;
   align-items: center;

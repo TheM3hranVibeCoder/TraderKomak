@@ -12,7 +12,7 @@ const auth = useAuthStore();
     <div class="glow glow-c" aria-hidden="true"></div>
 
     <div class="landing-center">
-      <img class="landing-logo" src="/favicon.svg" alt="" width="86" height="86" />
+      <img class="landing-logo" src="/favicon.png" alt="" width="96" height="96" />
       <h1 class="landing-title">TraderKomak</h1>
       <p class="landing-sub">
         Live forex &amp; crypto charts — sessions, indicators, replay mode and a
