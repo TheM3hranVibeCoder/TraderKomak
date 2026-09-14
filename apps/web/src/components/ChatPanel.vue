@@ -44,14 +44,25 @@ function pickSticker(st: string): void {
   if (chat.sendChat("sticker:" + st, undefined)) scrollTop();
 }
 
-let flashTimer: ReturnType<typeof setTimeout> | null = null;
+let flashTimers: ReturnType<typeof setTimeout>[] = [];
 function jumpTo(id: string): void {
   const el = listEl.value?.querySelector(`[data-id="${CSS.escape(id)}"]`) as HTMLElement | null;
   if (!el) return; // original was pruned — stay put, like Telegram
   el.scrollIntoView({ block: "center", behavior: "smooth" });
-  el.classList.add("flash");
-  if (flashTimer) clearTimeout(flashTimer);
-  flashTimer = setTimeout(() => el.classList.remove("flash"), 1600);
+  // Inline styles instead of a CSS animation — always fires, even mid-scroll
+  flashTimers.forEach(clearTimeout);
+  flashTimers = [];
+  el.style.backgroundColor = "rgba(59, 130, 246, 0.28)";
+  el.style.borderRadius = "8px";
+  flashTimers.push(setTimeout(() => {
+    el.style.transition = "background-color 0.8s ease";
+    el.style.backgroundColor = "transparent";
+  }, 1400));
+  flashTimers.push(setTimeout(() => {
+    el.style.transition = "";
+    el.style.borderRadius = "";
+    el.style.backgroundColor = "";
+  }, 2400));
 }
 
 function startReply(m: ChatMessage): void {
@@ -1026,11 +1037,6 @@ onBeforeUnmount(() => {
 .msg-actions .msg-reply-btn { grid-column: 3; }
 .msg-reply-btn:hover { background: rgba(59, 130, 246, 0.15); }
 .msg:hover .msg-reply-btn { opacity: 1; }
-.msg.flash { animation: msg-flash 1.6s ease; }
-@keyframes msg-flash {
-  0%, 60% { background: rgba(59, 130, 246, 0.16); border-radius: 8px; }
-  100% { background: transparent; }
-}
 .msg-quote {
   display: flex;
   flex-direction: column;
