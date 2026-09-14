@@ -6,7 +6,7 @@ import { useWatchlistStore } from "@/stores/watchlist";
 import { useChatStore } from "@/stores/chat";
 import { useAuthStore } from "@/stores/auth";
 import { startCloudSync } from "@/services/cloudSync";
-import { wasAuthOnDevice } from "@/stores/auth";
+import { wasAuthOnDevice, authInFlight } from "@/stores/auth";
 import { useNewsStore } from "@/stores/news";
 import NewsPanel from "@/components/NewsPanel.vue";
 import TopToolbar from "@/components/TopToolbar.vue";
@@ -31,7 +31,7 @@ const auth = useAuthStore();
 // session is still restoring we optimistically let returning users in
 // (flag survives on the device) so a refresh never flashes the landing —
 // guests (no flag) get the landing instantly, nothing leaks.
-const wasAuth = wasAuthOnDevice();
+const wasAuth = wasAuthOnDevice() || authInFlight();
 const gate = computed(() => {
   if (auth.status === "ready" || auth.status === "needs-username") return false;
   if (auth.status === "loading") return !wasAuth;
@@ -40,10 +40,10 @@ const gate = computed(() => {
 
 // Signed-in identity drives the chat nickname; re-join when it lands.
 watch(
-  () => auth.status,
-  (s) => {
-    if (s === "ready" && auth.profile) {
-      if (chat.nick !== auth.profile.username) chat.setNick(auth.profile.username);
+  () => [auth.status, auth.profile?.username] as const,
+  ([s, uname]) => {
+    if (s === "ready" && uname) {
+      if (chat.nick !== uname) chat.setNick(uname);
     } else if (s === "needs-username") {
       auth.authModalOpen = true;
     }

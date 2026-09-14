@@ -40,6 +40,15 @@ function loadCachedProfile(): Profile | null {
   return null;
 }
 
+/** Set while an OAuth redirect is in flight — the app gate uses it to
+ *  render the chart (not the landing) during session restore, because a
+ *  returning OAuth visitor IS signed in, just not confirmed yet. */
+const INFLIGHT_KEY = "tk-auth-inflight";
+
+export function authInFlight(): boolean {
+  try { return sessionStorage.getItem(INFLIGHT_KEY) === "1"; } catch { return false; }
+}
+
 export function wasAuthOnDevice(): boolean {
   try { return localStorage.getItem(WASAUTH_KEY) === "1"; } catch { return false; }
 }
@@ -84,6 +93,7 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   async function applySession(session: { user: { id: string; email?: string | null; user_metadata?: Record<string, unknown> } | null } | null): Promise<void> {
+    try { sessionStorage.removeItem(INFLIGHT_KEY); } catch {}
     if (!session?.user) {
       userId.value = null;
       email.value = null;
@@ -122,6 +132,7 @@ export const useAuthStore = defineStore("auth", () => {
 
   function signInWithGoogle(): void {
     if (!supabaseReady) return;
+    try { sessionStorage.setItem(INFLIGHT_KEY, "1"); } catch {}
     void supabase().auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: window.location.origin },

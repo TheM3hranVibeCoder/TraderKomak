@@ -97,6 +97,25 @@ function addHealListeners(): void {
         }
       },
       onChat: (msg) => {
+        // Own echo: swap the optimistic placeholder for the real message.
+        if (msg.from === nick.value) {
+          const pIdx = pendingLocal.findIndex(
+            (p) => p.from === msg.from && (p.text ?? "") === (msg.text ?? "") && !!p.img === !!msg.img
+          );
+          if (pIdx >= 0) {
+            const p = pendingLocal.splice(pIdx, 1)[0]!;
+            const i = messages.value.findIndex((m) => m.id === p.localId);
+            if (i >= 0) {
+              const next = [...messages.value];
+              next[i] = msg;
+              messages.value = next;
+            } else {
+              messages.value = [...messages.value, msg];
+            }
+            if (open.value) markSeen(msg.ts);
+            return;
+          }
+        }
         // Messages hidden behind the nick gate count as unseen too.
         if (!open.value || !nick.value) {
           unread.value++;
@@ -245,11 +264,39 @@ function addHealListeners(): void {
     replyTo.value = null;
   }
 
+  /** Optimistic-echo bookkeeping: placeholders we rendered for our own
+   *  sends, replaced by the server broadcast (deduped in onChat). */
+  const pendingLocal: { localId: string; from: string; text?: string; img?: string }[] = [];
+
   /** Image + caption text in one message. */
   function sendChat(text: string | undefined, img: string | undefined): boolean {
     if (!client || (!text && !img)) return false;
-    client.sendChat(text, img, replyTo.value?.id);
+    const reply = replyTo.value;
+    client.sendChat(text, img, reply?.id);
     replyTo.value = null;
+    // Telegram-style: render the sent message (with its quote) instantly.
+    // The server broadcast swaps this placeholder for the real message.
+    if (nick.value) {
+      const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      messages.value = [
+        ...messages.value,
+        {
+          id: localId,
+          from: nick.value,
+          text,
+          img,
+          ts: Math.floor(Date.now() / 1000),
+          reply: reply
+            ? { id: reply.id, from: reply.from, text: reply.text?.slice(0, 80), img: reply.img ? true : undefined }
+            : undefined,
+        },
+      ];
+      pendingLocal.push({ localId, from: nick.value, text, img });
+      setTimeout(() => {
+        const i = pendingLocal.findIndex((p) => p.localId === localId);
+        if (i >= 0) pendingLocal.splice(i, 1);
+      }, 60_000);
+    }
     return true;
   }
 

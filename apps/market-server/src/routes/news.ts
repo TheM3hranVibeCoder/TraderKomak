@@ -9,6 +9,8 @@
  * happened so "actual" values appear quickly.
  */
 import type { FastifyInstance } from "fastify";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
 
 const FF_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
 const BASE_TTL = 30 * 60_000;
@@ -28,6 +30,31 @@ interface NewsItem {
 
 let cache: { fetchedAt: number; items: NewsItem[] } | null = null;
 let inFlight: Promise<void> | null = null;
+/** Upstream is polite-fetched at most once a minute, whatever happens. */
+let lastAttempt = 0;
+
+const DATA_DIR = join(process.cwd(), "data");
+const CACHE_FILE = join(DATA_DIR, "news-cache.json");
+
+/** Disk-backed cache: a server restart must not blank the panel until the
+ *  next upstream fetch succeeds (the feed is rate-limited and the first
+ *  post-restart fetch often fails). */
+function loadDisk(): void {
+  try {
+    const raw = JSON.parse(readFileSync(CACHE_FILE, "utf8")) as { fetchedAt: number; items: NewsItem[] };
+    if (raw && Array.isArray(raw.items) && raw.items.length > 0) {
+      cache = raw;
+    }
+  } catch {}
+}
+
+function saveDisk(): void {
+  if (!cache) return;
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(CACHE_FILE, JSON.stringify(cache));
+  } catch {}
+}
 
 function ttlMs(items: NewsItem[], now: number): number {
   // A high-impact release in the last 10 minutes → refresh fast to catch
@@ -82,22 +109,43 @@ async function refresh(): Promise<void> {
 }
 
 export function registerNewsRoute(app: FastifyInstance): void {
+  loadDisk();
+  // Warm the cache at startup so the first visitor never waits upstream.
+  void maybeRefresh(app);
+
   app.get("/api/news", async () => {
     const now = Date.now();
-    if (cache && now - cache.fetchedAt < ttlMs(cache.items, now)) {
-      return { ...cache, stale: false };
+    // Fresh enough → answer instantly from memory.
+    const cur = cache;
+    if (cur && now - cur.fetchedAt < ttlMs(cur.items, now)) {
+      return { ...cur, stale: false };
     }
-    if (!inFlight) {
-      inFlight = refresh()
-        .catch((err) => {
-          app.log.warn({ err: err instanceof Error ? err.message : "unknown" }, "FF calendar fetch failed");
-        })
-        .finally(() => {
-          inFlight = null;
-        });
+    if (cur) {
+      // Stale but present: serve it NOW and refresh in the background.
+      // A slow/blocked upstream must never blank the panel.
+      void maybeRefresh(app);
+      return { ...cur, stale: true };
     }
-    await inFlight;
-    if (cache) return { ...cache, stale: now - cache.fetchedAt > ttlMs(cache.items, now) };
+    // No cache at all (first boot, disk load failed): wait one round.
+    await maybeRefresh(app);
+    if (cache) return { ...cache, stale: false };
     return { fetchedAt: 0, items: [], stale: true, error: "news feed unavailable" };
   });
+}
+
+/** Throttled upstream refresh — at most one attempt per 60s, one in flight. */
+function maybeRefresh(app: FastifyInstance): Promise<void> {
+  const now = Date.now();
+  if (inFlight) return inFlight;
+  if (cache && now - lastAttempt < 60_000) return Promise.resolve();
+  lastAttempt = now;
+  inFlight = refresh()
+    .then(() => saveDisk())
+    .catch((err) => {
+      app.log.warn({ err: err instanceof Error ? err.message : "unknown" }, "FF calendar fetch failed");
+    })
+    .finally(() => {
+      inFlight = null;
+    });
+  return inFlight;
 }

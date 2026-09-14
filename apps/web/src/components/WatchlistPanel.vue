@@ -785,7 +785,7 @@ onBeforeUnmount(() => {
     bottom: 0;
     width: min(320px, calc(100vw - 60px));
     min-width: min(320px, calc(100vw - 60px));
-    z-index: 30;
+    z-index: 50; /* above chart overlays (settings gear 40) like the chat panel */
     border-left: 1px solid var(--border);
     box-shadow: -12px 0 28px rgba(0, 0, 0, 0.28);
   }
