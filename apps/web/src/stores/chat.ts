@@ -211,13 +211,18 @@ function addHealListeners(): void {
         incomingDm.value = dm;
       },
       onDmStatus: (st) => {
-        dmStatuses.value = { ...dmStatuses.value, [st.id]: { nick: st.nick, read: st.read, offline: st.offline } };
+        flashDmStatus(st.id, { nick: st.nick, read: st.read, offline: st.offline });
       },
       onTgPopup: (id) => {
         tgPopupId.value = id;
       },
       onTgResult: (r) => {
-        tgResults.value = [{ nick: r.nick, action: r.action, at: Date.now() }, ...tgResults.value].slice(0, 100);
+        const entry = { nick: r.nick, action: r.action, at: Date.now() };
+        tgResults.value = [entry, ...tgResults.value];
+        // Result chips are transient — fade out of the panel after 6s.
+        setTimeout(() => {
+          tgResults.value = tgResults.value.filter((x) => x !== entry);
+        }, 6000);
       },
     });
     clientAdminKey = currentKey;
@@ -251,6 +256,16 @@ function addHealListeners(): void {
   /* ── Admin tools state ── */
   const userInfo = ref<{ nick: string; lastIp: string | null; online: boolean; country: string | null } | null>(null);
   const dmStatuses = ref<Record<string, { nick: string; read: boolean; offline: boolean }>>({});
+  /** Status chips are transient: "Read ✓"/"offline" show for a few seconds
+   *  next to the user row, then clear. */
+  function flashDmStatus(id: string, entry: { nick: string; read: boolean; offline: boolean }, ms = 6000): void {
+    dmStatuses.value = { ...dmStatuses.value, [id]: entry };
+    setTimeout(() => {
+      const next = { ...dmStatuses.value };
+      delete next[id];
+      dmStatuses.value = next;
+    }, ms);
+  }
   const tgResults = ref<{ nick: string; action: "join" | "close"; at: number }[]>([]);
 
   function askUserInfo(nick: string): void {
@@ -263,7 +278,9 @@ function addHealListeners(): void {
   /** Send a direct message to a user; returns its tracking id. */
   function adminDm(nick: string, text: string): string {
     const id = `dm-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    dmStatuses.value = { ...dmStatuses.value, [id]: { nick, read: false, offline: false } };
+    // "Sent…" until the server reports Read/offline — auto-expires so a
+    // user who never looks at it doesn't leave a chip behind forever.
+    flashDmStatus(id, { nick, read: false, offline: false }, 30_000);
     client?.sendAdminDm(nick, text, id);
     return id;
   }

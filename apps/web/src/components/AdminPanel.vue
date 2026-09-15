@@ -72,11 +72,12 @@ async function openDetails(nick: string): Promise<void> {
       .eq("username_lower", nick.toLowerCase())
       .maybeSingle();
     if (p) {
-      const { data: e } = await supabase()
+      const { data: e, error: eErr } = await supabase()
         .from("user_emails")
         .select("email")
         .eq("user_id", p.user_id as string)
         .maybeSingle();
+      if (eErr) console.error("user_emails read failed (is the table/RLS created?)", eErr);
       if (details.value && details.value.nick === nick) details.value.email = (e?.email as string) ?? null;
     }
   } catch {}
@@ -249,7 +250,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
               <button class="mini-x" type="button" aria-label="Close" @click="details = null">✕</button>
             </div>
             <div class="detail-grid">
-              <div class="d-row"><span class="d-label">Email</span><span class="d-value">{{ details.loading ? "…" : details.email ?? "not available" }}</span></div>
+              <div class="d-row"><span class="d-label">Email</span><span class="d-value">{{ details.loading ? "…" : details.email ?? "not synced yet — opens after their next login" }}</span></div>
               <div class="d-row"><span class="d-label">Status</span><span class="d-value">{{ chat.userInfo?.nick.toLowerCase() === details.nick.toLowerCase() ? (chat.userInfo.online ? "online" : "offline") : "…" }}</span></div>
               <div class="d-row"><span class="d-label">Last IP</span><span class="d-value mono">{{ chat.userInfo?.nick.toLowerCase() === details.nick.toLowerCase() ? chat.userInfo.lastIp ?? "unknown" : "…" }}</span></div>
               <div class="d-row"><span class="d-label">Country</span><span class="d-value">{{ chat.userInfo?.nick.toLowerCase() === details.nick.toLowerCase() ? chat.userInfo.country ?? "unknown" : "…" }}</span></div>
