@@ -805,6 +805,29 @@ function eff(v: string | null, theme: string): string {
   return v ?? theme;
 }
 
+/** Relative luminance 0–1 of a #rrggbb color (perceptual weights). */
+function relLuma(hex: string): number {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return 0;
+  const n = parseInt(m[1]!, 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+}
+
+/** Is the CUSTOMIZED chart background light or dark? When no custom
+ *  background is set this follows the site theme (same as before). */
+function chartBgIsLight(): boolean {
+  const s = chartStyle.value;
+  const custom = s.bgSolid ?? s.bgTop ?? s.bgBottom;
+  if (!custom) return !isDarkTheme.value;
+  if (s.bgMode === "solid") return relLuma(s.bgSolid ?? themeBgPair()[0]) > 0.5;
+  const top = relLuma(s.bgTop ?? themeBgPair()[0]);
+  const bottom = relLuma(s.bgBottom ?? themeBgPair()[1]);
+  return (top + bottom) / 2 > 0.5;
+}
+
 function applyChartStyle(): void {
   const s = chartStyle.value;
   const pane = paneRef.value;
@@ -822,8 +845,22 @@ function applyChartStyle(): void {
     wickUp: s.wickUp ?? DEFAULT_CANDLES.wickUp,
     wickDown: s.wickDown ?? DEFAULT_CANDLES.wickDown,
   });
-  adapter?.setAxisColors({ text: s.axisText, border: s.axisBorder });
-  adapter?.setCrosshairColors({ vert: s.crossVert, horz: s.crossHorz });
+  // When the chart background is CUSTOMIZED, axis text/border and the
+  // crosshair adapt to ITS brightness (white on dark backgrounds, black on
+  // light ones) instead of following the site theme. Explicit user colors
+  // still win; with no custom background everything follows the theme.
+  const bgCustom = !!(s.bgSolid ?? s.bgTop ?? s.bgBottom);
+  const lightBg = chartBgIsLight();
+  const autoInk = lightBg ? "#101318" : "#e8ecf4";
+  const autoBorder = lightBg ? "rgba(16, 19, 24, 0.55)" : "rgba(232, 236, 244, 0.55)";
+  adapter?.setAxisColors({
+    text: s.axisText ?? (bgCustom ? autoInk : null),
+    border: s.axisBorder ?? (bgCustom ? autoBorder : null),
+  });
+  adapter?.setCrosshairColors({
+    vert: s.crossVert ?? (bgCustom ? autoInk : null),
+    horz: s.crossHorz ?? (bgCustom ? autoInk : null),
+  });
   localStorage.setItem(CHART_STYLE_KEY, JSON.stringify(s));
   window.dispatchEvent(new CustomEvent("tk-local-change", { detail: { key: "chart-style" } }));
 }
