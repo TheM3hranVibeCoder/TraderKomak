@@ -78,13 +78,27 @@ async function openDetails(nick: string): Promise<void> {
       .eq("username_lower", nick.toLowerCase())
       .maybeSingle();
     if (p) {
-      const { data: e, error: eErr } = await supabase()
-        .from("user_emails")
-        .select("email")
-        .eq("user_id", p.user_id as string)
-        .maybeSingle();
-      if (eErr) console.error("user_emails read failed (is the table/RLS created?)", eErr);
-      if (details.value && details.value.nick === nick) details.value.email = (e?.email as string) ?? null;
+      const uid = p.user_id as string;
+      // 1) Live lookup straight from the auth table (admin-only RPC —
+      //    works even if the user never logged in since the email sync
+      //    existed). Falls back to the synced user_emails row.
+      let email: string | null = null;
+      const { data: rpcMail, error: rpcErr } = await supabase()
+        .rpc("admin_user_email", { uid });
+      if (!rpcErr && typeof rpcMail === "string" && rpcMail) {
+        email = rpcMail;
+      } else if (rpcErr && (rpcErr as { code?: string }).code !== "404" && (rpcErr as { code?: string }).code !== "42883" && (rpcErr as { code?: string }).code !== "PGRST202") {
+        console.warn("admin_user_email rpc unavailable — falling back to user_emails");
+      }
+      if (!email) {
+        const { data: e } = await supabase()
+          .from("user_emails")
+          .select("email")
+          .eq("user_id", uid)
+          .maybeSingle();
+        email = (e?.email as string) ?? null;
+      }
+      if (details.value && details.value.nick === nick) details.value.email = email;
     }
   } catch {}
   if (details.value) details.value.loading = false;
