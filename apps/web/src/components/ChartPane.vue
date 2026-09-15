@@ -5105,6 +5105,8 @@ onBeforeUnmount(() => {
           title="Step back (hold to repeat)"
           @pointerdown.prevent="holdStep(-1)"
           @mouseup="stopHold"
+          @pointerup="stopHold"
+          @pointercancel="stopHold"
           @mouseleave="stopHold"
         >⏮</button>
         <button class="rp-btn accent" :title="replay.playing ? 'Pause' : 'Play'" @click="togglePlay">
@@ -5115,6 +5117,8 @@ onBeforeUnmount(() => {
           title="Step forward (hold to repeat)"
           @pointerdown.prevent="holdStep(1)"
           @mouseup="stopHold"
+          @pointerup="stopHold"
+          @pointercancel="stopHold"
           @mouseleave="stopHold"
         >⏭</button>
         <span class="rp-sep" />
