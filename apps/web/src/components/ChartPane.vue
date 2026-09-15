@@ -934,7 +934,19 @@ function saveTemplate(): void {
 }
 function applyTemplate(): void {
   const t = templates.value.find((x) => x.name === selectedTpl.value);
-  if (t) chartStyle.value = JSON.parse(JSON.stringify(t.style));
+  if (!t) return;
+  const applied = JSON.parse(JSON.stringify(t.style)) as ChartStyle;
+  // Same rule as the live background picker: when the template carries a
+  // custom background, the axis/crosshair ink goes AUTO so it adapts to
+  // that background's brightness. Old templates saved with stale explicit
+  // ink colors must not block the adaptation.
+  if (applied.bgSolid ?? applied.bgTop ?? applied.bgBottom) {
+    applied.axisText = null;
+    applied.axisBorder = null;
+    applied.crossVert = null;
+    applied.crossHorz = null;
+  }
+  chartStyle.value = applied;
 }
 function deleteTemplate(): void {
   if (!selectedTpl.value) return;
