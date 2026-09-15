@@ -863,8 +863,37 @@ function applyChartStyle(): void {
   window.dispatchEvent(new CustomEvent("tk-local-change", { detail: { key: "chart-style" } }));
 }
 watch(chartStyle, applyChartStyle, { deep: true });
-// Theme flips re-resolve every null color — the default look always follows light/dark
-watch(isDarkTheme, () => applyChartStyle());
+
+/** "Customized" = ANY background OR candle color is set (a saved template
+ *  counts too). A customized chart is pinned: theme flips keep its colors
+ *  and only re-ink text/border/cursor to match the background. A fully
+ *  default chart keeps following the theme. */
+function chartIsCustomized(): boolean {
+  const s = chartStyle.value;
+  return !!(s.bgSolid ?? s.bgTop ?? s.bgBottom ?? s.up ?? s.down ?? s.borderUp ?? s.borderDown ?? s.wickUp ?? s.wickDown);
+}
+
+// Theme flips: default charts re-resolve every null color (the look always
+// follows light/dark). CUSTOMIZED charts bake their unset background/candle
+// fields at the current theme's colors ONCE, so switching modes never moves
+// them again — only the auto ink re-adapts to the background brightness.
+watch(isDarkTheme, () => {
+  if (chartIsCustomized()) {
+    const s = chartStyle.value;
+    if (s.bgMode === "solid") s.bgSolid ??= themeBgPair()[0];
+    else {
+      s.bgTop ??= themeBgPair()[0];
+      s.bgBottom ??= themeBgPair()[1];
+    }
+    s.up ??= DEFAULT_CANDLES.up;
+    s.down ??= DEFAULT_CANDLES.down;
+    s.borderUp ??= DEFAULT_CANDLES.borderUp;
+    s.borderDown ??= DEFAULT_CANDLES.borderDown;
+    s.wickUp ??= DEFAULT_CANDLES.wickUp;
+    s.wickDown ??= DEFAULT_CANDLES.wickDown;
+  }
+  applyChartStyle();
+});
 function resetChartStyle(): void {
   chartStyle.value = defaultChartStyle();
 }
