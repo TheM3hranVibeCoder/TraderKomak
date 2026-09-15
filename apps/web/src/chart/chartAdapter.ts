@@ -232,6 +232,10 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false,
+          // The overlay must NEVER feed the price scale: the scale is
+          // computed from the candles alone, so adding/removing/dragging
+          // an MA can't shift the view (the "price scale jumps down" bug).
+          autoscaleInfoProvider: () => null,
         },
         0 // overlay on the main chart — pans/zoom with the candles
       );
