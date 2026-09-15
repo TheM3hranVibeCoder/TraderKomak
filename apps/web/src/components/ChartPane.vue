@@ -1147,7 +1147,6 @@ watch(
     nextTick(updateBadgePosition);
     if (indicators.rsiAdded) nextTick(pushRsiData);
     if (indicators.smaAdded || indicators.emaAdded) nextTick(pushMaData);
-    if (indicators.smaAdded || indicators.emaAdded) nextTick(pushMaData);
     if (!prev || prev.length === 0 || next.length === 0) {
       // Fresh history after a symbol/timeframe switch (or first load): the
       // price scale may carry a MANUALLY-dragged range from the previous

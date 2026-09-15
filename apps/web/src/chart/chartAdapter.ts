@@ -240,7 +240,13 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
   }
 
   function setMaData(kind: "sma" | "ema", points: { time: number; value: number }[]): void {
-    ensureMa(kind).setData(points as never);
+    const series = ensureMa(kind);
+    // setData on a fresh series refits the price scale and resets the
+    // visible range — the chart visibly "jumps down". Snapshot the user's
+    // viewport and put it back exactly as it was.
+    const range = chart.timeScale().getVisibleLogicalRange();
+    series.setData(points as never);
+    if (range) chart.timeScale().setVisibleLogicalRange(range);
   }
 
   function updateMaLast(kind: "sma" | "ema", point: { time: number; value: number }): void {
