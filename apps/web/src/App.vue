@@ -31,7 +31,7 @@ const auth = useAuthStore();
 // session is still restoring we optimistically let returning users in
 // (flag survives on the device) so a refresh never flashes the landing —
 // guests (no flag) get the landing instantly, nothing leaks.
-const wasAuth = wasAuthOnDevice() || authInFlight();
+const wasAuth = wasAuthOnDevice();
 
 // Phone: the drawing-tools column and the watchlist/chat/news rail start
 // collapsed so the chart gets the full width; the edge arrows toggle them.
@@ -62,12 +62,10 @@ function toggleRail(): void {
   }
 }
 onBeforeUnmount(() => window.removeEventListener("resize", onResize));
-const gate = computed(() => {
-  if (auth.status === "ready") return false;
-  if (auth.status === "needs-username") return true; // no username → no charts
-  if (auth.status === "loading") return !wasAuth;
-  return true;
-});
+const gate = computed(() => auth.status !== "ready");
+/** OAuth just redirected back — show a neutral splash while the session +
+ *  profile are confirmed (never the chart: the user may still be new). */
+const oauthReturning = computed(() => auth.status === "loading" && authInFlight());
 
 // Signed-in identity drives the chat nickname; re-join when it lands.
 watch(
@@ -140,7 +138,10 @@ function onTimeframeChange(next: Timeframe): void {
 <template>
   <div class="app" :data-theme="theme.theme">
     <h1 class="sr-only">TraderKomak — live forex and crypto charting platform</h1>
-    <LandingPage v-if="gate" />
+    <div v-if="oauthReturning" class="boot-splash" aria-hidden="true">
+      <img src="/favicon.png" alt="" width="72" height="72" />
+    </div>
+    <LandingPage v-else-if="gate" />
     <AuthModal v-if="auth.authModalOpen" />
     <BannedPage v-if="chat.banned" />
     <UserPopups />
@@ -227,6 +228,20 @@ function onTimeframeChange(next: Timeframe): void {
 </template>
 
 <style scoped>
+.boot-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(160deg, #f2f6ff 0%, #e9efff 45%, #f4effe 100%);
+}
+.boot-splash img { animation: boot-pulse 1.1s ease-in-out infinite; }
+@keyframes boot-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.96); }
+  50% { opacity: 1; transform: scale(1); }
+}
 .edge-handle { display: none; }
 @media (max-width: 640px) {
   .edge-handle {

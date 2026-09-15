@@ -109,9 +109,10 @@ export const useAuthStore = defineStore("auth", () => {
     email.value = session.user.email ?? null;
     setWasAuth(true);
     markVisit();
-    // Optimistic: let the app in while the profile row is fetched —
-    // a returning user never waits on the network to see the chart.
-    status.value = "ready";
+    // Optimistic fast-path ONLY for returning users (profile cached on this
+    // device) — a brand-new Google account must wait for the profile check,
+    // otherwise the chart flashes for a second before the username picker.
+    if (profile.value) status.value = "ready";
 
     const { data: row, error } = await supabase()
       .from("profiles")
