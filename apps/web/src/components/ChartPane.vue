@@ -3753,11 +3753,19 @@ onMounted(async () => {
       e.preventDefault();
       e.stopPropagation();
       const t = replayTimeAt(e.clientX);
-      if (t !== null) {
-        replay.startAt(t);
-        // Cut here: jump so the last candle sits at the right with free space
-        focusReplayEdge();
+      if (t === null) return;
+      // Touch has no hover preview, so a tap must NOT cut immediately —
+      // on phones the first touch used to slice the chart wherever the
+      // user happened to tap. Coarse pointers: a tap only MOVES the
+      // preview line; the ▶ button in the replay panel confirms the cut.
+      if (window.matchMedia("(pointer: coarse)").matches) {
+        pickTime.value = t;
+        recalcRects();
+        return;
       }
+      replay.startAt(t);
+      // Cut here: jump so the last candle sits at the right with free space
+      focusReplayEdge();
       return;
     }
     // The price/time scales are not drawing surfaces — ignore presses there
