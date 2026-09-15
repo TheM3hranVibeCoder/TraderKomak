@@ -23,6 +23,16 @@ export interface ChatClientHandlers {
   onMuted: (until: number) => void;
   onUnmuted: () => void;
   onRateLimit: (waitMs: number) => void;
+  /** Admin: details for a nick. */
+  onUserInfo?: (info: { nick: string; lastIp: string | null; online: boolean; country: string | null }) => void;
+  /** User: a direct message from the admin. */
+  onAdminDm?: (dm: { id: string; text: string }) => void;
+  /** Admin: DM receipt update (offline = could not deliver). */
+  onDmStatus?: (s: { id: string; nick: string; read: boolean; offline: boolean }) => void;
+  /** User: show the join-Telegram popup. */
+  onTgPopup?: (id: string) => void;
+  /** Admin: who joined / closed the Telegram popup. */
+  onTgResult?: (r: { nick: string; action: "join" | "close" }) => void;
 }
 
 function chatUrl(): string {
@@ -97,6 +107,22 @@ export class ChatClient {
 
   moderate(action: "mute" | "ban" | "unmute" | "unban", nick: string, minutes?: number): void {
     this.send({ type: "moderate", action, nick, minutes });
+  }
+
+  requestUserInfo(nick: string): void {
+    this.send({ type: "userinfo", nick });
+  }
+  sendAdminDm(nick: string, text: string, id: string): void {
+    this.send({ type: "admin_dm", nick, text, id });
+  }
+  sendDmRead(id: string): void {
+    this.send({ type: "admin_dm_read", id });
+  }
+  sendTgBroadcast(id: string): void {
+    this.send({ type: "tg_broadcast", id });
+  }
+  sendTgResult(id: string, action: "join" | "close"): void {
+    this.send({ type: "tg_result", id, action });
   }
 
   private send(payload: Record<string, unknown>): void {
@@ -315,6 +341,21 @@ export class ChatClient {
         break;
       case "error":
         this.handlers.onError(msg.message ?? "Chat error");
+        break;
+      case "userinfo":
+        this.handlers.onUserInfo?.(msg as unknown as { nick: string; lastIp: string | null; online: boolean; country: string | null });
+        break;
+      case "admin_dm":
+        this.handlers.onAdminDm?.({ id: msg.id, text: msg.text });
+        break;
+      case "dm_status":
+        this.handlers.onDmStatus?.(msg as unknown as { id: string; nick: string; read: boolean; offline: boolean });
+        break;
+      case "tg_popup":
+        this.handlers.onTgPopup?.(msg.id);
+        break;
+      case "tg_result":
+        this.handlers.onTgResult?.({ nick: msg.nick, action: msg.action });
         break;
     }
   }

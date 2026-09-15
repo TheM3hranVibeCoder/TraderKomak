@@ -191,6 +191,37 @@ export interface ChatRateLimitMessage {
   waitMs: number;
 }
 
+/* Admin tools (v1 additions): user info, direct messages, TG popup. */
+export interface ChatUserInfoMessage {
+  type: "userinfo";
+  nick: string;
+  lastIp: string | null;
+  online: boolean;
+  country: string | null;
+}
+export interface ChatAdminDmMessage {
+  type: "admin_dm";
+  id: string;
+  text: string;
+}
+export interface ChatDmStatusMessage {
+  type: "dm_status";
+  id: string;
+  nick: string;
+  read: boolean;
+  offline: boolean;
+}
+export interface ChatTgPopupMessage {
+  type: "tg_popup";
+  id: string;
+}
+export interface ChatTgResultMessage {
+  type: "tg_result";
+  nick: string;
+  id: string;
+  action: "join" | "close";
+}
+
 export type ChatServerMessage =
   | ChatHistoryMessage
   | ChatBroadcastMessage
@@ -201,6 +232,11 @@ export type ChatServerMessage =
   | ChatMutedMessage
   | ChatUnmutedMessage
   | ChatRateLimitMessage
+  | ChatUserInfoMessage
+  | ChatAdminDmMessage
+  | ChatDmStatusMessage
+  | ChatTgPopupMessage
+  | ChatTgResultMessage
   | PongMessage
   | ErrorMessage;
 

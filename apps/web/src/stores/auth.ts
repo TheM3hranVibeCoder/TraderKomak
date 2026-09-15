@@ -128,6 +128,13 @@ export const useAuthStore = defineStore("auth", () => {
       profile.value = { username: row.username, avatarUrl: row.avatar_url ?? null, isAdmin: !!row.is_admin };
       try { localStorage.setItem(PROFILE_KEY, JSON.stringify(profile.value)); } catch {}
       status.value = "ready";
+      // Keep the email table fresh (readable only by admins) so the admin
+      // panel can show which Google account a username belongs to.
+      if (email.value) {
+        void supabase()
+          .from("user_emails")
+          .upsert({ user_id: session.user.id, email: email.value });
+      }
       // Supabase-driven admin: fetch the moderator key from the
       // admin-only table and upgrade the chat connection with it.
       if (profile.value.isAdmin) {

@@ -17,6 +17,7 @@ import DrawingToolbar from "@/components/DrawingToolbar.vue";
 import LandingPage from "@/components/LandingPage.vue";
 import AuthModal from "@/components/AuthModal.vue";
 import BannedPage from "@/components/BannedPage.vue";
+import UserPopups from "@/components/UserPopups.vue";
 import type { Timeframe } from "@traderkomak/shared";
 
 const market = useMarketStore();
@@ -141,7 +142,8 @@ function onTimeframeChange(next: Timeframe): void {
     <LandingPage v-if="gate" />
     <AuthModal v-if="auth.authModalOpen" />
     <BannedPage v-if="chat.banned" />
-    <template v-else>
+    <UserPopups />
+    <template v-if="!gate">
     <TopToolbar
       :instrument="market.instrument"
       :timeframe="market.timeframe"

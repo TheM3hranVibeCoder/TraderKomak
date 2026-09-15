@@ -204,6 +204,21 @@ function addHealListeners(): void {
       onRateLimit: (waitMs) => {
         rateWaitUntil.value = Date.now() + waitMs;
       },
+      onUserInfo: (info) => {
+        userInfo.value = info;
+      },
+      onAdminDm: (dm) => {
+        incomingDm.value = dm;
+      },
+      onDmStatus: (st) => {
+        dmStatuses.value = { ...dmStatuses.value, [st.id]: { nick: st.nick, read: st.read, offline: st.offline } };
+      },
+      onTgPopup: (id) => {
+        tgPopupId.value = id;
+      },
+      onTgResult: (r) => {
+        tgResults.value = [{ nick: r.nick, action: r.action, at: Date.now() }, ...tgResults.value].slice(0, 100);
+      },
     });
     clientAdminKey = currentKey;
     client.connect(nick.value, currentKey);
@@ -231,6 +246,45 @@ function addHealListeners(): void {
     try { localStorage.setItem(ADMIN_KEY, key); } catch {}
     isAdmin.value = true;
     ensureClient();
+  }
+
+  /* ── Admin tools state ── */
+  const userInfo = ref<{ nick: string; lastIp: string | null; online: boolean; country: string | null } | null>(null);
+  const dmStatuses = ref<Record<string, { nick: string; read: boolean; offline: boolean }>>({});
+  const tgResults = ref<{ nick: string; action: "join" | "close"; at: number }[]>([]);
+
+  function askUserInfo(nick: string): void {
+    userInfo.value = { nick, lastIp: null, online: false, country: null };
+    client?.requestUserInfo(nick);
+  }
+  function clearUserInfo(): void {
+    userInfo.value = null;
+  }
+  /** Send a direct message to a user; returns its tracking id. */
+  function adminDm(nick: string, text: string): string {
+    const id = `dm-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    dmStatuses.value = { ...dmStatuses.value, [id]: { nick, read: false, offline: false } };
+    client?.sendAdminDm(nick, text, id);
+    return id;
+  }
+  /* ── User side: incoming admin DM + telegram popup ── */
+  const incomingDm = ref<{ id: string; text: string } | null>(null);
+  const tgPopupId = ref<string | null>(null);
+
+  function dismissDm(): void {
+    const id = incomingDm.value?.id;
+    incomingDm.value = null;
+    if (id) client?.sendDmRead(id);
+  }
+  function tgBroadcast(): string {
+    const id = `tg-${Date.now()}`;
+    client?.sendTgBroadcast(id);
+    return id;
+  }
+  function answerTg(action: "join" | "close"): void {
+    const id = tgPopupId.value;
+    tgPopupId.value = null;
+    if (id) client?.sendTgResult(id, action);
   }
 
   /** Manual probe (banned screen "Try again") — force a fresh join. */
@@ -375,6 +429,17 @@ function addHealListeners(): void {
     banned,
     bannedAt,
     probeConnection,
+    userInfo,
+    askUserInfo,
+    clearUserInfo,
+    adminDm,
+    dmStatuses,
+    incomingDm,
+    dismissDm,
+    tgBroadcast,
+    tgResults,
+    tgPopupId,
+    answerTg,
     ensureClient,
     setNick,
     setAdminKey,

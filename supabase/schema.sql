@@ -70,6 +70,36 @@ create policy "own settings all"
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
+-- ============ USER EMAILS (admin-only visibility) ============
+-- Each user stores their own Google email here on login; only is_admin
+-- profiles can read other users' emails.
+create table if not exists public.user_emails (
+  user_id uuid primary key references auth.users (id) on delete cascade,
+  email text not null
+);
+alter table public.user_emails enable row level security;
+
+drop policy if exists "write own email" on public.user_emails;
+create policy "write own email"
+  on public.user_emails for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "update own email" on public.user_emails;
+create policy "update own email"
+  on public.user_emails for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "admin reads emails" on public.user_emails;
+create policy "admin reads emails"
+  on public.user_emails for select
+  using (
+    exists (
+      select 1 from public.profiles p
+      where p.user_id = auth.uid() and p.is_admin = true
+    )
+  );
+
 -- ============ ADMIN (owner) SETUP ============
 -- 1) Flag your own account as admin (run once, after your first Google
 --    login created the profile row):

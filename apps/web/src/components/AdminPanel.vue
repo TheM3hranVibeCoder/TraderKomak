@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onUnmounted } from "vue";
 import { useChatStore } from "@/stores/chat";
+import { supabase } from "@/services/supabase";
 
 const chat = useChatStore();
 const emit = defineEmits<{ (e: "close"): void }>();
@@ -36,12 +37,15 @@ const filteredUsers = computed(() => {
   return allUsers.value.filter((u) => u.nick.toLowerCase().includes(q));
 });
 
-function isSelf(nick: string): boolean {
-  return nick.toLowerCase() === chat.nick.toLowerCase();
-}
-
-function mute(nick: string, minutes: number): void {
-  chat.moderate("mute", nick, minutes);
+/* ── Custom mute: amount + unit ── */
+const muteAmount = ref(10);
+const muteUnit = ref<"minutes" | "hours" | "days">("minutes");
+const muteMinutes = computed(() => {
+  const n = Math.max(1, Math.floor(muteAmount.value) || 0);
+  return muteUnit.value === "minutes" ? n : muteUnit.value === "hours" ? n * 60 : n * 1440;
+});
+function mute(nick: string): void {
+  chat.moderate("mute", nick, muteMinutes.value);
 }
 function ban(nick: string): void {
   chat.moderate("ban", nick);
@@ -52,9 +56,71 @@ function unmute(nick: string): void {
 function unban(nick: string): void {
   chat.moderate("unban", nick);
 }
+function isSelf(nick: string): boolean {
+  return nick.toLowerCase() === chat.nick.toLowerCase();
+}
+
+/* ── User details modal (email / IP / country) ── */
+const details = ref<null | { nick: string; email: string | null; loading: boolean }>(null);
+async function openDetails(nick: string): Promise<void> {
+  details.value = { nick, email: null, loading: true };
+  chat.askUserInfo(nick);
+  try {
+    const { data: p } = await supabase()
+      .from("profiles")
+      .select("user_id")
+      .eq("username_lower", nick.toLowerCase())
+      .maybeSingle();
+    if (p) {
+      const { data: e } = await supabase()
+        .from("user_emails")
+        .select("email")
+        .eq("user_id", p.user_id as string)
+        .maybeSingle();
+      if (details.value && details.value.nick === nick) details.value.email = (e?.email as string) ?? null;
+    }
+  } catch {}
+  if (details.value) details.value.loading = false;
+}
+
+/* ── Direct message composer ── */
+const dmTarget = ref<string | null>(null);
+const dmText = ref("");
+const dmSending = ref(false);
+function openDm(nick: string): void {
+  dmTarget.value = nick;
+  dmText.value = "";
+}
+function sendDm(): void {
+  const t = dmText.value.trim();
+  if (!t || !dmTarget.value) return;
+  dmSending.value = true;
+  chat.adminDm(dmTarget.value, t);
+  dmSending.value = false;
+  dmTarget.value = null;
+  dmText.value = "";
+}
+function dmStatusFor(nick: string): string | null {
+  const entries = Object.values(chat.dmStatuses).filter((s) => s.nick.toLowerCase() === nick.toLowerCase());
+  if (!entries.length) return null;
+  const last = entries[entries.length - 1]!;
+  return last.offline ? "offline" : last.read ? "Read ✓" : "Sent…";
+}
+
+/* ── Telegram broadcast ── */
+const tgSent = ref(false);
+function tgBroadcast(): void {
+  chat.tgBroadcast();
+  tgSent.value = true;
+  setTimeout(() => (tgSent.value = false), 3000);
+}
 
 function onKey(e: KeyboardEvent): void {
-  if (e.key === "Escape") emit("close");
+  if (e.key === "Escape") {
+    if (details.value) details.value = null;
+    else if (dmTarget.value) dmTarget.value = null;
+    else emit("close");
+  }
 }
 window.addEventListener("keydown", onKey);
 onUnmounted(() => window.removeEventListener("keydown", onKey));
@@ -67,17 +133,33 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         <header class="admin-head">
           <div class="admin-head-text">
             <h2 class="admin-title">Admin Panel</h2>
-            <p class="admin-sub">Manage chat users — mute, ban and moderate the room.</p>
+            <p class="admin-sub">Manage chat users — mute, ban, message and announce.</p>
           </div>
           <button class="admin-close" type="button" aria-label="Close" @click="emit('close')">✕</button>
         </header>
 
-        <!-- stat chips -->
+        <!-- stat chips + telegram broadcast -->
         <div class="admin-stats">
           <div class="stat green"><span class="stat-num">{{ chat.online }}</span><span class="stat-label">Online</span></div>
           <div class="stat blue"><span class="stat-num">{{ allUsers.length }}</span><span class="stat-label">Known users</span></div>
           <div class="stat amber"><span class="stat-num">{{ chat.mutes.length }}</span><span class="stat-label">Muted</span></div>
           <div class="stat red"><span class="stat-num">{{ chat.bans.length }}</span><span class="stat-label">Banned</span></div>
+          <button class="tg-broadcast" type="button" title="Show a Join-Telegram popup to every online user" @click="tgBroadcast">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true">
+              <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
+            </svg>
+            {{ tgSent ? "Sent ✓" : "Telegram popup" }}
+          </button>
+        </div>
+
+        <!-- telegram results -->
+        <div v-if="chat.tgResults.length" class="tg-results">
+          <span
+            v-for="(r, i) in chat.tgResults.slice(0, 12)"
+            :key="i"
+            class="tg-chip"
+            :class="r.action"
+          >{{ r.nick }} {{ r.action === "join" ? "→ joined ✓" : "→ closed ✕" }}</span>
         </div>
 
         <div class="admin-tabs" role="tablist">
@@ -96,16 +178,32 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           />
           <div v-if="!filteredUsers.length" class="admin-empty">No users seen yet.</div>
           <div v-for="u in filteredUsers" :key="u.nick" class="user-row">
-            <span class="dot" :class="u.online ? 'on' : 'off'"></span>
-            <span class="user-nick">{{ u.nick }}</span>
+            <button class="nick-btn" type="button" title="Show details (email, IP, country)" @click="openDetails(u.nick)">
+              <span class="dot" :class="u.online ? 'on' : 'off'"></span>
+              <span class="user-nick">{{ u.nick }}</span>
+            </button>
             <span v-if="isSelf(u.nick)" class="user-flag you">you</span>
             <template v-else>
               <span v-if="bannedSet.has(u.nick.toLowerCase())" class="user-flag banned">banned</span>
               <span v-else-if="mutedSet.has(u.nick.toLowerCase())" class="user-flag muted">muted</span>
               <span v-else-if="u.online" class="user-flag live">online</span>
+              <span v-if="dmStatusFor(u.nick)" class="dm-status">{{ dmStatusFor(u.nick) }}</span>
               <div class="user-actions">
-                <button class="act amber" :disabled="bannedSet.has(u.nick.toLowerCase())" @click="mute(u.nick, 10)">Mute 10m</button>
-                <button class="act amber dark" :disabled="bannedSet.has(u.nick.toLowerCase())" @click="mute(u.nick, 1440)">Mute 24h</button>
+                <button class="act blue" title="Send a direct message" @click="openDm(u.nick)">DM</button>
+                <input
+                  v-model="muteAmount"
+                  class="mute-amount"
+                  type="number"
+                  min="1"
+                  max="365"
+                  aria-label="Mute duration"
+                />
+                <select v-model="muteUnit" class="mute-unit" aria-label="Mute unit">
+                  <option value="minutes">min</option>
+                  <option value="hours">hours</option>
+                  <option value="days">days</option>
+                </select>
+                <button class="act amber" :disabled="bannedSet.has(u.nick.toLowerCase())" @click="mute(u.nick)">Mute</button>
                 <button v-if="bannedSet.has(u.nick.toLowerCase())" class="act green" @click="unban(u.nick)">Unban</button>
                 <button v-else class="act red" @click="ban(u.nick)">Ban</button>
               </div>
@@ -116,8 +214,10 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         <div v-else-if="tab === 'muted'" class="admin-body">
           <div v-if="!chat.mutes.length" class="admin-empty">Nobody is muted.</div>
           <div v-for="m in chat.mutes" :key="m.nick" class="user-row">
-            <span class="dot off"></span>
-            <span class="user-nick">{{ m.nick }}</span>
+            <button class="nick-btn" type="button" @click="openDetails(m.nick)">
+              <span class="dot off"></span>
+              <span class="user-nick">{{ m.nick }}</span>
+            </button>
             <span class="user-flag muted">muted</span>
             <div class="user-actions">
               <button class="act green" @click="unmute(m.nick)">Unmute</button>
@@ -128,8 +228,10 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         <div v-else class="admin-body">
           <div v-if="!chat.bans.length" class="admin-empty">Nobody is banned.</div>
           <div v-for="b in chat.bans" :key="b.nick" class="user-row">
-            <span class="dot off"></span>
-            <span class="user-nick">{{ b.nick }}</span>
+            <button class="nick-btn" type="button" @click="openDetails(b.nick)">
+              <span class="dot off"></span>
+              <span class="user-nick">{{ b.nick }}</span>
+            </button>
             <span class="user-flag banned">banned</span>
             <div class="user-actions">
               <button class="act green" @click="unban(b.nick)">Unban</button>
@@ -137,6 +239,45 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           </div>
         </div>
       </div>
+
+      <!-- User details modal -->
+      <Teleport to="body">
+        <div v-if="details" class="mini-backdrop" @click.self="details = null">
+          <div class="mini-modal" role="dialog" aria-modal="true" :aria-label="`Details for ${details.nick}`">
+            <div class="mini-head">
+              <span class="mini-title">{{ details.nick }}</span>
+              <button class="mini-x" type="button" aria-label="Close" @click="details = null">✕</button>
+            </div>
+            <div class="detail-grid">
+              <div class="d-row"><span class="d-label">Email</span><span class="d-value">{{ details.loading ? "…" : details.email ?? "not available" }}</span></div>
+              <div class="d-row"><span class="d-label">Status</span><span class="d-value">{{ chat.userInfo?.nick.toLowerCase() === details.nick.toLowerCase() ? (chat.userInfo.online ? "online" : "offline") : "…" }}</span></div>
+              <div class="d-row"><span class="d-label">Last IP</span><span class="d-value mono">{{ chat.userInfo?.nick.toLowerCase() === details.nick.toLowerCase() ? chat.userInfo.lastIp ?? "unknown" : "…" }}</span></div>
+              <div class="d-row"><span class="d-label">Country</span><span class="d-value">{{ chat.userInfo?.nick.toLowerCase() === details.nick.toLowerCase() ? chat.userInfo.country ?? "unknown" : "…" }}</span></div>
+            </div>
+          </div>
+        </div>
+      </Teleport>
+
+      <!-- DM composer modal -->
+      <Teleport to="body">
+        <div v-if="dmTarget" class="mini-backdrop" @click.self="dmTarget = null">
+          <div class="mini-modal" role="dialog" aria-modal="true" :aria-label="`Message ${dmTarget}`">
+            <div class="mini-head">
+              <span class="mini-title">Message to <b>{{ dmTarget }}</b></span>
+              <button class="mini-x" type="button" aria-label="Close" @click="dmTarget = null">✕</button>
+            </div>
+            <textarea
+              v-model="dmText"
+              class="dm-text"
+              rows="4"
+              maxlength="500"
+              placeholder="They will see this as a popup in the middle of their screen…"
+              aria-label="Direct message text"
+            ></textarea>
+            <button class="dm-send" type="button" :disabled="!dmText.trim() || dmSending" @click="sendDm">Send message</button>
+          </div>
+        </div>
+      </Teleport>
     </div>
   </Teleport>
 </template>
@@ -153,8 +294,8 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
   backdrop-filter: blur(6px);
 }
 .admin-panel {
-  width: min(520px, calc(100vw - 28px));
-  max-height: min(640px, calc(100vh - 40px));
+  width: min(560px, calc(100vw - 28px));
+  max-height: min(660px, calc(100vh - 40px));
   display: flex;
   flex-direction: column;
   border-radius: 20px;
@@ -187,14 +328,16 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 
 .admin-stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, 1fr) auto;
   gap: 10px;
   padding: 14px 20px 4px;
+  align-items: stretch;
 }
 .stat {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   padding: 10px 4px;
   border-radius: 14px;
   color: #fff;
@@ -205,6 +348,40 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 .stat.red    { background: linear-gradient(135deg, #fb7185, #ef4444); }
 .stat-num { font-size: 19px; font-weight: 800; line-height: 1.1; }
 .stat-label { font-size: 10px; font-weight: 600; opacity: 0.92; text-transform: uppercase; letter-spacing: 0.4px; }
+.tg-broadcast {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 14px;
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 800;
+  cursor: pointer;
+  background: linear-gradient(135deg, #38bdf8, #2aabee);
+  box-shadow: 0 4px 14px rgba(42, 171, 238, 0.4);
+  transition: transform 0.12s ease, filter 0.12s ease;
+  white-space: nowrap;
+}
+.tg-broadcast:hover { transform: translateY(-1px); filter: brightness(1.08); }
+
+.tg-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 10px 20px 0;
+}
+.tg-chip {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: #fff;
+}
+.tg-chip.join { background: linear-gradient(135deg, #34d399, #10b981); }
+.tg-chip.close { background: linear-gradient(135deg, #94a3b8, #64748b); }
 
 .admin-tabs {
   display: flex;
@@ -231,12 +408,9 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 
 .admin-body {
   flex: 1;
-  min-height: 0;
+  min-height: 380px;
   overflow-y: auto;
   padding: 2px 20px 18px;
-  /* Keep Muted/Banned tabs as tall as the Users tab with ~8 rows, so the
-     panel doesn't shrink when switching tabs */
-  min-height: 380px;
 }
 .admin-search {
   width: 100%;
@@ -259,24 +433,38 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 .user-row {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 9px 12px;
+  gap: 8px;
+  padding: 8px 12px;
   margin-bottom: 7px;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.85);
   box-shadow: 0 2px 8px rgba(60, 60, 130, 0.07);
+  flex-wrap: wrap;
 }
+.nick-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 8px;
+  min-width: 0;
+}
+.nick-btn:hover .user-nick { color: #6366f1; text-decoration: underline; }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .dot.on { background: #10b981; box-shadow: 0 0 6px rgba(16, 185, 129, 0.7); }
 .dot.off { background: #b6bdd1; }
 .user-nick {
-  flex: 1;
-  min-width: 0;
   font-size: 13px;
   font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 120px;
+  color: #23283a;
+  transition: color 0.12s ease;
 }
 .user-flag {
   font-size: 9.5px;
@@ -291,7 +479,38 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 .user-flag.muted { background: linear-gradient(135deg, #fbbf24, #f59e0b); }
 .user-flag.banned { background: linear-gradient(135deg, #fb7185, #ef4444); }
 .user-flag.you { background: linear-gradient(135deg, #8b5cf6, #6366f1); }
-.user-actions { display: flex; gap: 6px; }
+.dm-status {
+  font-size: 10px;
+  font-weight: 800;
+  color: #6366f1;
+  background: rgba(99, 102, 241, 0.12);
+  padding: 2.5px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.user-actions { display: flex; align-items: center; gap: 5px; margin-left: auto; }
+.mute-amount {
+  width: 52px;
+  padding: 5.5px 6px;
+  border: 1px solid rgba(100, 116, 160, 0.3);
+  border-radius: 9px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #23283a;
+  background: #fff;
+  text-align: center;
+}
+.mute-amount:focus { outline: none; border-color: #f59e0b; }
+.mute-unit {
+  padding: 5.5px 4px;
+  border: 1px solid rgba(100, 116, 160, 0.3);
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #23283a;
+  background: #fff;
+  cursor: pointer;
+}
 .act {
   padding: 5.5px 11px;
   border: none;
@@ -301,17 +520,97 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
   font-weight: 700;
   cursor: pointer;
   transition: transform 0.12s ease, filter 0.12s ease;
+  white-space: nowrap;
 }
 .act:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.08); }
 .act:disabled { opacity: 0.4; cursor: default; }
 .act.amber { background: linear-gradient(135deg, #fbbf24, #f59e0b); }
-.act.amber.dark { background: linear-gradient(135deg, #f59e0b, #ea7c1c); }
 .act.red { background: linear-gradient(135deg, #fb7185, #ef4444); }
 .act.green { background: linear-gradient(135deg, #34d399, #10b981); }
-@media (max-width: 480px) {
+.act.blue { background: linear-gradient(135deg, #60a5fa, #3b82f6); }
+
+/* mini modals (details + DM) */
+.mini-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 340;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 18, 45, 0.5);
+}
+.mini-modal {
+  width: min(380px, calc(100vw - 32px));
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(25, 20, 70, 0.45);
+  overflow: hidden;
+}
+.mini-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 16px;
+  background: linear-gradient(120deg, #8b5cf6, #6366f1, #3b82f6);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 800;
+}
+.mini-title b { font-weight: 900; }
+.mini-x {
+  border: none;
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.mini-x:hover { background: rgba(255, 255, 255, 0.4); }
+.detail-grid { padding: 8px 16px 16px; }
+.d-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid rgba(100, 116, 160, 0.12);
+  font-size: 12.5px;
+}
+.d-row:last-child { border-bottom: none; }
+.d-label { color: #7a83a0; font-weight: 700; }
+.d-value { font-weight: 700; color: #23283a; word-break: break-all; text-align: right; }
+.d-value.mono { font-family: ui-monospace, monospace; font-size: 12px; }
+.dm-text {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 14px;
+  border: 1px solid rgba(100, 116, 160, 0.3);
+  border-radius: 0;
+  font-size: 13px;
+  font-family: inherit;
+  color: #23283a;
+  resize: vertical;
+  min-height: 96px;
+}
+.dm-text:focus { outline: none; border-color: #6366f1; }
+.dm-send {
+  display: block;
+  width: 100%;
+  padding: 12px;
+  border: none;
+  background: linear-gradient(120deg, #8b5cf6, #6366f1, #3b82f6);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.dm-send:disabled { opacity: 0.45; cursor: default; }
+
+@media (max-width: 560px) {
   .admin-stats { grid-template-columns: repeat(2, 1fr); }
+  .tg-broadcast { grid-column: 1 / -1; padding: 10px; }
   .admin-tabs { flex-wrap: wrap; }
-  .user-actions { flex-direction: column; gap: 4px; }
-  .act { width: 100%; }
+  .user-actions { width: 100%; justify-content: flex-start; }
 }
 </style>

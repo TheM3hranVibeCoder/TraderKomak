@@ -39,6 +39,23 @@ interface Conn {
   lastChatAt: number;
 }
 
+/** Country lookup for admin user-info (free ip-api, cached per IP/day). */
+const geoCache = new Map<string, { country: string | null; at: number }>();
+async function geoLookup(ip: string): Promise<string | null> {
+  const hit = geoCache.get(ip);
+  if (hit && Date.now() - hit.at < 86_400_000) return hit.country;
+  let country: string | null = null;
+  try {
+    const res = await fetch(`http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,country`);
+    if (res.ok) {
+      const j = (await res.json()) as { status?: string; country?: string };
+      if (j.status === "success") country = j.country ?? null;
+    }
+  } catch {}
+  geoCache.set(ip, { country, at: Date.now() });
+  return country;
+}
+
 interface ModState {
   mutes: ChatModEntry[]; // timed
   bans: ChatModEntry[]; // permanent (until lifted)
@@ -46,6 +63,8 @@ interface ModState {
 
 export class ChatRoom {
   private readonly conns = new Map<WebSocket, Conn>();
+  /** Direct messages awaiting a Read receipt: id → admin socket + target. */
+  private readonly pendingDms = new Map<string, { socket: WebSocket; nick: string }>();
   private history: ChatMessage[] = [];
   /** Every nick the room has seen — powers the member/offline lists. */
   private readonly known = new Map<string, { lastSeen: number; ip?: string }>();
@@ -216,6 +235,21 @@ export class ChatRoom {
       case "moderate":
         this.onModerate(conn, String(msg.action ?? ""), String(msg.nick ?? ""), Number(msg.minutes ?? 0));
         return;
+      case "userinfo":
+        this.onUserInfo(conn, String(msg.nick ?? ""));
+        return;
+      case "admin_dm":
+        this.onAdminDm(conn, String(msg.nick ?? ""), String(msg.text ?? ""), String(msg.id ?? ""));
+        return;
+      case "admin_dm_read":
+        this.onDmRead(conn, String(msg.id ?? ""));
+        return;
+      case "tg_broadcast":
+        this.onTgBroadcast(conn, String(msg.id ?? ""));
+        return;
+      case "tg_result":
+        this.onTgResult(conn, String(msg.id ?? ""), String(msg.action ?? ""));
+        return;
     }
   }
 
@@ -355,6 +389,79 @@ export class ChatRoom {
     this.schedulePersistMod();
     this.broadcastModState();
     this.log.info({ by: conn.nick, action, nick: cleanNick }, "chat moderation");
+  }
+
+  /* ── Admin tools: user info, direct messages, telegram broadcast ── */
+
+  private broadcastAdmins(payload: Record<string, unknown>): void {
+    for (const [, c] of this.conns) {
+      if (c.admin) this.safeSend(c, payload);
+    }
+  }
+
+  private connectedIps(nick: string): string[] {
+    const ips = new Set<string>();
+    for (const [, c] of this.conns) {
+      if (c.nick && c.nick.toLowerCase() === nick.toLowerCase()) ips.add(c.ip);
+    }
+    return [...ips];
+  }
+
+  private async onUserInfo(conn: Conn, nick: string): Promise<void> {
+    if (!conn.admin) return;
+    const clean = nick.trim().slice(0, NICK_MAX);
+    if (!clean) return;
+    const entry = this.known.get(clean.toLowerCase());
+    // Last known IP: live connection first, else the roster record.
+    const lastIp = this.connectedIps(clean)[0] ?? entry?.ip ?? null;
+    const country = lastIp ? await geoLookup(lastIp) : null;
+    this.safeSend(conn, { type: "userinfo", nick: clean, lastIp, online: this.connectedIps(clean).length > 0, country });
+  }
+
+  private onAdminDm(conn: Conn, nick: string, text: string, id: string): void {
+    if (!conn.admin || !id) return;
+    const cleanNick = nick.trim().slice(0, NICK_MAX);
+    const cleanText = text.replace(/\s+/g, " ").trim().slice(0, 500);
+    if (!cleanNick || !cleanText) return;
+    let delivered = false;
+    for (const [, c] of this.conns) {
+      if (c.nick && c.nick.toLowerCase() === cleanNick.toLowerCase() && c.socket.readyState === c.socket.OPEN) {
+        this.safeSend(c, { type: "admin_dm", id, text: cleanText });
+        delivered = true;
+        // remember where to deliver the Read receipt
+        this.pendingDms.set(id, { socket: conn.socket, nick: cleanNick });
+        break;
+      }
+    }
+    if (!delivered) this.safeSend(conn, { type: "dm_status", id, nick: cleanNick, read: false, offline: true });
+  }
+
+  private onDmRead(user: Conn, id: string): void {
+    const pending = this.pendingDms.get(id);
+    if (!pending) return;
+    this.pendingDms.delete(id);
+    for (const [, c] of this.conns) {
+      if (c.socket === pending.socket) {
+        this.safeSend(c, { type: "dm_status", id, nick: user.nick ?? "", read: true, offline: false });
+        break;
+      }
+    }
+  }
+
+  private onTgBroadcast(conn: Conn, id: string): void {
+    if (!conn.admin || !id) return;
+    for (const [, c] of this.conns) {
+      // every signed-in member except admins themselves
+      if (c.nick && !c.admin && c.socket.readyState === c.socket.OPEN) {
+        this.safeSend(c, { type: "tg_popup", id });
+      }
+    }
+  }
+
+  private onTgResult(user: Conn, id: string, action: string): void {
+    if (!user.nick || !id) return;
+    if (action !== "join" && action !== "close") return;
+    this.broadcastAdmins({ type: "tg_result", nick: user.nick, id, action });
   }
 
   private disconnectNick(nick: string, reason = "You have been moderated"): void {
