@@ -48,7 +48,34 @@
     </script>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <!-- Static pre-hydration shell: crawlers and no-JS visitors get the
+           real landmarks/content; Vue 3 replaces it when the app mounts. -->
+      <header>
+        <span>TraderKomak</span>
+      </header>
+      <nav aria-label="Primary">
+        <a href="https://t.me/TraderKomak_ir" rel="noopener">Telegram channel</a>
+      </nav>
+      <main>
+        <h1>TraderKomak — Live Forex &amp; Crypto Charts and Analysis</h1>
+        <p>Free real-time forex &amp; crypto charts with market session indicators, demo trading, replay mode and a live community chat — sign in with Google to start.</p>
+        <nav aria-label="Quick links">
+          <a href="https://t.me/TraderKomak_ir" rel="noopener">Join our Telegram channel</a>
+        </nav>
+      </main>
+    </div>
+    <style>
+      /* Pre-hydration only — matches the landing's light gradient. */
+      #app > header, #app > main, #app > nav { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+      body { margin: 0; background: linear-gradient(160deg, #f2f6ff 0%, #e9efff 45%, #f4effe 100%); }
+      #app > header { padding: 14px 20px; font-weight: 800; color: #171c2b; }
+      #app > nav { padding: 0 20px 8px; }
+      #app > nav a { color: #3b82f6; font-size: 13px; }
+      #app > main { max-width: 640px; margin: 8vh auto 0; padding: 0 20px; text-align: center; color: #1f2430; }
+      #app > main h1 { font-size: 30px; margin: 0 0 10px; }
+      #app > main p { font-size: 15px; line-height: 1.6; color: #5a6378; }
+    </style>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
