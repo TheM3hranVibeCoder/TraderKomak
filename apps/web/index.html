@@ -50,7 +50,9 @@
   <body>
     <div id="app">
       <!-- Static pre-hydration shell: crawlers and no-JS visitors get the
-           real landmarks/content; Vue 3 replaces it when the app mounts. -->
+           real landmarks/content; Vue 3 replaces it when the app mounts.
+           Visually hidden so returning users never see a content flash. -->
+      <div id="seo-shell" style="display:none">
       <header>
         <span>TraderKomak</span>
       </header>
@@ -64,11 +66,14 @@
           <a href="https://t.me/TraderKomak_ir" rel="noopener">Join our Telegram channel</a>
         </nav>
       </main>
+      </div>
     </div>
     <style>
-      /* Pre-hydration only — matches the landing's light gradient. */
+      /* Pre-hydration only. The shell is display:none (SEO/a11y DOM only);
+         the body background follows the saved theme so there is no flash. */
+      body { margin: 0; background: linear-gradient(160deg, #0a1020 0%, #0d1220 45%, #120e26 100%); }
+      [data-theme="light"] body { background: linear-gradient(160deg, #f2f6ff 0%, #e9efff 45%, #f4effe 100%); }
       #app > header, #app > main, #app > nav { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
-      body { margin: 0; background: linear-gradient(160deg, #f2f6ff 0%, #e9efff 45%, #f4effe 100%); }
       #app > header { padding: 14px 20px; font-weight: 800; color: #171c2b; }
       #app > nav { padding: 0 20px 8px; }
       #app > nav a { color: #3b82f6; font-size: 13px; }
