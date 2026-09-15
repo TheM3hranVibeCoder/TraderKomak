@@ -877,13 +877,17 @@ function chartIsCustomized(): boolean {
 // follows light/dark). CUSTOMIZED charts bake their unset background/candle
 // fields at the current theme's colors ONCE, so switching modes never moves
 // them again — only the auto ink re-adapts to the background brightness.
-watch(isDarkTheme, () => {
+watch(isDarkTheme, (isDark, wasDark) => {
   if (chartIsCustomized()) {
+    // Bake with the PRE-flip theme pair, so the first switch freezes the
+    // exact colors the user was looking at instead of jumping to the new
+    // theme's gradient.
+    const oldPair = wasDark ? ["#171a3a", "#0b1120"] : ["#e4e9ff", "#fdf2f8"];
     const s = chartStyle.value;
-    if (s.bgMode === "solid") s.bgSolid ??= themeBgPair()[0];
+    if (s.bgMode === "solid") s.bgSolid ??= oldPair[0]!;
     else {
-      s.bgTop ??= themeBgPair()[0];
-      s.bgBottom ??= themeBgPair()[1];
+      s.bgTop ??= oldPair[0]!;
+      s.bgBottom ??= oldPair[1]!;
     }
     s.up ??= DEFAULT_CANDLES.up;
     s.down ??= DEFAULT_CANDLES.down;
