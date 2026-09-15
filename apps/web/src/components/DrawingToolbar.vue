@@ -18,9 +18,9 @@ const ICONS: Record<string, string> = {
 };
 
 const tools: Array<{ id: string; title: string }> = [
-  { id: "position", title: "Long / Short Position — click entry, then click SL (below = long, above = short)" },
-  { id: "polyline", title: "Draw Polyline (double-click to finish)" },
-  { id: "rectangle", title: "Draw Rectangle" },
+  { id: "position", title: "Long / Short Positions" },
+  { id: "polyline", title: "Polyline" },
+  { id: "rectangle", title: "Rectangle" },
 ];
 
 const LINE_TOOL_IDS = ["trendline", "hline", "hray", "vline"];

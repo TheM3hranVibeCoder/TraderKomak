@@ -136,7 +136,7 @@ function toggleReplay(): void {
         class="demo-btn"
         type="button"
         :class="{ active: demo.active }"
-        title="Demo trading — 00,000 paper account"
+        title="Demo Trading"
         aria-label="Toggle demo trading"
         @click="toggleDemo"
       >
@@ -151,7 +151,7 @@ function toggleReplay(): void {
         class="replay-btn"
         type="button"
         :class="{ active: replay.active }"
-        :title="replay.active ? 'Exit replay mode' : 'Replay mode — click a candle to start'"
+        :title="replay.active ? 'Exit Bar Replay' : 'Bar Replay'"
         aria-label="Toggle replay mode"
         @click="toggleReplay"
       >
