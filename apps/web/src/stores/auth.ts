@@ -198,12 +198,20 @@ export const useAuthStore = defineStore("auth", () => {
       const username = raw.trim();
       // Unique index on username_lower is the real guard; the select just
       // gives a friendlier pre-check (also drives the live availability UI).
+      // Case-insensitive availability check. Some legacy rows may have a
+      // NULL username_lower (predates the column) — compare against BOTH
+      // the normalized column and the raw username so TaymaZ/taymaz/TAYMAZ
+      // all collide.
+      const lower = username.toLowerCase();
       const { data: existing } = await sb
         .from("profiles")
-        .select("user_id")
-        .eq("username_lower", username.toLowerCase())
+        .select("user_id, username, username_lower")
+        .or(`username_lower.eq.${lower},username.eq.${username}`)
         .maybeSingle();
-      if (existing) return "That username is already taken";
+      if (existing) {
+        const stored = String(existing.username_lower ?? existing.username ?? "").toLowerCase();
+        if (stored === lower) return "That username is already taken";
+      }
       const { error } = await sb.from("profiles").insert({
         user_id: userId.value,
         username,

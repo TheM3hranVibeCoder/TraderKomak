@@ -16,6 +16,7 @@ import {
   isTimeframe,
   normalizeInstrument,
   TIMEFRAME_SECONDS,
+  providerOf,
 } from "@traderkomak/shared";
 import { fetchCandles } from "@/services/api";
 import { useReplayStore } from "@/stores/replay";
@@ -198,10 +199,32 @@ export const useMarketStore = defineStore("market", () => {
     return [...map.values()].sort((a, b) => a.time - b.time);
   }
 
+  /** Weekend FX close (UTC): Fri 21:00 → Sun 22:00. OANDA keeps emitting
+   *  near-flat filler candles right after the close — drawn as tiny "dots"
+   *  on the chart. New flat buckets during the weekend close are skipped
+   *  (updates to the EXISTING last bucket still pass, keeping the close). */
+  function isWeekendFxClose(): boolean {
+    const d = new Date();
+    const day = d.getUTCDay();
+    const h = d.getUTCHours();
+    if (day === 6) return true;
+    if (day === 5 && h >= 21) return true;
+    if (day === 0 && h < 22) return true;
+    return false;
+  }
+
   function applyCandle(candle: Candle, closed: boolean): void {
     // A malformed frame (packet loss / upstream hiccup) must never reach
     // the chart — it would draw a giant or inverted bar.
     if (!isSaneCandle(candle)) return;
+    // FX closed + filler candle (flat or float-noise range) → don't paint
+    // another dot on the chart. Crypto streams real ticks 24/7.
+    if (isWeekendFxClose() && providerOf(instrument.value) !== "binance") {
+      const range = candle.high - candle.low;
+      const noise = Math.max(1e-8, Math.abs(candle.close) * 1e-7);
+      const isNewBucket = !timeIndex.value.has(candle.time);
+      if (isNewBucket && range <= noise) return;
+    }
     // `closed` flag indicates a candle that just finalized.
     // We still handle via time-index logic: insert or replace, never duplicate.
     const idx = timeIndex.value.get(candle.time);
