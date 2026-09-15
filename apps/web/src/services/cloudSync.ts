@@ -15,6 +15,7 @@ import { useIndicatorsStore } from "@/stores/indicators";
 
 interface CloudData {
   indicators?: Record<string, Record<string, boolean>>;
+  indicatorSettings?: Record<string, unknown>;
   chart?: {
     style?: Record<string, unknown> | null;
     templates?: unknown;
@@ -40,8 +41,10 @@ function snapshot(): CloudData {
   const d = useDrawingsStore();
   const w = useWatchlistStore();
   const m = useMarketStore();
+  const indStore = useIndicatorsStore();
   return {
-    indicators: JSON.parse(JSON.stringify(useIndicatorsStore().addedMap)) as Record<string, Record<string, boolean>>,
+    indicators: JSON.parse(JSON.stringify(indStore.addedMap)) as Record<string, Record<string, boolean>>,
+    indicatorSettings: JSON.parse(JSON.stringify(indStore.settingsSnapshot())) as Record<string, unknown>,
     chart: {
       style: JSON.parse(localStorage.getItem("tk-chart-style") ?? "null") as Record<string, unknown> | null,
       templates: JSON.parse(localStorage.getItem("tk-chart-templates") ?? "null") as unknown,
@@ -82,8 +85,12 @@ function applyLocal(cloud: CloudData): void {
     const w = useWatchlistStore();
     const m = useMarketStore();
 
+    const ind = useIndicatorsStore();
     if (cloud.indicators && typeof cloud.indicators === "object") {
-      useIndicatorsStore().setAddedMap(cloud.indicators);
+      ind.setAddedMap(cloud.indicators);
+    }
+    if (cloud.indicatorSettings && typeof cloud.indicatorSettings === "object") {
+      ind.applySettings(cloud.indicatorSettings);
     }
 
     if (cloud.chart && typeof cloud.chart === "object") {
@@ -176,6 +183,15 @@ export function startCloudSync(): void {
       watch(() => [m.instrument, m.timeframe], onChange);
       const ind = useIndicatorsStore();
       watch(() => ind.addedMap, onChange, { deep: true });
+      watch(
+        () => [
+          ind.sessionsVisible, ind.sessionsLabels, ind.sessionsEnabled, ind.defs, ind.customs,
+          ind.rsiVisible, ind.rsiLength, ind.rsiColor, ind.rsiLevelColor, ind.rsiUpper, ind.rsiLower,
+          ind.smaVisible, ind.smaLength, ind.smaColor, ind.emaVisible, ind.emaLength, ind.emaColor,
+        ],
+        onChange,
+        { deep: true }
+      );
       // ChartPane announces chart-style / template writes.
       window.addEventListener("tk-local-change", onChange as EventListener);
     },

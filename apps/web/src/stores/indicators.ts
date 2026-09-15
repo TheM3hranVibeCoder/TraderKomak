@@ -231,6 +231,80 @@ export const useIndicatorsStore = defineStore("indicators", () => {
     return sessionsEnabled.value[id] !== false;
   }
 
+  /** Everything except the per-symbol added flags (those sync separately
+   *  via addedMap): session names/colors, custom sessions, RSI/SMA/EMA
+   *  colors and periods, visibility toggles. */
+  function settingsSnapshot() {
+    return {
+      sessionsVisible: sessionsVisible.value,
+      sessionsLabels: sessionsLabels.value,
+      sessionsEnabled: { ...sessionsEnabled.value },
+      defs: defs.value.map((d) => ({ id: d.id, name: d.name, color: d.color })),
+      customs: JSON.parse(JSON.stringify(customs.value)),
+      rsiVisible: rsiVisible.value,
+      rsiLength: rsiLength.value,
+      rsiColor: rsiColor.value,
+      rsiLevelColor: rsiLevelColor.value,
+      rsiUpper: rsiUpper.value,
+      rsiLower: rsiLower.value,
+      smaVisible: smaVisible.value,
+      smaLength: smaLength.value,
+      smaColor: smaColor.value,
+      emaVisible: emaVisible.value,
+      emaLength: emaLength.value,
+      emaColor: emaColor.value,
+    };
+  }
+
+  function applySettings(raw: unknown): void {
+    if (!raw || typeof raw !== "object") return;
+    const p = raw as Record<string, unknown>;
+    if (typeof p.sessionsVisible === "boolean") sessionsVisible.value = p.sessionsVisible;
+    if (typeof p.sessionsLabels === "boolean") sessionsLabels.value = p.sessionsLabels;
+    if (p.sessionsEnabled && typeof p.sessionsEnabled === "object") {
+      sessionsEnabled.value = {
+        ...Object.fromEntries(SESSIONS.map((x) => [x.id, true])),
+        ...(p.sessionsEnabled as Record<string, boolean>),
+      };
+    }
+    if (Array.isArray(p.defs)) {
+      for (const d of p.defs as Array<{ id?: unknown; name?: unknown; color?: unknown }>) {
+        const target = defs.value.find((x) => x.id === d.id);
+        if (!target) continue;
+        if (typeof d.name === "string" && d.name.trim()) target.name = d.name.trim().slice(0, 20);
+        if (typeof d.color === "string" && /^#[0-9a-fA-F]{6}$/.test(d.color)) target.color = d.color;
+      }
+    }
+    if (Array.isArray(p.customs)) {
+      const clean: CustomSession[] = [];
+      for (const c of p.customs as Array<Record<string, unknown>>) {
+        if (typeof c.id === "string" && typeof c.name === "string" && typeof c.start === "number" && typeof c.end === "number") {
+          clean.push({
+            id: c.id,
+            name: String(c.name).slice(0, 20) || "Session",
+            tz: typeof c.tz === "string" ? c.tz : "UTC",
+            start: c.start,
+            end: c.end,
+            color: typeof c.color === "string" && /^#[0-9a-fA-F]{6}$/.test(c.color) ? c.color : "#8b93a7",
+          });
+        }
+      }
+      customs.value = clean;
+    }
+    if (typeof p.rsiVisible === "boolean") rsiVisible.value = p.rsiVisible;
+    if (typeof p.rsiLength === "number" && p.rsiLength >= 2 && p.rsiLength <= 200) rsiLength.value = Math.round(p.rsiLength);
+    if (typeof p.rsiColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.rsiColor)) rsiColor.value = p.rsiColor;
+    if (typeof p.rsiLevelColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.rsiLevelColor)) rsiLevelColor.value = p.rsiLevelColor;
+    if (typeof p.rsiUpper === "number") rsiUpper.value = Math.min(100, Math.max(1, p.rsiUpper));
+    if (typeof p.rsiLower === "number") rsiLower.value = Math.min(99, Math.max(0, p.rsiLower));
+    if (typeof p.smaVisible === "boolean") smaVisible.value = p.smaVisible;
+    if (typeof p.smaLength === "number" && p.smaLength >= 2 && p.smaLength <= 500) smaLength.value = Math.round(p.smaLength);
+    if (typeof p.smaColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.smaColor)) smaColor.value = p.smaColor;
+    if (typeof p.emaVisible === "boolean") emaVisible.value = p.emaVisible;
+    if (typeof p.emaLength === "number" && p.emaLength >= 2 && p.emaLength <= 500) emaLength.value = Math.round(p.emaLength);
+    if (typeof p.emaColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.emaColor)) emaColor.value = p.emaColor;
+  }
+
   // Restore persisted state
   try {
     const raw = localStorage.getItem(KEY);
@@ -417,6 +491,8 @@ export const useIndicatorsStore = defineStore("indicators", () => {
     emaLength,
     emaColor,
     isEnabled,
+    settingsSnapshot,
+    applySettings,
     addSessions,
     removeSessions,
     addCustomSession,
