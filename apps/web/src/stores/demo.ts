@@ -200,8 +200,13 @@ export const useDemoStore = defineStore("demo", () => {
     const prec = precisionOf(p.symbol);
     const long = p.direction !== "short";
     let v = +price.toFixed(prec);
-    // Ignore absurd drags (chart extrapolation, fast cursor exits)
+    // Ignore absurd drags (chart extrapolation, fast cursor exits) and
+    // physically impossible levels (>10× or <1/10 of entry — e.g. 99999
+    // on XAU/USD can only come from a degenerate price projection).
     if (!Number.isFinite(v) || v <= 0) return;
+    if (p.entry) {
+      if (v > p.entry * 10 || v < p.entry / 10) return;
+    }
     // Keep SL on the loss side and TP on the profit side of the entry —
     // dragging a line across the entry corrupts the position's risk math.
     const tick = Math.pow(10, -prec);
@@ -209,9 +214,11 @@ export const useDemoStore = defineStore("demo", () => {
     if (level === "tp") v = long ? Math.max(v, p.entry + tick) : Math.min(v, p.entry - tick);
     p[level] = v;
     // In percent/usd sizing modes the lot derives from the SL distance —
-    // recompute it when the SL line is dragged, capped so a hair-thin SL
-    // distance can't explode the position size.
-    if (level === "sl" && sizeMode.value !== "lot" && p.entry) {
+    // recompute ONLY while the order is not yet filled (draft/pending).
+    // Resizing a LIVE position's lot because its SL was moved later is
+    // surprising and dangerous (a $100 trade silently became 60 lots);
+    // the size was chosen at entry and stays until close.
+    if (level === "sl" && p.status !== "open" && sizeMode.value !== "lot" && p.entry) {
       const dist = p.sl !== null ? Math.abs(p.entry - p.sl) : 0;
       p.lot = dist > 0 ? Math.min(100, Math.max(0.01, +(riskAmount() / dist).toFixed(2))) : p.lot;
     }

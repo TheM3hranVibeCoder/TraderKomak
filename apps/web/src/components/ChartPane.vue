@@ -513,6 +513,9 @@ function onDemoLineDragStart(e: MouseEvent, id: string, level: "entry" | "sl" | 
     const cy = Math.min(Math.max(ev.clientY, r.top + 2), r.bottom - 2);
     const p = adapter.yToPrice(cy - r.top);
     if (p === null || !Number.isFinite(p) || p <= 0) return;
+    // Reject absurd projections (>10× / <1/10 of the anchor entry)
+    const anchor = id === "__draft" ? draft.value?.entry : demo.positions.find((x) => x.id === id)?.entry;
+    if (anchor && (p > anchor * 10 || p < anchor / 10)) return;
     // Draft lines adjust the in-progress order (entry shifts the whole
     // structure; SL/TP clamp to the loss/profit sides); real positions
     // update through the store.
