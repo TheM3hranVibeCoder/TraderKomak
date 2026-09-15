@@ -34,15 +34,33 @@ const MAX_SERIES = 20000;
 const cacheKey = (inst: string, tf: string) => `tk-candles:${inst}:${tf}`;
 const CANDLE_CACHE_MAX = 4000;
 
+/** OHLC sanity: finite numbers, high ≥ max(o,c), low ≤ min(o,c). */
+function isSaneCandle(c: unknown): c is Candle {
+  if (!c || typeof c !== "object") return false;
+  const k = c as Record<string, unknown>;
+  const time = k.time;
+  const open = k.open;
+  const high = k.high;
+  const low = k.low;
+  const close = k.close;
+  if (typeof time !== "number" || typeof open !== "number" || typeof high !== "number" || typeof low !== "number" || typeof close !== "number") return false;
+  if (!Number.isFinite(time) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) return false;
+  return high >= Math.max(open, close) && low <= Math.min(open, close) && high >= low;
+}
+
 function loadCache(inst: string, tf: string): Candle[] {
   try {
     const raw = localStorage.getItem(cacheKey(inst, tf));
     if (!raw) return [];
     const parsed = JSON.parse(raw) as Candle[];
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((c) => c && typeof c.time === "number" && typeof c.open === "number" && typeof c.close === "number")
-      .sort((a, b) => a.time - b.time);
+    // Dedupe by time (keep the last occurrence) and drop malformed rows —
+    // duplicated or corrupt entries glue bars together on restore.
+    const map = new Map<number, Candle>();
+    for (const c of parsed) {
+      if (isSaneCandle(c)) map.set(c.time, c);
+    }
+    return [...map.values()].sort((a, b) => a.time - b.time);
   } catch {
     return [];
   }
@@ -50,7 +68,11 @@ function loadCache(inst: string, tf: string): Candle[] {
 
 function saveCache(inst: string, tf: string, all: Candle[]): void {
   try {
-    const sorted = [...all].sort((a, b) => a.time - b.time);
+    const map = new Map<number, Candle>();
+    for (const c of all) {
+      if (isSaneCandle(c)) map.set(c.time, c);
+    }
+    const sorted = [...map.values()].sort((a, b) => a.time - b.time);
     localStorage.setItem(cacheKey(inst, tf), JSON.stringify(sorted.slice(-CANDLE_CACHE_MAX)));
   } catch {}
 }
@@ -163,8 +185,9 @@ export const useMarketStore = defineStore("market", () => {
 
   function mergeCandles(base: Candle[], incoming: Candle[]): Candle[] {
     const map = new Map<number, Candle>();
-    for (const c of base) map.set(c.time, { ...c });
+    for (const c of base) if (isSaneCandle(c)) map.set(c.time, { ...c });
     for (const c of incoming) {
+      if (!isSaneCandle(c)) continue;
       const existing = map.get(c.time);
       // Never let a synthesized flat candle degrade a locally streamed candle
       // that carries real price movement (WS reconnect snapshots from a
@@ -176,6 +199,9 @@ export const useMarketStore = defineStore("market", () => {
   }
 
   function applyCandle(candle: Candle, closed: boolean): void {
+    // A malformed frame (packet loss / upstream hiccup) must never reach
+    // the chart — it would draw a giant or inverted bar.
+    if (!isSaneCandle(candle)) return;
     // `closed` flag indicates a candle that just finalized.
     // We still handle via time-index logic: insert or replace, never duplicate.
     const idx = timeIndex.value.get(candle.time);
@@ -297,11 +323,20 @@ export const useMarketStore = defineStore("market", () => {
     if (isLoadingMore.value || !hasMore.value || candles.value.length === 0) return false;
     const earliest = candles.value[0];
     if (!earliest) return false;
+    const mySeq = loadSeq;
     const wantInstrument = instrument.value;
     const wantTimeframe = timeframe.value;
     isLoadingMore.value = true;
     try {
       const more = await fetchCandles(wantInstrument, wantTimeframe, LAZY_BATCH, earliest.time);
+      // The user may have switched symbol/timeframe while the fetch was in
+      // flight (slow connections make this common). Applying the stale
+      // batch would glue OLD-timeframe candles into the NEW chart and
+      // poison the localStorage cache — the exact bug that vanished only
+      // after clearing site data. Same guard as loadHistory.
+      if (mySeq !== loadSeq || instrument.value !== wantInstrument || timeframe.value !== wantTimeframe) {
+        return false;
+      }
       if (more.length === 0) {
         hasMore.value = false;
         return false;
