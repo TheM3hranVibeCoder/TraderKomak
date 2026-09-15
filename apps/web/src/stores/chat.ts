@@ -30,7 +30,15 @@ export const useChatStore = defineStore("chat", () => {
   const onlineNicks = ref<string[]>([]);
   const knownNicks = ref<{ nick: string; lastSeen: number; online: boolean }[]>([]);
 
+  /** Only filter once the Supabase usernames have actually loaded —
+   *  an empty set must never blank the roster at startup. */
+  let validNicksLoaded = false;
   function applyNickFilter(): void {
+    if (!validNicksLoaded) {
+      onlineNicks.value = rawOnline.value;
+      knownNicks.value = rawKnown.value;
+      return;
+    }
     onlineNicks.value = rawOnline.value.filter((n) => validNicks.value.has(n.toLowerCase()));
     knownNicks.value = rawKnown.value.filter((k) => validNicks.value.has(k.nick.toLowerCase()));
   }
@@ -41,6 +49,7 @@ export const useChatStore = defineStore("chat", () => {
       const { data, error } = await supabase().from("profiles").select("username");
       if (error) return;
       validNicks.value = new Set((data ?? []).map((r) => String(r.username).toLowerCase()));
+      validNicksLoaded = true;
       applyNickFilter();
     } catch {}
   }

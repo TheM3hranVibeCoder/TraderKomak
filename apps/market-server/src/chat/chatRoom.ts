@@ -25,6 +25,7 @@ import type { Log } from "../logger.js";
 const HISTORY_CAP = 200;
 const HISTORY_FILE = "chat-history.json";
 const MOD_FILE = "chat-mod.json";
+const KNOWN_FILE = "chat-known.json";
 const TEXT_MAX = 400;
 const IMG_MAX_CHARS = 280_000; // ~210KB image
 const RATE_INTERVAL_MS = 15_000; // one message per 15s per user
@@ -93,6 +94,10 @@ export class ChatRoom {
   ) {
     this.history = this.loadHistory();
     this.mod = this.loadMod();
+    // Members persist INDEPENDENTLY of chat history: history is capped at
+    // 200 messages, so without this file, users whose messages aged out
+    // silently vanished from the roster/admin panel.
+    for (const [nick, v] of this.loadKnown()) this.known.set(nick, v);
     // Heartbeat: closing a phone browser can leave a half-open TCP socket
     // that never fires "close" — without this the roster shows ghosts
     // "online" for hours. Every 30s ping everyone; browsers pong at the
@@ -308,6 +313,7 @@ export class ChatRoom {
     }
     conn.nick = nick;
     this.known.set(nick.toLowerCase(), { lastSeen: Math.floor(Date.now() / 1000), ip: conn.ip });
+    this.schedulePersist();
     conn.admin = isAdminKey;
     this.send(conn, { type: "history", messages: this.history });
     // Broadcast the fresh roster — otherwise a refreshed client never
@@ -602,6 +608,22 @@ export class ChatRoom {
     }
   }
 
+  private loadKnown(): Map<string, { lastSeen: number; ip?: string }> {
+    const out = new Map<string, { lastSeen: number; ip?: string }>();
+    try {
+      const raw = JSON.parse(readFileSync(join(this.dataDir, KNOWN_FILE), "utf8")) as
+        Array<{ nick?: unknown; lastSeen?: unknown; ip?: unknown }>;
+      if (Array.isArray(raw)) {
+        for (const k of raw) {
+          if (typeof k.nick === "string" && typeof k.lastSeen === "number") {
+            out.set(k.nick.toLowerCase(), { lastSeen: k.lastSeen, ip: typeof k.ip === "string" ? k.ip : undefined });
+          }
+        }
+      }
+    } catch {}
+    return out;
+  }
+
   private loadMod(): ModState {
     try {
       const raw = readFileSync(join(this.dataDir, MOD_FILE), "utf8");
@@ -630,6 +652,8 @@ export class ChatRoom {
     try {
       mkdirSync(this.dataDir, { recursive: true });
       writeFileSync(join(this.dataDir, HISTORY_FILE), JSON.stringify(this.history));
+      const knownList = [...this.known.entries()].map(([nick, v]) => ({ nick, lastSeen: v.lastSeen, ip: v.ip }));
+      writeFileSync(join(this.dataDir, KNOWN_FILE), JSON.stringify(knownList));
     } catch (err) {
       this.log.warn({ err: err instanceof Error ? err.message : "unknown" }, "chat history save failed");
     }
