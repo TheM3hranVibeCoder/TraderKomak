@@ -49,6 +49,11 @@ export interface ChartAdapter {
   /** Restyle the candles (chart-settings panel). Pass theme defaults to reset. */
   setCandleColors(o: { up: string; down: string; borderUp: string; borderDown: string; wickUp: string; wickDown: string }): void;
   /** RSI sub-pane (LWC v5 panes). */
+  setMaData(kind: "sma" | "ema", points: { time: number; value: number }[]): void;
+  updateMaLast(kind: "sma" | "ema", point: { time: number; value: number }): void;
+  setMaStyle(kind: "sma" | "ema", color: string): void;
+  setMaVisible(kind: "sma" | "ema", visible: boolean): void;
+  removeMa(kind: "sma" | "ema"): void;
   setRsiData(points: { time: number; value: number }[]): void;
   updateRsiLast(point: { time: number; value: number }): void;
   setRsiStyle(color: string): void;
@@ -213,6 +218,49 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
 
 
   let lastData: Candle[] = [];
+
+  /* ── Moving-average overlays (pane 0 — glued to the price chart) ────── */
+  const maSeries: Record<"sma" | "ema", ISeriesApi<"Line"> | null> = { sma: null, ema: null };
+
+  function ensureMa(kind: "sma" | "ema"): ISeriesApi<"Line"> {
+    if (!maSeries[kind]) {
+      maSeries[kind] = chart.addSeries(
+        LineSeries,
+        {
+          color: kind === "sma" ? "#f59e0b" : "#38bdf8",
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        },
+        0 // overlay on the main chart — pans/zoom with the candles
+      );
+    }
+    return maSeries[kind]!;
+  }
+
+  function setMaData(kind: "sma" | "ema", points: { time: number; value: number }[]): void {
+    ensureMa(kind).setData(points as never);
+  }
+
+  function updateMaLast(kind: "sma" | "ema", point: { time: number; value: number }): void {
+    ensureMa(kind).update(point as never);
+  }
+
+  function setMaStyle(kind: "sma" | "ema", color: string): void {
+    ensureMa(kind).applyOptions({ color });
+  }
+
+  function setMaVisible(kind: "sma" | "ema", visible: boolean): void {
+    ensureMa(kind).applyOptions({ visible });
+  }
+
+  function removeMa(kind: "sma" | "ema"): void {
+    if (maSeries[kind]) {
+      chart.removeSeries(maSeries[kind]!);
+      maSeries[kind] = null;
+    }
+  }
 
   /* ── RSI sub-pane (pane index 1) ────────────────────────────────────── */
   let rsiSeries: ISeriesApi<"Line"> | null = null;
@@ -464,6 +512,11 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       });
     },
 
+    setMaData,
+    updateMaLast,
+    setMaStyle,
+    setMaVisible,
+    removeMa,
     setRsiData,
     updateRsiLast,
     setRsiStyle,

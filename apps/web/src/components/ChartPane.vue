@@ -49,6 +49,8 @@ function indSettingsOutside(e: PointerEvent): void {
   if (pop && pop.contains(e.target as Node)) return;
   const legend = document.querySelector(".indicator-legend");
   if (legend && legend.contains(e.target as Node)) return;
+  smaSettingsOpen.value = false;
+  emaSettingsOpen.value = false;
   indSettingsOpen.value = false;
 }
 watch(indSettingsOpen, (open) => {
@@ -341,6 +343,96 @@ function computeRsi(closes: number[], length: number): (number | null)[] {
   }
   return out;
 }
+
+/** Simple moving average over `length` closes. */
+function computeSma(closes: number[], length: number): (number | null)[] {
+  const out: (number | null)[] = new Array(closes.length).fill(null);
+  if (closes.length < length || length < 1) return out;
+  let sum = 0;
+  for (let i = 0; i < closes.length; i++) {
+    sum += closes[i]!;
+    if (i >= length) sum -= closes[i - length]!;
+    if (i >= length - 1) out[i] = sum / length;
+  }
+  return out;
+}
+
+/** Exponential moving average — seeded with an SMA of the first `length`. */
+function computeEma(closes: number[], length: number): (number | null)[] {
+  const out: (number | null)[] = new Array(closes.length).fill(null);
+  if (closes.length < length || length < 1) return out;
+  const k = 2 / (length + 1);
+  let sum = 0;
+  let prev = 0;
+  for (let i = 0; i < closes.length; i++) {
+    if (i < length) {
+      sum += closes[i]!;
+      if (i === length - 1) {
+        prev = sum / length;
+        out[i] = prev;
+      }
+      continue;
+    }
+    prev = closes[i]! * k + prev * (1 - k);
+    out[i] = prev;
+  }
+  return out;
+}
+
+function pushMaData(): void {
+  if (!adapter) return;
+  const candles = displayCandles.value;
+  const closes = candles.map((c) => c.close);
+  const toPoints = (vals: (number | null)[]) => {
+    const pts: { time: number; value: number }[] = [];
+    for (let i = 0; i < candles.length; i++) {
+      const v = vals[i];
+      if (v == null || !Number.isFinite(v)) continue;
+      pts.push({ time: candles[i]!.time, value: v });
+    }
+    return pts;
+  };
+  if (indicators.smaAdded) adapter.setMaData("sma", toPoints(computeSma(closes, indicators.smaLength)));
+  if (indicators.emaAdded) adapter.setMaData("ema", toPoints(computeEma(closes, indicators.emaLength)));
+}
+
+function syncMa(kind: "sma" | "ema"): void {
+  if (!adapter) return;
+  const added = kind === "sma" ? indicators.smaAdded : indicators.emaAdded;
+  if (added) {
+    const color = kind === "sma" ? indicators.smaColor : indicators.emaColor;
+    adapter.setMaStyle(kind, color);
+    const candles = displayCandles.value;
+    const closes = candles.map((c) => c.close);
+    const vals = kind === "sma" ? computeSma(closes, indicators.smaLength) : computeEma(closes, indicators.emaLength);
+    const pts: { time: number; value: number }[] = [];
+    for (let i = 0; i < candles.length; i++) {
+      const v = vals[i];
+      if (v == null || !Number.isFinite(v)) continue;
+      pts.push({ time: candles[i]!.time, value: v });
+    }
+    adapter.setMaData(kind, pts);
+  } else {
+    adapter.removeMa(kind);
+  }
+}
+
+watch(
+  () => [indicators.smaAdded, indicators.smaLength, indicators.smaColor, indicators.smaVisible],
+  () => {
+    if (!adapter) return;
+    adapter.setMaVisible("sma", indicators.smaVisible);
+    syncMa("sma");
+  }
+);
+watch(
+  () => [indicators.emaAdded, indicators.emaLength, indicators.emaColor, indicators.emaVisible],
+  () => {
+    if (!adapter) return;
+    adapter.setMaVisible("ema", indicators.emaVisible);
+    syncMa("ema");
+  }
+);
 
 function pushRsiData(): void {
   if (!indicators.rsiAdded || !adapter) return;
@@ -697,6 +789,8 @@ window.addEventListener("tk-chart-style", onCloudStyle);
 onUnmounted(() => window.removeEventListener("tk-chart-style", onCloudStyle));
 const chartSettingsOpen = ref(false);
 const rsiSettingsOpen = ref(false);
+const smaSettingsOpen = ref(false);
+const emaSettingsOpen = ref(false);
 
 const isDarkTheme = computed(() => themeStore.theme === "dark");
 /** Theme gradient (matches the CSS --chart-bg-gradient of each theme). */
@@ -1052,6 +1146,8 @@ watch(
     // Re-anchor the badge after any data change (scale may shift)
     nextTick(updateBadgePosition);
     if (indicators.rsiAdded) nextTick(pushRsiData);
+    if (indicators.smaAdded || indicators.emaAdded) nextTick(pushMaData);
+    if (indicators.smaAdded || indicators.emaAdded) nextTick(pushMaData);
     if (!prev || prev.length === 0 || next.length === 0) {
       // Fresh history after a symbol/timeframe switch (or first load): the
       // price scale may carry a MANUALLY-dragged range from the previous
@@ -4050,8 +4146,52 @@ onBeforeUnmount(() => {
       </span>
     </div>
 
-    <!-- Indicator legend (TradingView-style): name + eye/settings/remove -->
-    <div v-if="indicators.sessionsAdded && instrument" class="indicator-legend">
+    <!-- Indicator legend (TradingView-style): one row per indicator,
+         stacked UNDER the symbol label — never overlapping. -->
+    <div v-if="instrument" class="indicator-legend">
+      <div v-if="indicators.smaAdded" class="legend-row">
+        <span class="ind-legend-name" :style="{ color: indicators.smaColor }" :class="{ off: !indicators.smaVisible }">SMA {{ indicators.smaLength }}</span>
+        <button class="ind-legend-btn" type="button" :title="indicators.smaVisible ? 'Hide' : 'Show'" @click="indicators.smaVisible = !indicators.smaVisible">
+          <svg v-if="indicators.smaVisible" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" /><circle cx="12" cy="12" r="2.6" /></svg>
+          <svg v-else viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5c2 0 3.7.6 5.1 1.5M22 12s-3.5 6.5-10 6.5c-2 0-3.7-.6-5.1-1.5" /><path d="M4 20L20 4" /></svg>
+        </button>
+        <button class="ind-legend-btn" type="button" title="Settings" @click="smaSettingsOpen = !smaSettingsOpen">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l-.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z" /></svg>
+        </button>
+        <button class="ind-legend-btn" type="button" title="Remove" @click="indicators.smaAdded = false">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+        <div v-if="smaSettingsOpen" class="ind-settings ma-settings" @click.stop>
+          <div class="ind-settings-title">SMA — settings</div>
+          <div class="ind-set-row">
+            <input class="ind-set-color" type="color" v-model="indicators.smaColor" aria-label="SMA color" />
+            <input class="rsi-num" type="number" min="2" max="500" v-model.number="indicators.smaLength" aria-label="SMA length" />
+            <span class="ma-len-hint">period</span>
+          </div>
+        </div>
+      </div>
+      <div v-if="indicators.emaAdded" class="legend-row">
+        <span class="ind-legend-name" :style="{ color: indicators.emaColor }" :class="{ off: !indicators.emaVisible }">EMA {{ indicators.emaLength }}</span>
+        <button class="ind-legend-btn" type="button" :title="indicators.emaVisible ? 'Hide' : 'Show'" @click="indicators.emaVisible = !indicators.emaVisible">
+          <svg v-if="indicators.emaVisible" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" /><circle cx="12" cy="12" r="2.6" /></svg>
+          <svg v-else viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5c2 0 3.7.6 5.1 1.5M22 12s-3.5 6.5-10 6.5c-2 0-3.7-.6-5.1-1.5" /><path d="M4 20L20 4" /></svg>
+        </button>
+        <button class="ind-legend-btn" type="button" title="Settings" @click="emaSettingsOpen = !emaSettingsOpen">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l-.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z" /></svg>
+        </button>
+        <button class="ind-legend-btn" type="button" title="Remove" @click="indicators.emaAdded = false">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+        <div v-if="emaSettingsOpen" class="ind-settings ma-settings" @click.stop>
+          <div class="ind-settings-title">EMA — settings</div>
+          <div class="ind-set-row">
+            <input class="ind-set-color" type="color" v-model="indicators.emaColor" aria-label="EMA color" />
+            <input class="rsi-num" type="number" min="2" max="500" v-model.number="indicators.emaLength" aria-label="EMA length" />
+            <span class="ma-len-hint">period</span>
+          </div>
+        </div>
+      </div>
+      <div v-if="indicators.sessionsAdded" class="legend-row">
       <span class="ind-legend-name" :class="{ off: !indicators.sessionsVisible }">Sessions</span>
       <button class="ind-legend-btn" type="button" :title="indicators.sessionsVisible ? 'Hide' : 'Show'" @click="indicators.sessionsVisible = !indicators.sessionsVisible">
         <svg v-if="indicators.sessionsVisible" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -4137,6 +4277,7 @@ onBeforeUnmount(() => {
           <input type="checkbox" v-model="indicators.sessionsLabels" />
           <span>Show session names</span>
         </label>
+      </div>
       </div>
     </div>
 
@@ -5750,10 +5891,27 @@ onBeforeUnmount(() => {
   top: 30px;
   left: 14px;
   z-index: 7;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  pointer-events: auto;
+}
+.legend-row {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  pointer-events: auto;
+  position: relative;
+}
+.ma-settings {
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  min-width: 190px;
+}
+.ma-len-hint {
+  font-size: 10px;
+  color: var(--text-muted);
 }
 .ind-legend-name {
   font-size: 10.5px;

@@ -160,6 +160,17 @@ export const useIndicatorsStore = defineStore("indicators", () => {
   const rsiLevelColor = ref("#78909c");
   const rsiUpper = ref(70);
   const rsiLower = ref(30);
+
+  /* ── Moving averages (SMA / EMA overlays on the main pane) ──────────── */
+  const smaAdded = ref(false);
+  const smaVisible = ref(true);
+  const smaLength = ref(20);
+  const smaColor = ref("#f59e0b");
+  const emaAdded = ref(false);
+  const emaVisible = ref(true);
+  const emaLength = ref(50);
+  const emaColor = ref("#38bdf8");
+
   /** User-defined sessions (visitor-local clock). */
   const customs = ref<CustomSession[]>([]);
 
@@ -185,6 +196,14 @@ export const useIndicatorsStore = defineStore("indicators", () => {
         rsiLevelColor?: string;
         rsiUpper?: number;
         rsiLower?: number;
+        smaAdded?: boolean;
+        smaVisible?: boolean;
+        smaLength?: number;
+        smaColor?: string;
+        emaAdded?: boolean;
+        emaVisible?: boolean;
+        emaLength?: number;
+        emaColor?: string;
       };
       if (typeof p.added === "boolean") sessionsAdded.value = p.added;
       if (typeof p.visible === "boolean") sessionsVisible.value = p.visible;
@@ -212,6 +231,14 @@ export const useIndicatorsStore = defineStore("indicators", () => {
       if (HEXc(p.rsiLevelColor)) rsiLevelColor.value = p.rsiLevelColor;
       if (typeof p.rsiUpper === "number") rsiUpper.value = Math.min(100, Math.max(1, p.rsiUpper));
       if (typeof p.rsiLower === "number") rsiLower.value = Math.min(99, Math.max(0, p.rsiLower));
+      if (typeof p.smaAdded === "boolean") smaAdded.value = p.smaAdded;
+      if (typeof p.smaVisible === "boolean") smaVisible.value = p.smaVisible;
+      if (typeof p.smaLength === "number" && p.smaLength >= 2 && p.smaLength <= 500) smaLength.value = Math.round(p.smaLength);
+      if (HEXc(p.smaColor)) smaColor.value = p.smaColor;
+      if (typeof p.emaAdded === "boolean") emaAdded.value = p.emaAdded;
+      if (typeof p.emaVisible === "boolean") emaVisible.value = p.emaVisible;
+      if (typeof p.emaLength === "number" && p.emaLength >= 2 && p.emaLength <= 500) emaLength.value = Math.round(p.emaLength);
+      if (HEXc(p.emaColor)) emaColor.value = p.emaColor;
       if (Array.isArray(p.customs)) {
         for (const c of p.customs) {
           if (c && typeof c.id === "string" && typeof c.name === "string" &&
@@ -231,7 +258,8 @@ export const useIndicatorsStore = defineStore("indicators", () => {
   } catch {}
 
   watch(
-    [sessionsAdded, sessionsVisible, sessionsLabels, sessionsEnabled, defs, customs, rsiAdded, rsiVisible, rsiLength, rsiColor, rsiLevelColor, rsiUpper, rsiLower],
+    [sessionsAdded, sessionsVisible, sessionsLabels, sessionsEnabled, defs, customs, rsiAdded, rsiVisible, rsiLength, rsiColor, rsiLevelColor, rsiUpper, rsiLower,
+     smaAdded, smaVisible, smaLength, smaColor, emaAdded, emaVisible, emaLength, emaColor],
     () => {
       localStorage.setItem(
         KEY,
@@ -249,6 +277,14 @@ export const useIndicatorsStore = defineStore("indicators", () => {
           rsiLevelColor: rsiLevelColor.value,
           rsiUpper: rsiUpper.value,
           rsiLower: rsiLower.value,
+          smaAdded: smaAdded.value,
+          smaVisible: smaVisible.value,
+          smaLength: smaLength.value,
+          smaColor: smaColor.value,
+          emaAdded: emaAdded.value,
+          emaVisible: emaVisible.value,
+          emaLength: emaLength.value,
+          emaColor: emaColor.value,
         })
       );
     },
@@ -301,6 +337,14 @@ export const useIndicatorsStore = defineStore("indicators", () => {
     rsiLevelColor,
     rsiUpper,
     rsiLower,
+    smaAdded,
+    smaVisible,
+    smaLength,
+    smaColor,
+    emaAdded,
+    emaVisible,
+    emaLength,
+    emaColor,
     isEnabled,
     addSessions,
     removeSessions,

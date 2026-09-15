@@ -205,6 +205,30 @@ function toggleReplay(): void {
           class="ind-item"
           type="button"
           role="menuitemcheckbox"
+          :aria-checked="indicators.smaAdded"
+          @click="indicators.smaAdded = !indicators.smaAdded"
+        >
+          <span class="ind-check" :class="{ on: indicators.smaAdded }">
+            <svg v-if="indicators.smaAdded" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12l5 5L20 7" /></svg>
+          </span>
+          <span class="ind-item-name">Moving Average Simple</span>
+        </button>
+        <button
+          class="ind-item"
+          type="button"
+          role="menuitemcheckbox"
+          :aria-checked="indicators.emaAdded"
+          @click="indicators.emaAdded = !indicators.emaAdded"
+        >
+          <span class="ind-check" :class="{ on: indicators.emaAdded }">
+            <svg v-if="indicators.emaAdded" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12l5 5L20 7" /></svg>
+          </span>
+          <span class="ind-item-name">Moving Average Exponential</span>
+        </button>
+        <button
+          class="ind-item"
+          type="button"
+          role="menuitemcheckbox"
           :aria-checked="indicators.rsiAdded"
           @click="toggleRsi"
         >
