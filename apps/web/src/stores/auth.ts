@@ -166,7 +166,12 @@ export const useAuthStore = defineStore("auth", () => {
     profile.value = null;
     status.value = "guest";
     setWasAuth(false);
-    try { localStorage.removeItem(PROFILE_KEY); } catch {}
+    try {
+      localStorage.removeItem(PROFILE_KEY);
+      // Never leak the previous account's chat identity into the next one.
+      localStorage.removeItem("tk-chat-nick");
+    } catch {}
+    try { useChatStore().nick = ""; } catch {}
     authModalOpen.value = false;
   }
 

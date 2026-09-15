@@ -63,7 +63,8 @@ function toggleRail(): void {
 }
 onBeforeUnmount(() => window.removeEventListener("resize", onResize));
 const gate = computed(() => {
-  if (auth.status === "ready" || auth.status === "needs-username") return false;
+  if (auth.status === "ready") return false;
+  if (auth.status === "needs-username") return true; // no username → no charts
   if (auth.status === "loading") return !wasAuth;
   return true;
 });

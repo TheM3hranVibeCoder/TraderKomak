@@ -44,6 +44,9 @@ async function claim(): Promise<void> {
 }
 
 function close(): void {
+  // A user WITHOUT a username may not dismiss the picker — signing out is
+  // the only way out (charts stay locked, per product rule).
+  if (auth.status === "needs-username") return;
   auth.authModalOpen = false;
 }
 
@@ -57,8 +60,14 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 <template>
   <Teleport to="body">
     <div class="auth-backdrop" @click.self="close">
-      <div class="auth-modal" role="dialog" aria-modal="true" aria-label="Sign in to TraderKomak">
-        <button class="auth-close" type="button" aria-label="Close" @click="close">✕</button>
+      <div class="auth-modal" role="dialog" aria-modal="true" aria-label="Sign in to TraderKomak" @click.self.stop>
+        <button
+          v-if="auth.status !== 'needs-username'"
+          class="auth-close"
+          type="button"
+          aria-label="Close"
+          @click="close"
+        >✕</button>
 
         <!-- Step 1: sign in with Google -->
         <template v-if="step === 'google'">
