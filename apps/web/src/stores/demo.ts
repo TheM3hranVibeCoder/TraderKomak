@@ -213,15 +213,12 @@ export const useDemoStore = defineStore("demo", () => {
     if (level === "sl") v = long ? Math.min(v, p.entry - tick) : Math.max(v, p.entry + tick);
     if (level === "tp") v = long ? Math.max(v, p.entry + tick) : Math.min(v, p.entry - tick);
     p[level] = v;
-    // In percent/usd sizing modes the lot derives from the SL distance —
-    // recompute ONLY while the order is not yet filled (draft/pending).
-    // Resizing a LIVE position's lot because its SL was moved later is
-    // surprising and dangerous (a $100 trade silently became 60 lots);
-    // the size was chosen at entry and stays until close.
-    if (level === "sl" && p.status !== "open" && sizeMode.value !== "lot" && p.entry) {
-      const dist = p.sl !== null ? Math.abs(p.entry - p.sl) : 0;
-      p.lot = dist > 0 ? Math.min(100, Math.max(0.01, +(riskAmount() / dist).toFixed(2))) : p.lot;
-    }
+    // The lot NEVER changes on a level drag. Risk-based sizing (%, $)
+    // happens exactly once — when the order is placed (placeOrder derives
+    // the lot from the SL distance at that moment). Dragging the SL later,
+    // on a pending order or a filled position, only moves the level; the
+    // size stays what it was chosen as. (Recomputing here silently turned
+    // a $100 trade into 60 lots whenever the SL was dragged near entry.)
     persist();
   }
 
