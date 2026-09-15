@@ -878,7 +878,21 @@ function applyBodyToGroup(dir: "up" | "down"): void {
 }
 function setColor(key: keyof ChartStyle, e: Event): void {
   const v = (e.target as HTMLInputElement).value;
-  if (HEX(v)) (chartStyle.value[key] as string | null) = v;
+  if (!HEX(v)) return;
+  // Changing the BACKGROUND hands the ink back to auto: axis text/border
+  // and crosshair colors adapt to the background brightness. Stale explicit
+  // colors from earlier experiments would otherwise block the adaptation.
+  if (key === "bgSolid" || key === "bgTop" || key === "bgBottom") {
+    s_resetInk();
+  }
+  (chartStyle.value[key] as string | null) = v;
+}
+function s_resetInk(): void {
+  const s = chartStyle.value;
+  s.axisText = null;
+  s.axisBorder = null;
+  s.crossVert = null;
+  s.crossHorz = null;
 }
 function resetGroup(group: "bg" | "candles" | "scales" | "cross"): void {
   const s = chartStyle.value;
