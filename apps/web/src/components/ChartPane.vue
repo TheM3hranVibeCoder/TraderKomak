@@ -816,12 +816,11 @@ function relLuma(hex: string): number {
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 }
 
-/** Is the CUSTOMIZED chart background light or dark? When no custom
- *  background is set this follows the site theme (same as before). */
+/** Is the EFFECTIVE chart background light or dark? Resolves the real
+ *  rendered colors: a template/custom background when set, the theme's
+ *  own gradient otherwise — so the ink always matches what is painted. */
 function chartBgIsLight(): boolean {
   const s = chartStyle.value;
-  const custom = s.bgSolid ?? s.bgTop ?? s.bgBottom;
-  if (!custom) return !isDarkTheme.value;
   if (s.bgMode === "solid") return relLuma(s.bgSolid ?? themeBgPair()[0]) > 0.5;
   const top = relLuma(s.bgTop ?? themeBgPair()[0]);
   const bottom = relLuma(s.bgBottom ?? themeBgPair()[1]);
@@ -845,21 +844,20 @@ function applyChartStyle(): void {
     wickUp: s.wickUp ?? DEFAULT_CANDLES.wickUp,
     wickDown: s.wickDown ?? DEFAULT_CANDLES.wickDown,
   });
-  // When the chart background is CUSTOMIZED, axis text/border and the
-  // crosshair adapt to ITS brightness (white on dark backgrounds, black on
-  // light ones) instead of following the site theme. Explicit user colors
-  // still win; with no custom background everything follows the theme.
-  const bgCustom = !!(s.bgSolid ?? s.bgTop ?? s.bgBottom);
+  // Axis text/border and the crosshair ALWAYS adapt to the effective
+  // rendered background (template/custom colors when set, the theme's own
+  // gradient otherwise): white ink on dark backgrounds, black on light.
+  // Explicit user/template ink colors still win when set.
   const lightBg = chartBgIsLight();
   const autoInk = lightBg ? "#101318" : "#e8ecf4";
   const autoBorder = lightBg ? "rgba(16, 19, 24, 0.55)" : "rgba(232, 236, 244, 0.55)";
   adapter?.setAxisColors({
-    text: s.axisText ?? (bgCustom ? autoInk : null),
-    border: s.axisBorder ?? (bgCustom ? autoBorder : null),
+    text: s.axisText ?? autoInk,
+    border: s.axisBorder ?? autoBorder,
   });
   adapter?.setCrosshairColors({
-    vert: s.crossVert ?? (bgCustom ? autoInk : null),
-    horz: s.crossHorz ?? (bgCustom ? autoInk : null),
+    vert: s.crossVert ?? autoInk,
+    horz: s.crossHorz ?? autoInk,
   });
   localStorage.setItem(CHART_STYLE_KEY, JSON.stringify(s));
   window.dispatchEvent(new CustomEvent("tk-local-change", { detail: { key: "chart-style" } }));
