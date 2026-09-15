@@ -16,7 +16,7 @@
  *     ban (permanent, by nick + IP) chatters — mod state persists.
  */
 import type { FastifyInstance } from "fastify";
-import type { WebSocket } from "ws";
+import type { RawData, WebSocket } from "ws";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { ChatMessage, ChatModEntry } from "@traderkomak/shared";
@@ -37,6 +37,9 @@ interface Conn {
   admin: boolean;
   ip: string;
   lastChatAt: number;
+  /** Set false right before each heartbeat ping; a pong (or any frame)
+   *  sets it true. Dead phone browsers never pong → reaped below. */
+  alive: boolean;
 }
 
 /** Country lookup for admin user-info (free ip-api, cached per IP/day). */
@@ -65,6 +68,8 @@ export class ChatRoom {
   private readonly conns = new Map<WebSocket, Conn>();
   /** Direct messages awaiting a Read receipt: id → admin socket + target. */
   private readonly pendingDms = new Map<string, { socket: WebSocket; nick: string }>();
+  /** Presence heartbeat timer (reaps dead sockets). */
+  private heartbeat: ReturnType<typeof setInterval> | undefined;
   private history: ChatMessage[] = [];
   /** Every nick the room has seen — powers the member/offline lists. */
   private readonly known = new Map<string, { lastSeen: number; ip?: string }>();
@@ -88,6 +93,21 @@ export class ChatRoom {
   ) {
     this.history = this.loadHistory();
     this.mod = this.loadMod();
+    // Heartbeat: closing a phone browser can leave a half-open TCP socket
+    // that never fires "close" — without this the roster shows ghosts
+    // "online" for hours. Every 30s ping everyone; browsers pong at the
+    // protocol level automatically. Two missed rounds → terminate.
+    this.heartbeat = setInterval(() => {
+      for (const [, c] of this.conns) {
+        if (!c.alive) {
+          try { c.socket.terminate(); } catch {}
+          continue;
+        }
+        c.alive = false;
+        try { c.socket.ping(); } catch {}
+      }
+    }, 30_000);
+    this.heartbeat.unref?.();
     // Seed the member list from the persisted history
     for (const m of this.history) {
       if (m.from) this.known.set(m.from.toLowerCase(), { lastSeen: m.ts });
@@ -171,7 +191,7 @@ export class ChatRoom {
 
   register(app: FastifyInstance): void {
     app.get("/chat", { websocket: true }, (socket, req) => {
-      const conn: Conn = { socket, nick: null, admin: false, ip: req.ip ?? "", lastChatAt: 0 };
+      const conn: Conn = { socket, nick: null, admin: false, ip: req.ip ?? "", lastChatAt: 0, alive: true };
       // IP bans are enforced before anything else — banned means banned.
       if (this.isBannedIp(conn.ip)) {
         this.safeSend(conn, { type: "error", message: "You are banned from this room" });
@@ -200,6 +220,12 @@ export class ChatRoom {
         this.conns.delete(socket);
         this.broadcastOnline();
         if (nick) this.log.info({ nick, conns: this.conns.size }, "chat left");
+      });
+      // Any sign of life proves the socket is real
+      socket.on("pong", () => { conn.alive = true; });
+      socket.on("message", (data: RawData) => {
+        conn.alive = true;
+        void data;
       });
     });
   }
