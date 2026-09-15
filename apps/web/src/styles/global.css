@@ -181,6 +181,20 @@ body {
   }
 }
 
+/* Theme-switch wipe (View Transitions): the old theme fades under the new
+   one which expands as a circle from the toggle button. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-old(root) {
+  z-index: 1;
+}
+::view-transition-new(root) {
+  z-index: 2;
+}
+
 /* Utility for gradient text */
 .gradient-text {
   background: var(--accent-gradient);

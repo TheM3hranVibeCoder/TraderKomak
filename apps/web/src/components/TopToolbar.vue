@@ -70,6 +70,27 @@ function toggleRsi(): void {
   if (indicators.rsiAdded) indicators.rsiVisible = true;
 }
 
+/** Smooth theme switch: a circular wipe expands from the toggle button.
+ *  Browsers without the View Transitions API (and reduced-motion users)
+ *  just switch instantly — same as before. */
+function onThemeToggle(e: MouseEvent): void {
+  const doc = document as Document & { startViewTransition?: (cb: () => void) => { ready: Promise<void> } };
+  if (!doc.startViewTransition || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    themeStore.toggle();
+    return;
+  }
+  const x = e.clientX || window.innerWidth - 40;
+  const y = e.clientY || 40;
+  const radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+  const vt = doc.startViewTransition(() => themeStore.toggle());
+  void vt.ready.then(() => {
+    document.documentElement.animate(
+      { clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${radius}px at ${x}px ${y}px)`] },
+      { duration: 550, easing: "cubic-bezier(0.4, 0, 0.2, 1)", pseudoElement: "::view-transition-new(root)" }
+    );
+  }).catch(() => {});
+}
+
 function toggleDemo(): void {
   demo.active = !demo.active;
 }
@@ -259,7 +280,7 @@ function toggleReplay(): void {
         class="theme-btn"
         type="button"
         :class="themeStore.theme"
-        @click="themeStore.toggle()"
+        @click="onThemeToggle"
         :title="`Switch to ${themeStore.theme === 'dark' ? 'light' : 'dark'} mode`"
         aria-label="Toggle theme"
       >
