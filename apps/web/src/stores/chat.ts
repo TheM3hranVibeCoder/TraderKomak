@@ -211,7 +211,7 @@ function addHealListeners(): void {
         incomingDm.value = dm;
       },
       onDmStatus: (st) => {
-        flashDmStatus(st.id, { nick: st.nick, read: st.read, offline: st.offline });
+        setDmStatus(st.id, { nick: st.nick, read: st.read, offline: st.offline });
       },
       onTgPopup: (id) => {
         tgPopupId.value = id;
@@ -253,15 +253,14 @@ function addHealListeners(): void {
   /* ── Admin tools state ── */
   const userInfo = ref<{ nick: string; lastIp: string | null; online: boolean; country: string | null } | null>(null);
   const dmStatuses = ref<Record<string, { nick: string; read: boolean; offline: boolean }>>({});
-  /** Status chips are transient: "Read ✓"/"offline" show for a few seconds
-   *  next to the user row, then clear. */
-  function flashDmStatus(id: string, entry: { nick: string; read: boolean; offline: boolean }, ms = 6000): void {
+  /** DM status chips persist while the panel is open: "Sent…" until the
+   *  user reads it (→ "Read ✓"), cleared when the panel closes. */
+  function setDmStatus(id: string, entry: { nick: string; read: boolean; offline: boolean }): void {
     dmStatuses.value = { ...dmStatuses.value, [id]: entry };
-    setTimeout(() => {
-      const next = { ...dmStatuses.value };
-      delete next[id];
-      dmStatuses.value = next;
-    }, ms);
+  }
+  /** Called when the admin panel closes — statuses reset. */
+  function clearDmStatuses(): void {
+    dmStatuses.value = {};
   }
   const tgFlags = ref<Record<string, "join" | "close">>({});
   /** Called when the admin panel closes — flags reset for the next broadcast. */
@@ -279,9 +278,9 @@ function addHealListeners(): void {
   /** Send a direct message to a user; returns its tracking id. */
   function adminDm(nick: string, text: string): string {
     const id = `dm-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    // "Sent…" until the server reports Read/offline — auto-expires so a
-    // user who never looks at it doesn't leave a chip behind forever.
-    flashDmStatus(id, { nick, read: false, offline: false }, 30_000);
+    // "Sent…" until the server reports Read/offline — a fresh DM on the
+    // same user replaces the previous state (back to "Sent…").
+    setDmStatus(id, { nick, read: false, offline: false });
     client?.sendAdminDm(nick, text, id);
     return id;
   }
@@ -452,6 +451,7 @@ function addHealListeners(): void {
     clearUserInfo,
     adminDm,
     dmStatuses,
+    clearDmStatuses,
     incomingDm,
     dismissDm,
     tgBroadcast,

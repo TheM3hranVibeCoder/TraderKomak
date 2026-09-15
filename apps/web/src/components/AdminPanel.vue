@@ -8,6 +8,7 @@ const emit = defineEmits<{ (e: "close"): void }>();
 
 function close(): void {
   chat.clearTgFlags();
+  chat.clearDmStatuses();
   emit("close");
 }
 
