@@ -5261,7 +5261,7 @@ onBeforeUnmount(() => {
       type="button"
       title="Chart settings"
       aria-label="Chart settings"
-      :style="{ right: '0px', bottom: '0px', width: axisRightW + 'px', height: axisBottomH + 'px' }"
+      :style="{ right: '0px', bottom: (demo.active ? demoBottomH : 0) + 'px', width: axisRightW + 'px', height: axisBottomH + 'px' }"
       data-corner-gear="true"
       @click="chartSettingsOpen = !chartSettingsOpen"
     >
