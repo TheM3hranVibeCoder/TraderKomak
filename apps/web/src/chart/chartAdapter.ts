@@ -18,6 +18,7 @@ import {
   LineStyle,
   CandlestickSeries,
   LineSeries,
+  TickMarkType,
 } from "lightweight-charts";
 import type { Candle } from "@traderkomak/shared";
 import { instrumentPrecision } from "@traderkomak/shared";
@@ -150,7 +151,40 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
   const colors = themeColors(isDarkInitial);
   let isDarkNow = isDarkInitial;
 
+  /* ── Visitor-local time formatting for the time scale + crosshair ────
+   *  Lightweight-Charts renders raw timestamps in UTC by default; these
+   *  formatters show every time in the VISITOR'S own clock/timezone. */
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  const localTime = (t: number, withSeconds: boolean): string => {
+    const d = new Date(t * 1000);
+    const base = `${p2(d.getHours())}:${p2(d.getMinutes())}${withSeconds ? ":" + p2(d.getSeconds()) : ""}`;
+    const now = new Date();
+    const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    if (sameDay) return base;
+    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return `${d.getDate()} ${MONTHS[d.getMonth()]} ${base}`;
+  };
+  const tickMarkFormatter = (time: Time, tickMarkType: TickMarkType): string => {
+    const d = new Date(Number(time) * 1000);
+    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    switch (tickMarkType) {
+      case TickMarkType.Year:
+        return String(d.getFullYear());
+      case TickMarkType.Month:
+        return MONTHS[d.getMonth()]!;
+      case TickMarkType.DayOfMonth:
+        return `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+      case TickMarkType.TimeWithSeconds:
+        return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+      default:
+        return `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+    }
+  };
+
   const chart: IChartApi = createChart(container, {
+    localization: {
+      timeFormatter: (time: Time) => localTime(Number(time), true),
+    },
     layout: {
       // The pane gradient is painted in CSS (behind the canvas) so the
       // drawing layer can render between the background and the candles.
@@ -179,6 +213,7 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       borderColor: colors.border,
       timeVisible: true,
       secondsVisible: true,
+      tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) => tickMarkFormatter(time, tickMarkType),
       rightOffset: 15,
       barSpacing: 5,
       minBarSpacing: 0.1, // deep zoom-out — all 20000 bars fit on screen
