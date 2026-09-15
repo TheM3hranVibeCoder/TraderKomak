@@ -217,12 +217,9 @@ function addHealListeners(): void {
         tgPopupId.value = id;
       },
       onTgResult: (r) => {
-        const entry = { nick: r.nick, action: r.action, at: Date.now() };
-        tgResults.value = [entry, ...tgResults.value];
-        // Result chips are transient — fade out of the panel after 6s.
-        setTimeout(() => {
-          tgResults.value = tgResults.value.filter((x) => x !== entry);
-        }, 6000);
+        // Latest result per user, shown as a badge on their row; the panel
+        // clears them when it closes (ready for the next broadcast).
+        tgFlags.value = { ...tgFlags.value, [r.nick]: r.action };
       },
     });
     clientAdminKey = currentKey;
@@ -266,7 +263,11 @@ function addHealListeners(): void {
       dmStatuses.value = next;
     }, ms);
   }
-  const tgResults = ref<{ nick: string; action: "join" | "close"; at: number }[]>([]);
+  const tgFlags = ref<Record<string, "join" | "close">>({});
+  /** Called when the admin panel closes — flags reset for the next broadcast. */
+  function clearTgFlags(): void {
+    tgFlags.value = {};
+  }
 
   function askUserInfo(nick: string): void {
     userInfo.value = { nick, lastIp: null, online: false, country: null };
@@ -454,7 +455,8 @@ function addHealListeners(): void {
     incomingDm,
     dismissDm,
     tgBroadcast,
-    tgResults,
+    tgFlags,
+    clearTgFlags,
     tgPopupId,
     answerTg,
     ensureClient,

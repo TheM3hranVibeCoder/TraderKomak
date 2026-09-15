@@ -6,6 +6,11 @@ import { supabase } from "@/services/supabase";
 const chat = useChatStore();
 const emit = defineEmits<{ (e: "close"): void }>();
 
+function close(): void {
+  chat.clearTgFlags();
+  emit("close");
+}
+
 const tab = ref<"users" | "muted" | "banned">("users");
 
 const onlineSet = computed(() => new Set(chat.onlineNicks));
@@ -120,7 +125,7 @@ function onKey(e: KeyboardEvent): void {
   if (e.key === "Escape") {
     if (details.value) details.value = null;
     else if (dmTarget.value) dmTarget.value = null;
-    else emit("close");
+    else close();
   }
 }
 window.addEventListener("keydown", onKey);
@@ -136,7 +141,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             <h2 class="admin-title">Admin Panel</h2>
             <p class="admin-sub">Manage chat users — mute, ban, message and announce.</p>
           </div>
-          <button class="admin-close" type="button" aria-label="Close" @click="emit('close')">✕</button>
+          <button class="admin-close" type="button" aria-label="Close" @click="close">✕</button>
         </header>
 
         <!-- stat chips + telegram broadcast -->
@@ -145,22 +150,14 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           <div class="stat blue"><span class="stat-num">{{ allUsers.length }}</span><span class="stat-label">Known users</span></div>
           <div class="stat amber"><span class="stat-num">{{ chat.mutes.length }}</span><span class="stat-label">Muted</span></div>
           <div class="stat red"><span class="stat-num">{{ chat.bans.length }}</span><span class="stat-label">Banned</span></div>
+        </div>
+        <div class="tg-row">
           <button class="tg-broadcast" type="button" title="Show a Join-Telegram popup to every online user" @click="tgBroadcast">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true">
               <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
             </svg>
-            {{ tgSent ? "Sent ✓" : "Telegram popup" }}
+            {{ tgSent ? "Popup sent to all online users ✓" : "Send Telegram popup to online users" }}
           </button>
-        </div>
-
-        <!-- telegram results -->
-        <div v-if="chat.tgResults.length" class="tg-results">
-          <span
-            v-for="(r, i) in chat.tgResults.slice(0, 12)"
-            :key="i"
-            class="tg-chip"
-            :class="r.action"
-          >{{ r.nick }} {{ r.action === "join" ? "→ joined ✓" : "→ closed ✕" }}</span>
         </div>
 
         <div class="admin-tabs" role="tablist">
@@ -188,6 +185,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
               <span v-if="bannedSet.has(u.nick.toLowerCase())" class="user-flag banned">banned</span>
               <span v-else-if="mutedSet.has(u.nick.toLowerCase())" class="user-flag muted">muted</span>
               <span v-else-if="u.online" class="user-flag live">online</span>
+              <span v-if="chat.tgFlags[u.nick]" class="tg-flag" :class="chat.tgFlags[u.nick]">{{ chat.tgFlags[u.nick] === "join" ? "TG joined ✓" : "TG closed ✕" }}</span>
               <span v-if="dmStatusFor(u.nick)" class="dm-status">{{ dmStatusFor(u.nick) }}</span>
               <div class="user-actions">
                 <button class="act blue" title="Send a direct message" @click="openDm(u.nick)">DM</button>
@@ -339,10 +337,12 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  text-align: center;
   padding: 10px 4px;
   border-radius: 14px;
   color: #fff;
 }
+.stat-label { max-width: 100%; }
 .stat.green  { background: linear-gradient(135deg, #34d399, #10b981); }
 .stat.blue   { background: linear-gradient(135deg, #60a5fa, #3b82f6); }
 .stat.amber  { background: linear-gradient(135deg, #fbbf24, #f59e0b); }
@@ -368,21 +368,20 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 }
 .tg-broadcast:hover { transform: translateY(-1px); filter: brightness(1.08); }
 
-.tg-results {
+.tg-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
   padding: 10px 20px 0;
 }
-.tg-chip {
-  font-size: 10.5px;
-  font-weight: 700;
-  padding: 3px 9px;
+.tg-flag {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2.5px 8px;
   border-radius: 999px;
   color: #fff;
+  white-space: nowrap;
 }
-.tg-chip.join { background: linear-gradient(135deg, #34d399, #10b981); }
-.tg-chip.close { background: linear-gradient(135deg, #94a3b8, #64748b); }
+.tg-flag.join { background: linear-gradient(135deg, #34d399, #10b981); }
+.tg-flag.close { background: linear-gradient(135deg, #94a3b8, #64748b); }
 
 .admin-tabs {
   display: flex;
