@@ -87,7 +87,7 @@ const auth = useAuthStore();
 }
 .landing-title {
   margin: 0 0 10px;
-  font-size: 34px;
+  font-size: clamp(26px, 6vw, 34px);
   font-weight: 800;
   letter-spacing: -0.5px;
   color: #171c2b;
@@ -104,8 +104,8 @@ const auth = useAuthStore();
   gap: 12px;
   min-height: 48px;
   padding: 14px 28px;
-  border: none;
-  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
   background: #ffffff;
   color: #1f2430;
   font-size: 15px;

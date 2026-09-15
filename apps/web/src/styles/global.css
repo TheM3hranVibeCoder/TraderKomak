@@ -164,6 +164,23 @@ body {
   }
 }
 
+/* Branded text selection */
+::selection {
+  background: rgba(59, 130, 246, 0.35);
+  color: inherit;
+}
+
+/* Touch devices: iOS Safari zooms the whole page when an input with
+   font-size < 16px gets focus. Normalize all form fields on touch —
+   desktop sizes are untouched. */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
 /* Utility for gradient text */
 .gradient-text {
   background: var(--accent-gradient);

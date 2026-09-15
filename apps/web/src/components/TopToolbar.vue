@@ -367,7 +367,7 @@ function toggleReplay(): void {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  height: 34px;
+  height: 36px;
   padding: 0 10px 0 5px;
   border-radius: var(--radius-md);
   border: 1px solid var(--glass-border);
@@ -468,8 +468,8 @@ function toggleReplay(): void {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 34px;
+  width: 38px;
+  height: 36px;
   border-radius: var(--radius-md);
   border: 1px solid var(--glass-border);
   background: var(--glass-bg);
@@ -487,11 +487,12 @@ function toggleReplay(): void {
 .theme-btn {
   display: inline-flex;
   align-items: center;
+  height: 36px;
   justify-content: center;
   /* align with the 36px watchlist rail below (cancels the toolbar padding) */
   margin-right: -14px;
-  width: 36px;
-  height: 34px;
+  width: 38px;
+  height: 36px;
   border-radius: var(--radius-md);
   border: 1px solid var(--glass-border);
   background: var(--glass-bg);
