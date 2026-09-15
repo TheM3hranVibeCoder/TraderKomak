@@ -11,8 +11,10 @@ import { useAuthStore } from "@/stores/auth";
 import { useWatchlistStore } from "@/stores/watchlist";
 import { useDrawingsStore } from "@/stores/drawings";
 import { useMarketStore } from "@/stores/market";
+import { useIndicatorsStore } from "@/stores/indicators";
 
 interface CloudData {
+  indicators?: Record<string, Record<string, boolean>>;
   chart?: {
     style?: Record<string, unknown> | null;
     templates?: unknown;
@@ -39,6 +41,7 @@ function snapshot(): CloudData {
   const w = useWatchlistStore();
   const m = useMarketStore();
   return {
+    indicators: JSON.parse(JSON.stringify(useIndicatorsStore().addedMap)) as Record<string, Record<string, boolean>>,
     chart: {
       style: JSON.parse(localStorage.getItem("tk-chart-style") ?? "null") as Record<string, unknown> | null,
       templates: JSON.parse(localStorage.getItem("tk-chart-templates") ?? "null") as unknown,
@@ -78,6 +81,10 @@ function applyLocal(cloud: CloudData): void {
     const d = useDrawingsStore();
     const w = useWatchlistStore();
     const m = useMarketStore();
+
+    if (cloud.indicators && typeof cloud.indicators === "object") {
+      useIndicatorsStore().setAddedMap(cloud.indicators);
+    }
 
     if (cloud.chart && typeof cloud.chart === "object") {
       if (cloud.chart.style && typeof cloud.chart.style === "object") {
@@ -167,6 +174,8 @@ export function startCloudSync(): void {
       watch(() => [d.drawings, d.lines, d.polys, d.positions, d.singles], onChange, { deep: true });
       watch(() => [...w.instruments], onChange);
       watch(() => [m.instrument, m.timeframe], onChange);
+      const ind = useIndicatorsStore();
+      watch(() => ind.addedMap, onChange, { deep: true });
       // ChartPane announces chart-style / template writes.
       window.addEventListener("tk-local-change", onChange as EventListener);
     },

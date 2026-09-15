@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
-import { ref, watch } from "vue";
+import { useMarketStore } from "@/stores/market";
+import { ref, computed, watch } from "vue";
 
 const KEY = "tk-indicators-v1";
 
@@ -139,7 +140,10 @@ function HEXc(v: unknown): v is string {
   return typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v);
 }
 export const useIndicatorsStore = defineStore("indicators", () => {
-  const sessionsAdded = ref(false);
+  const sessionsAdded = computed({
+    get: () => addedFor("sessions"),
+    set: (v: boolean) => setAdded("sessions", v),
+  });
   /** Eye toggle — boxes hidden but the indicator stays on the chart. */
   const sessionsVisible = ref(true);
   /** Session name labels on top of the boxes (default OFF). */
@@ -152,8 +156,51 @@ export const useIndicatorsStore = defineStore("indicators", () => {
   /** Built-in sessions: name + color editable, boundaries chained. */
   const defs = ref<SessionDef[]>(SESSIONS.map((s) => ({ ...s })));
 
+  /* ── Per-symbol "added" state for every indicator ─────────────────────
+   * Adding Sessions/RSI/SMA/EMA applies to the CURRENT symbol only;
+   * removing on another symbol never touches this one. Synced to Supabase
+   * via cloudSync (user_settings.indicators). */
+  type AddedFlags = { sessions?: boolean; rsi?: boolean; sma?: boolean; ema?: boolean };
+  const addedMap = ref<Record<string, AddedFlags>>({});
+
+  function addedFor(kind: keyof AddedFlags): boolean {
+    const m = addedMap.value[useMarketStore().instrument];
+    return !!(m && m[kind]);
+  }
+  function setAdded(kind: keyof AddedFlags, v: boolean): void {
+    const sym = useMarketStore().instrument;
+    const next = { ...addedMap.value };
+    if (v) {
+      next[sym] = { ...(next[sym] ?? {}), [kind]: true };
+    } else {
+      const flags = { ...(next[sym] ?? {}) };
+      delete flags[kind];
+      if (Object.keys(flags).length > 0) next[sym] = flags;
+      else delete next[sym];
+    }
+    addedMap.value = next;
+  }
+  /** Replace the whole map (cloud sync / migration) after sanitizing. */
+  function setAddedMap(raw: unknown): void {
+    if (!raw || typeof raw !== "object") return;
+    const clean: Record<string, AddedFlags> = {};
+    for (const [sym, flags] of Object.entries(raw as Record<string, unknown>)) {
+      if (!flags || typeof flags !== "object") continue;
+      const f = flags as Record<string, unknown>;
+      const e: AddedFlags = {};
+      for (const k of ["sessions", "rsi", "sma", "ema"] as const) {
+        if (typeof f[k] === "boolean" && f[k]) e[k] = true;
+      }
+      if (Object.keys(e).length > 0) clean[sym] = e;
+    }
+    addedMap.value = clean;
+  }
+
   /* ── RSI indicator ─────────────────────────────────────────────────── */
-  const rsiAdded = ref(false);
+  const rsiAdded = computed({
+    get: () => addedFor("rsi"),
+    set: (v: boolean) => setAdded("rsi", v),
+  });
   const rsiVisible = ref(true);
   const rsiLength = ref(14);
   const rsiColor = ref("#a78bfa");
@@ -162,11 +209,17 @@ export const useIndicatorsStore = defineStore("indicators", () => {
   const rsiLower = ref(30);
 
   /* ── Moving averages (SMA / EMA overlays on the main pane) ──────────── */
-  const smaAdded = ref(false);
+  const smaAdded = computed({
+    get: () => addedFor("sma"),
+    set: (v: boolean) => setAdded("sma", v),
+  });
   const smaVisible = ref(true);
   const smaLength = ref(20);
   const smaColor = ref("#f59e0b");
-  const emaAdded = ref(false);
+  const emaAdded = computed({
+    get: () => addedFor("ema"),
+    set: (v: boolean) => setAdded("ema", v),
+  });
   const emaVisible = ref(true);
   const emaLength = ref(50);
   const emaColor = ref("#38bdf8");
@@ -204,6 +257,7 @@ export const useIndicatorsStore = defineStore("indicators", () => {
         emaVisible?: boolean;
         emaLength?: number;
         emaColor?: string;
+        addedMap?: Record<string, AddedFlags>;
       };
       if (typeof p.added === "boolean") sessionsAdded.value = p.added;
       if (typeof p.visible === "boolean") sessionsVisible.value = p.visible;
@@ -239,6 +293,20 @@ export const useIndicatorsStore = defineStore("indicators", () => {
       if (typeof p.emaVisible === "boolean") emaVisible.value = p.emaVisible;
       if (typeof p.emaLength === "number" && p.emaLength >= 2 && p.emaLength <= 500) emaLength.value = Math.round(p.emaLength);
       if (HEXc(p.emaColor)) emaColor.value = p.emaColor;
+      if (p.addedMap && typeof p.addedMap === "object") {
+        setAddedMap(p.addedMap);
+      } else {
+        // One-time migration from the legacy global flags: seed the CURRENT
+        // symbol with whatever was enabled before per-symbol state existed.
+        const seed: AddedFlags = {};
+        if (p.added) seed.sessions = true;
+        if (p.rsiAdded) seed.rsi = true;
+        if (p.smaAdded) seed.sma = true;
+        if (p.emaAdded) seed.ema = true;
+        if (Object.keys(seed).length > 0) {
+          addedMap.value = { [useMarketStore().instrument]: seed };
+        }
+      }
       if (Array.isArray(p.customs)) {
         for (const c of p.customs) {
           if (c && typeof c.id === "string" && typeof c.name === "string" &&
@@ -259,7 +327,7 @@ export const useIndicatorsStore = defineStore("indicators", () => {
 
   watch(
     [sessionsAdded, sessionsVisible, sessionsLabels, sessionsEnabled, defs, customs, rsiAdded, rsiVisible, rsiLength, rsiColor, rsiLevelColor, rsiUpper, rsiLower,
-     smaAdded, smaVisible, smaLength, smaColor, emaAdded, emaVisible, emaLength, emaColor],
+     smaAdded, smaVisible, smaLength, smaColor, emaAdded, emaVisible, emaLength, emaColor, addedMap],
     () => {
       localStorage.setItem(
         KEY,
@@ -285,6 +353,7 @@ export const useIndicatorsStore = defineStore("indicators", () => {
           emaVisible: emaVisible.value,
           emaLength: emaLength.value,
           emaColor: emaColor.value,
+          addedMap: addedMap.value,
         })
       );
     },
@@ -331,6 +400,8 @@ export const useIndicatorsStore = defineStore("indicators", () => {
     defs,
     customs,
     rsiAdded,
+    addedMap,
+    setAddedMap,
     rsiVisible,
     rsiLength,
     rsiColor,

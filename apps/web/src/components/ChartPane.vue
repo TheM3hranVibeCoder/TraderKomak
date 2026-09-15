@@ -40,6 +40,8 @@ interface SessionBoxPx {
 }
 const sessionPixels = ref<SessionBoxPx[]>([]);
 const indSettingsOpen = ref(false);
+const smaSettingsOpen = ref(false);
+const emaSettingsOpen = ref(false);
 
 /** While the settings popup is open, any pointerdown outside it (the chart,
  *  watchlist, news…) closes it. The legend buttons are excluded — the gear
@@ -53,8 +55,8 @@ function indSettingsOutside(e: PointerEvent): void {
   emaSettingsOpen.value = false;
   indSettingsOpen.value = false;
 }
-watch(indSettingsOpen, (open) => {
-  if (open) document.addEventListener("pointerdown", indSettingsOutside, true);
+watch([indSettingsOpen, smaSettingsOpen, emaSettingsOpen], (states) => {
+  if (states.some(Boolean)) document.addEventListener("pointerdown", indSettingsOutside, true);
   else document.removeEventListener("pointerdown", indSettingsOutside, true);
 });
 
@@ -789,8 +791,6 @@ window.addEventListener("tk-chart-style", onCloudStyle);
 onUnmounted(() => window.removeEventListener("tk-chart-style", onCloudStyle));
 const chartSettingsOpen = ref(false);
 const rsiSettingsOpen = ref(false);
-const smaSettingsOpen = ref(false);
-const emaSettingsOpen = ref(false);
 
 const isDarkTheme = computed(() => themeStore.theme === "dark");
 /** Theme gradient (matches the CSS --chart-bg-gradient of each theme). */
@@ -3728,6 +3728,8 @@ onMounted(async () => {
   const onChartMouseDown = (e: MouseEvent) => {
     // Any click on the chart closes the indicator settings popup
     indSettingsOpen.value = false;
+    smaSettingsOpen.value = false;
+    emaSettingsOpen.value = false;
     // Demo limit placement: a click sets the draft entry price
     if (demo.active && draft.value) {
       if (e.button !== 0 || !isInChartArea(e) || !adapter || !containerRef.value) return;
