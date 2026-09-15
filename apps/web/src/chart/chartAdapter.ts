@@ -156,6 +156,7 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       // drawing layer can render between the background and the candles.
       background: { type: ColorType.Solid, color: "transparent" },
       textColor: colors.text,
+      attributionLogo: true,
     },
     grid: {
       vertLines: { visible: false },
