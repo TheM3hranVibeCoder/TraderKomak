@@ -53,7 +53,17 @@ export function authInFlight(): boolean {
 }
 
 export function wasAuthOnDevice(): boolean {
-  try { return localStorage.getItem(WASAUTH_KEY) === "1"; } catch { return false; }
+  try {
+    if (localStorage.getItem(WASAUTH_KEY) === "1") return true;
+    // Fallback: a Supabase session blob in storage means a login existed on
+    // this device even if our own flag was lost (e.g. partial site-data
+    // clear) — render the app optimistically instead of the landing.
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith("sb-") && k.includes("auth-token")) return true;
+    }
+    return false;
+  } catch { return false; }
 }
 
 export function validateUsername(raw: string): string | null {
