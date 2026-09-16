@@ -33,10 +33,10 @@ function rowState(it: NewsItem): { label: string; cls: string } {
     if (diff <= 60 * 60_000) return { label: `in ${m}m`, cls: "soon" };
     return { label: `in ${Math.floor(diff / 3600_000)}h`, cls: "far" };
   }
-  // released: show actual when the refreshed feed carries it
+  // released: show the actual the moment the refreshed feed carries it
+  // (the server fast-refreshes the calendar after High releases, usually
+  // within a few minutes). Until then the row simply reads "released".
   if (it.actual) return { label: `A: ${it.actual}`, cls: "actual" };
-  const since = Math.floor(-diff / 60000);
-  if (since < 15) return { label: "awaiting…", cls: "waiting" };
   return { label: "released", cls: "released" };
 }
 
