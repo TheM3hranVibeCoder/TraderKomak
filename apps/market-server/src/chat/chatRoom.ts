@@ -270,7 +270,13 @@ export class ChatRoom {
         this.onUserInfo(conn, String(msg.nick ?? ""));
         return;
       case "admin_dm":
-        this.onAdminDm(conn, String(msg.nick ?? ""), String(msg.text ?? ""), String(msg.id ?? ""));
+        this.onAdminDm(
+          conn,
+          String(msg.nick ?? ""),
+          String(msg.text ?? ""),
+          String(msg.id ?? ""),
+          typeof msg.img === "string" ? msg.img : undefined
+        );
         return;
       case "admin_dm_read":
         this.onDmRead(conn, String(msg.id ?? ""));
@@ -450,15 +456,16 @@ export class ChatRoom {
     this.safeSend(conn, { type: "userinfo", nick: clean, lastIp, online: this.connectedIps(clean).length > 0, country });
   }
 
-  private onAdminDm(conn: Conn, nick: string, text: string, id: string): void {
+  private onAdminDm(conn: Conn, nick: string, text: string, id: string, img?: string): void {
     if (!conn.admin || !id) return;
     const cleanNick = nick.trim().slice(0, NICK_MAX);
     const cleanText = text.replace(/\s+/g, " ").trim().slice(0, 500);
-    if (!cleanNick || !cleanText) return;
+    const cleanImg = this.sanitizeImage(img);
+    if (!cleanNick || (!cleanText && !cleanImg)) return;
     let delivered = false;
     for (const [, c] of this.conns) {
       if (c.nick && c.nick.toLowerCase() === cleanNick.toLowerCase() && c.socket.readyState === c.socket.OPEN) {
-        this.safeSend(c, { type: "admin_dm", id, text: cleanText });
+        this.safeSend(c, { type: "admin_dm", id, text: cleanText || undefined, img: cleanImg });
         delivered = true;
         // remember where to deliver the Read receipt
         this.pendingDms.set(id, { socket: conn.socket, nick: cleanNick });

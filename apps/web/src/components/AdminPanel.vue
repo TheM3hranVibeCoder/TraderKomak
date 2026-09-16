@@ -2,6 +2,7 @@
 import { ref, computed, onUnmounted } from "vue";
 import { useChatStore } from "@/stores/chat";
 import { supabase } from "@/services/supabase";
+import { compressImage } from "@/utils/image";
 
 const chat = useChatStore();
 const emit = defineEmits<{ (e: "close"): void }>();
@@ -107,7 +108,31 @@ async function openDetails(nick: string): Promise<void> {
 /* ── Direct message composer ── */
 const dmTarget = ref<string | null>(null);
 const dmText = ref("");
+const dmImg = ref<string | null>(null);
+const dmFileEl = ref<HTMLInputElement | null>(null);
 const dmSending = ref(false);
+
+async function stageDmImage(file: File): Promise<void> {
+  try {
+    dmImg.value = await compressImage(file);
+  } catch {
+    /* ignore unreadable images */
+  }
+}
+function onDmFileChange(e: Event): void {
+  const input = e.target as HTMLInputElement;
+  const f = input.files?.[0];
+  if (f) void stageDmImage(f);
+  input.value = "";
+}
+function onDmPaste(e: ClipboardEvent): void {
+  const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
+  const file = item?.getAsFile();
+  if (file) {
+    e.preventDefault();
+    void stageDmImage(file);
+  }
+}
 function openDm(nick: string): void {
   dmTarget.value = nick;
   dmText.value = "";
@@ -119,18 +144,19 @@ function dmAllCount(): number {
 }
 function sendDm(): void {
   const t = dmText.value.trim();
-  if (!t || !dmTarget.value) return;
+  if ((!t && !dmImg.value) || !dmTarget.value) return;
   dmSending.value = true;
   if (dmTarget.value === "__all__") {
     for (const n of chat.onlineNicks) {
-      if (!isSelf(n)) chat.adminDm(n, t);
+      if (!isSelf(n)) chat.adminDm(n, t, dmImg.value ?? undefined);
     }
   } else {
-    chat.adminDm(dmTarget.value, t);
+    chat.adminDm(dmTarget.value, t, dmImg.value ?? undefined);
   }
   dmSending.value = false;
   dmTarget.value = null;
   dmText.value = "";
+  dmImg.value = null;
 }
 function dmStatusFor(nick: string): string | null {
   const entries = Object.values(chat.dmStatuses).filter((s) => s.nick.toLowerCase() === nick.toLowerCase());
@@ -178,12 +204,12 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           <div class="stat red"><span class="stat-num">{{ chat.bans.length }}</span><span class="stat-label">Banned</span></div>
         </div>
         <div class="tg-row">
-          <button class="dm-all" type="button" :title="`Send a direct message to all ${dmAllCount()} online users`" @click="openDm('__all__')">DM all ({{ dmAllCount() }})</button>
+          <button class="dm-all" type="button" :title="`Send a direct message to all ${dmAllCount()} online users`" @click="openDm('__all__')">DM all · {{ dmAllCount() }}</button>
           <button class="tg-broadcast" type="button" title="Show a Join-Telegram popup to every online user" @click="tgBroadcast">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true">
               <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
             </svg>
-            {{ tgSent ? "Popup sent to all online users ✓" : "Send Telegram popup to online users" }}
+            {{ tgSent ? "Sent ✓" : "Telegram" }}
           </button>
         </div>
 
@@ -295,15 +321,30 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
               </span>
               <button class="mini-x" type="button" aria-label="Close" @click="dmTarget = null">✕</button>
             </div>
+            <div v-if="dmImg" class="dm-pending">
+              <img :src="dmImg" alt="attached" />
+              <button class="dm-pending-x" type="button" aria-label="Remove image" @click="dmImg = null">✕</button>
+            </div>
             <textarea
               v-model="dmText"
               class="dm-text"
-              rows="4"
+              rows="3"
               maxlength="500"
-              placeholder="They will see this as a popup in the middle of their screen…"
+              placeholder="They will see this as a popup in the middle of their screen… (optional caption)"
               aria-label="Direct message text"
+              @paste="onDmPaste"
             ></textarea>
-            <button class="dm-send" type="button" :disabled="!dmText.trim() || dmSending" @click="sendDm">Send message</button>
+            <div class="dm-send-row">
+              <button class="dm-attach" type="button" title="Attach a photo" aria-label="Attach photo" @click="dmFileEl?.click()">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+                  <rect x="3" y="5" width="18" height="14" rx="2.5" />
+                  <circle cx="9" cy="10" r="1.6" />
+                  <path d="M5 17l4.5-4.5 3 3L17 11l4 4.5" />
+                </svg>
+              </button>
+              <button class="dm-send" type="button" :disabled="(!dmText.trim() && !dmImg) || dmSending" @click="sendDm">Send message</button>
+            </div>
+            <input ref="dmFileEl" type="file" accept="image/*" class="dm-file-hidden" @change="onDmFileChange" />
           </div>
         </div>
       </Teleport>
@@ -383,30 +424,68 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  padding: 0 14px;
+  gap: 5px;
+  padding: 0 11px;
+  height: 30px;
+  align-self: center;
   border: none;
-  border-radius: 14px;
+  border-radius: 10px;
   color: #fff;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 800;
   cursor: pointer;
   background: linear-gradient(135deg, #a78bfa, #6366f1);
-  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
   transition: transform 0.12s ease, filter 0.12s ease;
   white-space: nowrap;
 }
 .dm-all:hover { transform: translateY(-1px); filter: brightness(1.08); }
+.dm-pending {
+  position: relative;
+  padding: 8px 10px;
+  background: rgba(100, 116, 160, 0.08);
+}
+.dm-pending img {
+  display: block;
+  max-height: 120px;
+  border-radius: 8px;
+}
+.dm-pending-x {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 7px;
+  background: rgba(239, 68, 68, 0.9);
+  color: #fff;
+  cursor: pointer;
+}
+.dm-send-row { display: flex; align-items: stretch; }
+.dm-attach {
+  width: 44px;
+  border: none;
+  background: rgba(100, 116, 160, 0.15);
+  color: #55607e;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.dm-attach:hover { background: rgba(100, 116, 160, 0.25); }
+.dm-file-hidden { display: none; }
 .tg-broadcast {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  padding: 0 14px;
+  gap: 5px;
+  padding: 0 11px;
+  height: 30px;
+  align-self: center;
   border: none;
-  border-radius: 14px;
+  border-radius: 10px;
   color: #fff;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 800;
   cursor: pointer;
   background: linear-gradient(135deg, #38bdf8, #2aabee);
@@ -634,6 +713,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
   box-sizing: border-box;
   padding: 11px 14px;
   border: 1px solid rgba(100, 116, 160, 0.3);
+  border-right: none;
   border-radius: 0;
   font-size: 13px;
   font-family: inherit;
@@ -644,7 +724,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 .dm-text:focus { outline: none; border-color: #6366f1; }
 .dm-send {
   display: block;
-  width: 100%;
+  flex: 1;
   padding: 12px;
   border: none;
   background: linear-gradient(120deg, #8b5cf6, #6366f1, #3b82f6);
@@ -661,20 +741,56 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  padding: 0 14px;
+  gap: 5px;
+  padding: 0 11px;
+  height: 30px;
+  align-self: center;
   border: none;
-  border-radius: 14px;
+  border-radius: 10px;
   color: #fff;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 800;
   cursor: pointer;
   background: linear-gradient(135deg, #a78bfa, #6366f1);
-  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
   transition: transform 0.12s ease, filter 0.12s ease;
   white-space: nowrap;
 }
 .dm-all:hover { transform: translateY(-1px); filter: brightness(1.08); }
+.dm-pending {
+  position: relative;
+  padding: 8px 10px;
+  background: rgba(100, 116, 160, 0.08);
+}
+.dm-pending img {
+  display: block;
+  max-height: 120px;
+  border-radius: 8px;
+}
+.dm-pending-x {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 7px;
+  background: rgba(239, 68, 68, 0.9);
+  color: #fff;
+  cursor: pointer;
+}
+.dm-send-row { display: flex; align-items: stretch; }
+.dm-attach {
+  width: 44px;
+  border: none;
+  background: rgba(100, 116, 160, 0.15);
+  color: #55607e;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.dm-attach:hover { background: rgba(100, 116, 160, 0.25); }
+.dm-file-hidden { display: none; }
 .tg-broadcast { grid-column: 1 / -1; padding: 10px; }
   .admin-tabs { flex-wrap: wrap; }
   .user-actions { width: 100%; justify-content: flex-start; }

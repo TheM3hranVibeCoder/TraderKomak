@@ -284,13 +284,13 @@ function addHealListeners(): void {
   function clearUserInfo(): void {
     userInfo.value = null;
   }
-  /** Send a direct message to a user; returns its tracking id. */
-  function adminDm(nick: string, text: string): string {
+  /** Send a direct message (text and/or photo); returns its tracking id. */
+  function adminDm(nick: string, text: string, img?: string): string {
     const id = `dm-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     // "Sent…" until the server reports Read/offline — a fresh DM on the
     // same user replaces the previous state (back to "Sent…").
     setDmStatus(id, { nick, read: false, offline: false });
-    client?.sendAdminDm(nick, text, id);
+    client?.sendAdminDm(nick, text || undefined, id, img);
     return id;
   }
   /** Send the same message to every ONLINE user (except the admin).
@@ -309,7 +309,7 @@ function addHealListeners(): void {
   }
 
   /* ── User side: incoming admin DM + telegram popup ── */
-  const incomingDm = ref<{ id: string; text: string } | null>(null);
+  const incomingDm = ref<{ id: string; text?: string; img?: string } | null>(null);
   const tgPopupId = ref<string | null>(null);
 
   function dismissDm(): void {

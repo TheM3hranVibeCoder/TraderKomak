@@ -26,7 +26,7 @@ export interface ChatClientHandlers {
   /** Admin: details for a nick. */
   onUserInfo?: (info: { nick: string; lastIp: string | null; online: boolean; country: string | null }) => void;
   /** User: a direct message from the admin. */
-  onAdminDm?: (dm: { id: string; text: string }) => void;
+  onAdminDm?: (dm: { id: string; text?: string; img?: string }) => void;
   /** Admin: DM receipt update (offline = could not deliver). */
   onDmStatus?: (s: { id: string; nick: string; read: boolean; offline: boolean }) => void;
   /** User: show the join-Telegram popup. */
@@ -112,8 +112,8 @@ export class ChatClient {
   requestUserInfo(nick: string): void {
     this.send({ type: "userinfo", nick });
   }
-  sendAdminDm(nick: string, text: string, id: string): void {
-    this.send({ type: "admin_dm", nick, text, id });
+  sendAdminDm(nick: string, text: string | undefined, id: string, img?: string): void {
+    this.send({ type: "admin_dm", nick, text, img, id });
   }
   sendDmRead(id: string): void {
     this.send({ type: "admin_dm_read", id });
@@ -346,7 +346,7 @@ export class ChatClient {
         this.handlers.onUserInfo?.(msg as unknown as { nick: string; lastIp: string | null; online: boolean; country: string | null });
         break;
       case "admin_dm":
-        this.handlers.onAdminDm?.({ id: msg.id, text: msg.text });
+        this.handlers.onAdminDm?.({ id: msg.id, text: msg.text, img: msg.img });
         break;
       case "dm_status":
         this.handlers.onDmStatus?.(msg as unknown as { id: string; nick: string; read: boolean; offline: boolean });

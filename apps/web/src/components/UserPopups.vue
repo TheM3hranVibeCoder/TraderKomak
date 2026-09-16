@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import { useChatStore } from "@/stores/chat";
 
 const chat = useChatStore();
+const lightbox = ref<string | null>(null);
 
 function joinTg(): void {
   window.open("https://t.me/TraderKomak_ir", "_blank", "noopener,noreferrer");
@@ -18,9 +20,22 @@ function closeTg(): void {
     <div v-if="chat.incomingDm" class="pop-backdrop">
       <div class="pop-card dm" role="dialog" aria-modal="true" aria-label="Message from admin">
         <div class="pop-badge admin">Admin message</div>
-        <p class="pop-text">{{ chat.incomingDm.text }}</p>
+        <img
+          v-if="chat.incomingDm.img"
+          :src="chat.incomingDm.img"
+          class="dm-img"
+          alt="Shared by admin"
+          @click="lightbox = chat.incomingDm.img ?? null"
+        />
+        <p v-if="chat.incomingDm.text" class="pop-text">{{ chat.incomingDm.text }}</p>
         <button class="pop-btn primary" type="button" @click="chat.dismissDm()">Got it</button>
       </div>
+    </div>
+
+    <!-- Full-size photo viewer for admin DMs -->
+    <div v-if="lightbox" class="lb-backdrop" @click="lightbox = null">
+      <img :src="lightbox" alt="Shared by admin (full size)" />
+      <span class="lb-hint">tap to close</span>
     </div>
 
     <!-- Telegram broadcast popup -->
@@ -43,6 +58,35 @@ function closeTg(): void {
   </Teleport>
 </template>
 
+<style scoped>
+.dm-img {
+  display: block;
+  width: 100%;
+  max-height: 180px;
+  object-fit: cover;
+  border-radius: 12px;
+  margin-bottom: 12px;
+  cursor: zoom-in;
+}
+.lb-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(4, 8, 18, 0.9);
+  cursor: zoom-out;
+}
+.lb-backdrop img {
+  max-width: 94vw;
+  max-height: 88vh;
+  border-radius: 10px;
+}
+.lb-hint { color: #9aa3bc; font-size: 12px; }
+</style>
 <style scoped>
 .pop-backdrop {
   position: fixed;

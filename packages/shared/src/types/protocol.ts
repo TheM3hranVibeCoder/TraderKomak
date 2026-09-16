@@ -202,7 +202,9 @@ export interface ChatUserInfoMessage {
 export interface ChatAdminDmMessage {
   type: "admin_dm";
   id: string;
-  text: string;
+  text?: string;
+  /** Inline photo (compressed data URL, ≤ ~280KB) like chat images. */
+  img?: string;
 }
 export interface ChatDmStatusMessage {
   type: "dm_status";
