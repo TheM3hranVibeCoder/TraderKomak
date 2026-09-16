@@ -18,6 +18,8 @@ export interface NewsFeed {
   fetchedAt: number;
   items: NewsItem[];
   stale: boolean;
+  /** Authoritative market-server time (ms) — syncs every device's countdown. */
+  serverNow?: number;
 }
 
 /** Same base as the candles API: the market server in production,
@@ -34,11 +36,13 @@ export async function fetchNews(): Promise<NewsFeed> {
     fetchedAt: number;
     items: Array<{ title: string; country: string; date: string; impact: string; forecast: string | null; previous: string | null; actual: string | null }>;
     stale?: boolean;
+    serverNow?: number;
     error?: string;
   };
   return {
     fetchedAt: d.fetchedAt ?? 0,
     stale: !!d.stale || !!d.error,
+    serverNow: d.serverNow,
     items: (d.items ?? []).map((it) => ({
       title: it.title,
       country: it.country,

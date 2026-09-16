@@ -118,18 +118,18 @@ export function registerNewsRoute(app: FastifyInstance): void {
     // Fresh enough → answer instantly from memory.
     const cur = cache;
     if (cur && now - cur.fetchedAt < ttlMs(cur.items, now)) {
-      return { ...cur, stale: false };
+      return { ...cur, serverNow: Date.now(), stale: false };
     }
     if (cur) {
       // Stale but present: serve it NOW and refresh in the background.
       // A slow/blocked upstream must never blank the panel.
       void maybeRefresh(app);
-      return { ...cur, stale: true };
+      return { ...cur, serverNow: Date.now(), stale: true };
     }
     // No cache at all (first boot, disk load failed): wait one round.
     await maybeRefresh(app);
-    if (cache) return { ...cache, stale: false };
-    return { fetchedAt: 0, items: [], stale: true, error: "news feed unavailable" };
+    if (cache) return { ...cache, serverNow: Date.now(), stale: false };
+    return { fetchedAt: 0, items: [], serverNow: Date.now(), stale: true, error: "news feed unavailable" };
   });
 }
 

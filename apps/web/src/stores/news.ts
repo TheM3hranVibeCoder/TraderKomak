@@ -27,8 +27,12 @@ export const useNewsStore = defineStore("news", () => {
 
   /** 1s ticker drives all countdowns and the Today label. */
   const now = ref<number>(Date.now());
+  /** Server-clock offset: device clocks drift seconds apart, which made
+   *  the release countdown differ between phone and desktop. Aligned to
+   *  the market-server time on every feed fetch (RTT/2 compensated). */
+  const clockOffset = ref(0);
   setInterval(() => {
-    now.value = Date.now();
+    now.value = Date.now() + clockOffset.value;
   }, 1000);
 
   // Hydrate from the local cache before anything else — the panel opens
@@ -51,6 +55,7 @@ export const useNewsStore = defineStore("news", () => {
   }
 
   async function refresh(): Promise<void> {
+    const sentAt = Date.now();
     try {
       const feed = await fetchNews();
       // An empty result (weekend rollover, transient upstream) must not
@@ -62,6 +67,10 @@ export const useNewsStore = defineStore("news", () => {
       items.value = feed.items;
       fetchedAt.value = feed.fetchedAt;
       error.value = null;
+      // Server-clock sync (sent/received midpoint compensates latency)
+      if (typeof feed.serverNow === "number") {
+        clockOffset.value = feed.serverNow - (sentAt + Date.now()) / 2;
+      }
       saveCache();
     } catch {
       // Cached week on hand → stay quiet (stale data beats an error box).
