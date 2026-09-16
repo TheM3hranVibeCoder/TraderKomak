@@ -441,9 +441,20 @@ export const useMarketStore = defineStore("market", () => {
     const wantTimeframe = timeframe.value;
     resyncing = true;
     try {
-      const data = await fetchCandles(wantInstrument, wantTimeframe, HISTORY_COUNT);
+      let data = await fetchCandles(wantInstrument, wantTimeframe, HISTORY_COUNT);
       if (!data.length || mySeq !== loadSeq) return;
       if (instrument.value !== wantInstrument || timeframe.value !== wantTimeframe) return;
+      // A REST snapshot can LAG the live WS stream for the still-open
+      // bucket. Overwriting our fresher open candle with it made the last
+      // candle flash/shrink for a second on every tab return (until the
+      // next WS tick rebuilt it). Keep OUR open candle; merge the rest.
+      let keepLive: Candle | null = null;
+      const lastExisting = candles.value[candles.value.length - 1];
+      const lastIncoming = data[data.length - 1];
+      if (lastExisting && lastIncoming && lastIncoming.time === lastExisting.time) {
+        keepLive = lastExisting;
+        data = data.slice(0, -1);
+      }
       const tfSec = TIMEFRAME_SECONDS[wantTimeframe as keyof typeof TIMEFRAME_SECONDS] ?? 60;
       const maxGapSec = Math.max(120 * tfSec, 1800);
       // Keep the older local candles only while they stay time-connected to
@@ -457,7 +468,9 @@ export const useMarketStore = defineStore("market", () => {
         else break;
       }
       const base = baseRaw.slice(keepFrom);
-      candles.value = mergeCandles(base.length > 0 ? base : [], data);
+      let merged = mergeCandles(base.length > 0 ? base : [], data);
+      if (keepLive) merged = mergeCandles(merged, [keepLive]);
+      candles.value = merged;
       rebuildTimeIndex();
     } catch {
       // offline / transient — the stream keeps running; try again next focus
