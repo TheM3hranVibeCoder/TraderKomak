@@ -104,6 +104,8 @@ export class BinanceStreamClient extends EventEmitter {
     });
 
     ws.on("message", (raw) => {
+      // Any frame is proof of life — reset the silence watchdog.
+      this.resetWatchdog(sym, conn);
       try {
         const msg = JSON.parse(String(raw)) as Record<string, unknown>;
         if (msg.e !== "aggTrade") return; // ignore bookTicker etc. if combined
@@ -123,6 +125,14 @@ export class BinanceStreamClient extends EventEmitter {
     });
 
     ws.on("pong", () => this.resetWatchdog(sym, conn));
+    // Application-level keepalive: without outbound pings the watchdog
+    // fired every 90s even on healthy sockets (Binance answers protocol
+    // pings automatically, but we never sent any).
+    const pingTimer = setInterval(() => {
+      try { ws.ping(); } catch {}
+    }, 25_000);
+    pingTimer.unref?.();
+    ws.on("close", () => clearInterval(pingTimer));
 
     ws.on("error", () => {
       /* 'close' always follows */

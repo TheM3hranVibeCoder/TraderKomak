@@ -66,7 +66,7 @@ The chart engine never knows about OANDA. The OANDA adapter never knows about Li
 | Layer | Choice | Why |
 |---|---|---|
 | Frontend | Vue 3 + TypeScript + Vite | Modern, fast, typed |
-| Charts | Lightweight Charts 4.x | Fast canvas charting, TradingView look without bloat |
+| Charts | Lightweight Charts 5.x | Fast canvas charting, TradingView look without bloat |
 | State | Pinia (only where useful) | Single market store; everything else is local state |
 | Backend | Node.js 22 + Fastify + TypeScript | Low overhead, first-class WebSocket, pino logging |
 | Protocol | JSON over WebSocket + native fetch | Stable, trivial to replace engine later |
@@ -106,6 +106,8 @@ cp .env.example .env
 | `CORS_ORIGIN` | server only | Comma-separated allowed origins (`*` for local dev) | `http://localhost:5173` |
 | `PERSISTENT_AGGREGATIONS` | server only | Sessions buffered even with zero subscribers | `EUR_USD:1s` |
 | `VITE_MARKET_WS_URL` | browser (safe) | WebSocket endpoint of market-server | `ws://localhost:8080/ws` |
+| `VITE_SUPABASE_URL` | browser (safe) | Supabase project URL (Google login + cloud sync) | — |
+| `VITE_SUPABASE_ANON_KEY` | browser (safe) | Supabase anon key (public by design) | — |
 | `VITE_API_HTTP_URL` | browser (safe) | HTTP base for candles; empty = same origin (Vite proxy / Netlify function) | `` |
 | `MARKET_SERVER_URL` | Netlify function only | Market-server base URL | `https://your-market-server.fly.dev` |
 

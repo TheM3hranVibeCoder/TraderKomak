@@ -36,6 +36,12 @@ create policy "update own profile"
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
+-- SECURITY: without the column grant below, any signed-in user could
+-- update their own is_admin flag (full self-promotion to admin: emails +
+-- moderator key). Lock UPDATE to the profile fields a user may edit.
+revoke update on table public.profiles from authenticated;
+grant update (username, username_lower, avatar_url) on table public.profiles to authenticated;
+
 -- ============ CHART DRAWINGS (phase 2) ============
 create table if not exists public.drawings (
   id uuid primary key default gen_random_uuid(),

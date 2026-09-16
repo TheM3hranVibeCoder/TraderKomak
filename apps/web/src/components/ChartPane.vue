@@ -5509,7 +5509,6 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- Chart settings
     <!-- Chart settings: TradingView-style gear in the bottom-right corner +
          a centered panel for background (solid/gradient) and candle colors -->
     <button

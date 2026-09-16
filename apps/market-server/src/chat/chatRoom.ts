@@ -18,6 +18,7 @@
 import type { FastifyInstance } from "fastify";
 import type { RawData, WebSocket } from "ws";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import type { ChatMessage, ChatModEntry } from "@traderkomak/shared";
 import type { Log } from "../logger.js";
@@ -38,9 +39,18 @@ interface Conn {
   admin: boolean;
   ip: string;
   lastChatAt: number;
+  /** Telegram popup ids delivered to THIS connection — receipts accepted
+   *  only from sockets that saw the popup (anti-spoof). */
+  tgPopups: Set<string>;
   /** Set false right before each heartbeat ping; a pong (or any frame)
    *  sets it true. Dead phone browsers never pong → reaped below. */
   alive: boolean;
+}
+
+function safeEqual(a: string, b: string): boolean {
+  const ha = createHash("sha256").update(a).digest();
+  const hb = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ha, hb);
 }
 
 /** Country lookup for admin user-info (free ip-api, cached per IP/day). */
@@ -50,10 +60,12 @@ async function geoLookup(ip: string): Promise<string | null> {
   if (hit && Date.now() - hit.at < 86_400_000) return hit.country;
   let country: string | null = null;
   try {
-    const res = await fetch(`http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,country`);
+    // HTTPS geolocation — the old ip-api free tier was plain HTTP, which
+    // leaked chatter IPs to a third party in cleartext.
+    const res = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}`);
     if (res.ok) {
-      const j = (await res.json()) as { status?: string; country?: string };
-      if (j.status === "success") country = j.country ?? null;
+      const j = (await res.json()) as { success?: boolean; country?: string };
+      if (j.success) country = j.country ?? null;
     }
   } catch {}
   geoCache.set(ip, { country, at: Date.now() });
@@ -196,7 +208,7 @@ export class ChatRoom {
 
   register(app: FastifyInstance): void {
     app.get("/chat", { websocket: true }, (socket, req) => {
-      const conn: Conn = { socket, nick: null, admin: false, ip: req.ip ?? "", lastChatAt: 0, alive: true };
+      const conn: Conn = { socket, nick: null, admin: false, ip: req.ip ?? "", lastChatAt: 0, tgPopups: new Set(), alive: true };
       // IP bans are enforced before anything else — banned means banned.
       if (this.isBannedIp(conn.ip)) {
         this.safeSend(conn, { type: "error", message: "You are banned from this room" });
@@ -311,7 +323,13 @@ export class ChatRoom {
     }
     // The owner's nickname is reserved: a regular visitor cannot claim it
     // (any case spelling) — only a join carrying the admin key can.
-    const isAdminKey = this.adminKey !== "" && adminKey === this.adminKey;
+    // Constant-time comparison (SHA-256 digests) — the key gates all
+    // moderation, so even a theoretical timing side channel is worth the
+    // three lines.
+    const isAdminKey =
+      this.adminKey !== "" &&
+      typeof adminKey === "string" &&
+      safeEqual(adminKey, this.adminKey);
     if (!isAdminKey && this.ownerNick && nick.toLowerCase() === this.ownerNick.toLowerCase()) {
       this.safeSend(conn, { type: "error", message: "This nickname is reserved" });
       this.log.warn({ ip: conn.ip, nick }, "chat: reserved nickname rejected");
@@ -478,6 +496,9 @@ export class ChatRoom {
   private onDmRead(user: Conn, id: string): void {
     const pending = this.pendingDms.get(id);
     if (!pending) return;
+    // Only the ACTUAL recipient can mark a DM read — an observer who saw
+    // the id in a broadcast must not forge receipts.
+    if (!user.nick || user.nick.toLowerCase() !== pending.nick.toLowerCase()) return;
     this.pendingDms.delete(id);
     for (const [, c] of this.conns) {
       if (c.socket === pending.socket) {
@@ -493,6 +514,7 @@ export class ChatRoom {
       // every signed-in member except admins themselves
       if (c.nick && !c.admin && c.socket.readyState === c.socket.OPEN) {
         this.safeSend(c, { type: "tg_popup", id });
+        c.tgPopups.add(id);
       }
     }
   }
@@ -500,6 +522,9 @@ export class ChatRoom {
   private onTgResult(user: Conn, id: string, action: string): void {
     if (!user.nick || !id) return;
     if (action !== "join" && action !== "close") return;
+    // Only accept results from sockets that actually RECEIVED this popup.
+    if (!user.tgPopups.has(id)) return;
+    user.tgPopups.delete(id);
     this.broadcastAdmins({ type: "tg_result", nick: user.nick, id, action });
   }
 

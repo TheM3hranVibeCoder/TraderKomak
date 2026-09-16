@@ -93,15 +93,11 @@ export function priceEventToTick(msg: unknown): MarketTick | null {
   let mid: number | null = null;
   if (bid !== null && ask !== null) mid = (bid + ask) / 2;
 
-  // Drop non-tradeable statuses — stale/indicative prices must not build candles.
+  // Drop non-tradeable statuses — stale/indicative prices must not build
+  // candles or masquerade as live prices. (The old code returned the tick
+  // anyway, contradicting this comment.)
   if (typeof m.status === "string" && m.status !== "tradeable") {
-    return {
-      instrument: m.instrument,
-      timestamp: Math.floor(ms),
-      bid,
-      ask,
-      mid,
-    };
+    return null;
   }
   if (bid === null && ask === null && mid === null) return null;
 

@@ -137,7 +137,9 @@ export function registerNewsRoute(app: FastifyInstance): void {
 function maybeRefresh(app: FastifyInstance): Promise<void> {
   const now = Date.now();
   if (inFlight) return inFlight;
-  if (cache && now - lastAttempt < 60_000) return Promise.resolve();
+  // Polite gate even when the cache is EMPTY — otherwise a blocked/429
+  // upstream turns every visitor request into its own upstream attempt.
+  if (now - lastAttempt < 60_000) return Promise.resolve();
   lastAttempt = now;
   inFlight = refresh()
     .then(() => saveDisk())

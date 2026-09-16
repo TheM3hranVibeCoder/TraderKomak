@@ -41,6 +41,12 @@ export function registerCandlesRoute(
   const { rest, feed } = deps;
 
   app.get("/api/candles", async (request, reply) => {
+    const ip = request.ip ?? "unknown";
+    if (rateLimited(ip)) {
+      return reply.code(429).send({
+        error: { code: "RATE_LIMITED", message: "Too many requests — slow down" },
+      });
+    }
     const query = request.query as Record<string, unknown>;
 
     if (!isInstrument(query.instrument)) {
@@ -107,10 +113,36 @@ const HISTORY_TTL_MS = 90_000;
 const HISTORY_CACHE_MAX = 300;
 const historyCache = new Map<string, { at: number; candles: unknown[] }>();
 
+/** Preset count buckets: arbitrary client-supplied counts used to fragment
+ *  the cache key space (near-guaranteed misses → upstream hammering). */
+const COUNT_BUCKETS = [50, 100, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000, 8000, 12000, 20000];
+function bucketCount(count: number): number {
+  for (const b of COUNT_BUCKETS) if (count <= b) return b;
+  return COUNT_BUCKETS[COUNT_BUCKETS.length - 1]!;
+}
+
+/** Simple fixed-window per-IP rate limiter (no external deps). */
+const RATE_WINDOW_MS = 60_000;
+const RATE_MAX = 90;
+const rateMap = new Map<string, { n: number; resetAt: number }>();
+function rateLimited(ip: string): boolean {
+  const now = Date.now();
+  const e = rateMap.get(ip);
+  if (!e || now > e.resetAt) {
+    if (rateMap.size > 5000) {
+      for (const [k, v] of rateMap) if (now > v.resetAt) rateMap.delete(k);
+    }
+    rateMap.set(ip, { n: 1, resetAt: now + RATE_WINDOW_MS });
+    return false;
+  }
+  e.n += 1;
+  return e.n > RATE_MAX;
+}
+
 function historyCacheKey(instrument: string, timeframe: string, count: number, to?: number): string {
   // bucket `to` to 5 minutes so near-identical lazy loads share an entry
   const toBucket = to !== undefined ? Math.floor(to / 300) : "now";
-  return `${instrument}|${timeframe}|${count}|${toBucket}`;
+  return `${instrument}|${timeframe}|${bucketCount(count)}|${toBucket}`;
 }
 function historyCacheGet(key: string): unknown[] | null {
   const e = historyCache.get(key);

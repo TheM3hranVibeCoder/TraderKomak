@@ -197,15 +197,19 @@ export class CandleFeed extends EventEmitter {
       const silentMs = session.lastTickAt > 0 ? tick.timestamp - session.lastTickAt : 0;
 
       // Silence beyond the synthesis window = market closed / outage.
-      // The buffer may hold synthetic candles from before — drop them so
-      // history and snapshots stay authoritative.
-      if (silentMs > SYNTH_WINDOW_MS) {
-        if (session.buffer.length > 0) {
+      // The synthetic TAIL (flat candles synthesized after the last real
+      // tick) is dropped, but PRIMED/RESTORED real history is kept — the
+      // old purge nuked the whole buffer after every weekend, collapsing
+      // 1s charts to a single candle on Monday's first tick.
+      if (silentMs > SYNTH_WINDOW_MS && session.buffer.length > 0) {
+        let cut = session.buffer.length;
+        while (cut > 0 && session.buffer[cut - 1]!.time > tick.timestamp) cut--;
+        if (cut < session.buffer.length) {
           this.log.info(
-            { instrument: session.instrument, timeframe: session.timeframe, silentMs },
-            "long tick gap — purging stale buffer"
+            { instrument: session.instrument, timeframe: session.timeframe, silentMs, dropped: session.buffer.length - cut },
+            "long tick gap — trimming synthetic tail"
           );
-          session.buffer.length = 0;
+          session.buffer.length = cut;
         }
       }
       session.lastTickAt = tick.timestamp;
@@ -672,10 +676,16 @@ export class CandleFeed extends EventEmitter {
     if (session.rollover) clearTimeout(session.rollover);
     const tfMs = TIMEFRAME_SECONDS[session.timeframe] * 1000;
     const now = Date.now();
-    const nextBoundary = Math.floor(now / tfMs) * tfMs + tfMs;
+    // Fire on the PROVIDER-ALIGNED grid (OANDA 4h/D/W/M anchor to 5pm-NY,
+    // Binance 1w to Monday) — a plain epoch-modulo boundary diverges from
+    // the aggregator's buckets and produced phantom candles + dropped
+    // ticks on every high timeframe.
+    const bucketStartAt = session.aggregator.bucketStartAt;
+    const tfSec = tfMs / 1000;
+    const nextBoundaryMs = bucketStartAt(now + tfMs, tfSec);
     const timer = setTimeout(
       () => this.onRollover(session),
-      Math.max(50, nextBoundary - now + 50)
+      Math.max(50, nextBoundaryMs - now + 50)
     );
     timer.unref?.();
     session.rollover = timer;
@@ -690,7 +700,9 @@ export class CandleFeed extends EventEmitter {
   private onRollover(session: Session): void {
     try {
       const tfSec = TIMEFRAME_SECONDS[session.timeframe];
-      const bucketSec = Math.floor(Date.now() / (tfSec * 1000)) * tfSec;
+      // Same aligned grid as scheduleRollover: the synthetic bucket must
+      // exist on the provider's own boundary chain, never on epoch-modulo.
+      const bucketSec = session.aggregator.bucketStartAt(Date.now(), tfSec) / 1000;
       const active = session.aggregator.active;
 
       // Only synthesize within the lull window. Beyond it (weekend /

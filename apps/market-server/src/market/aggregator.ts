@@ -44,7 +44,9 @@ export class CandleAggregator {
    */
   constructor(
     public readonly timeframe: Timeframe,
-    private readonly bucketStartAt: (timestampMs: number, timeframeSeconds: number) => number = oandaAlignedBucketStart
+    /** Provider-aligned bucket function (also used by the feed's rollover
+     *  timers so they fire on the same grid as the aggregation). */
+    public readonly bucketStartAt: (timestampMs: number, timeframeSeconds: number) => number = oandaAlignedBucketStart
   ) {}
 
   get timeframeSeconds(): number {
