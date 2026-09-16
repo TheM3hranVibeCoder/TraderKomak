@@ -112,11 +112,22 @@ function openDm(nick: string): void {
   dmTarget.value = nick;
   dmText.value = "";
 }
+/** Broadcast: same popup to every online user; per-row Read chips show
+ *  who acknowledged (the dmStatusFor chips already track each send). */
+function dmAllCount(): number {
+  return chat.onlineNicks.filter((n) => !isSelf(n)).length;
+}
 function sendDm(): void {
   const t = dmText.value.trim();
   if (!t || !dmTarget.value) return;
   dmSending.value = true;
-  chat.adminDm(dmTarget.value, t);
+  if (dmTarget.value === "__all__") {
+    for (const n of chat.onlineNicks) {
+      if (!isSelf(n)) chat.adminDm(n, t);
+    }
+  } else {
+    chat.adminDm(dmTarget.value, t);
+  }
   dmSending.value = false;
   dmTarget.value = null;
   dmText.value = "";
@@ -167,6 +178,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
           <div class="stat red"><span class="stat-num">{{ chat.bans.length }}</span><span class="stat-label">Banned</span></div>
         </div>
         <div class="tg-row">
+          <button class="dm-all" type="button" :title="`Send a direct message to all ${dmAllCount()} online users`" @click="openDm('__all__')">DM all ({{ dmAllCount() }})</button>
           <button class="tg-broadcast" type="button" title="Show a Join-Telegram popup to every online user" @click="tgBroadcast">
             <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true">
               <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
@@ -277,7 +289,10 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         <div v-if="dmTarget" class="mini-backdrop" @click.self="dmTarget = null">
           <div class="mini-modal" role="dialog" aria-modal="true" :aria-label="`Message ${dmTarget}`">
             <div class="mini-head">
-              <span class="mini-title">Message to <b>{{ dmTarget }}</b></span>
+              <span class="mini-title">
+                <template v-if="dmTarget === '__all__'">Message to <b>ALL online users ({{ dmAllCount() }})</b></template>
+                <template v-else>Message to <b>{{ dmTarget }}</b></template>
+              </span>
               <button class="mini-x" type="button" aria-label="Close" @click="dmTarget = null">✕</button>
             </div>
             <textarea
@@ -364,6 +379,24 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 .stat.red    { background: linear-gradient(135deg, #fb7185, #ef4444); }
 .stat-num { font-size: 19px; font-weight: 800; line-height: 1.1; }
 .stat-label { font-size: 10px; font-weight: 600; opacity: 0.92; text-transform: uppercase; letter-spacing: 0.4px; }
+.dm-all {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 14px;
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 800;
+  cursor: pointer;
+  background: linear-gradient(135deg, #a78bfa, #6366f1);
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+  transition: transform 0.12s ease, filter 0.12s ease;
+  white-space: nowrap;
+}
+.dm-all:hover { transform: translateY(-1px); filter: brightness(1.08); }
 .tg-broadcast {
   display: inline-flex;
   align-items: center;
@@ -624,7 +657,25 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 
 @media (max-width: 560px) {
   .admin-stats { grid-template-columns: repeat(2, 1fr); }
-  .tg-broadcast { grid-column: 1 / -1; padding: 10px; }
+  .dm-all {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 14px;
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 800;
+  cursor: pointer;
+  background: linear-gradient(135deg, #a78bfa, #6366f1);
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+  transition: transform 0.12s ease, filter 0.12s ease;
+  white-space: nowrap;
+}
+.dm-all:hover { transform: translateY(-1px); filter: brightness(1.08); }
+.tg-broadcast { grid-column: 1 / -1; padding: 10px; }
   .admin-tabs { flex-wrap: wrap; }
   .user-actions { width: 100%; justify-content: flex-start; }
 }

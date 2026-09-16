@@ -293,6 +293,21 @@ function addHealListeners(): void {
     client?.sendAdminDm(nick, text, id);
     return id;
   }
+  /** Send the same message to every ONLINE user (except the admin).
+   *  Each recipient gets its own tracking id → per-user Read receipts. */
+  function adminDmAll(text: string): number {
+    const clean = text.trim().slice(0, 500);
+    if (!clean) return 0;
+    let sent = 0;
+    const me = nick.value.toLowerCase();
+    for (const target of onlineNicks.value) {
+      if (!target || target.toLowerCase() === me) continue;
+      adminDm(target, clean);
+      sent++;
+    }
+    return sent;
+  }
+
   /* ── User side: incoming admin DM + telegram popup ── */
   const incomingDm = ref<{ id: string; text: string } | null>(null);
   const tgPopupId = ref<string | null>(null);
@@ -459,6 +474,7 @@ function addHealListeners(): void {
     askUserInfo,
     clearUserInfo,
     adminDm,
+    adminDmAll,
     dmStatuses,
     clearDmStatuses,
     incomingDm,
