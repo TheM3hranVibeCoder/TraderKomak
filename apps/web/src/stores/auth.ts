@@ -98,7 +98,12 @@ export const useAuthStore = defineStore("auth", () => {
       try { await sb.auth.signOut(); } catch {}
       try { localStorage.removeItem(LASTVISIT_KEY); } catch {}
     }
-    const { data } = await sb.auth.getSession();
+    // A transient failure here must not sign the user out — retry once.
+    let { data, error: gsErr } = await sb.auth.getSession();
+    if (gsErr || !data.session) {
+      await new Promise((r) => setTimeout(r, 1200));
+      ({ data } = await sb.auth.getSession());
+    }
     await applySession(data.session);
     sb.auth.onAuthStateChange((_evt, session) => {
       void applySession(session);
@@ -124,13 +129,32 @@ export const useAuthStore = defineStore("auth", () => {
     // otherwise the chart flashes for a second before the username picker.
     if (profile.value) status.value = "ready";
 
-    const { data: row, error } = await supabase()
-      .from("profiles")
-      .select("username, avatar_url, is_admin")
-      .eq("user_id", session.user.id)
-      .maybeSingle();
-    if (error) {
-      console.error("profile load failed", error);
+    // Profile fetch with retries: a single network hiccup must NEVER kick
+    // a signed-in user out (that read as "sign in again after a day").
+    let row: { username: string; avatar_url: string | null; is_admin: boolean | null } | null = null;
+    let loaded = false;
+    for (let attempt = 0; attempt < 3 && !loaded; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 1200 * attempt));
+      const { data, error } = await supabase()
+        .from("profiles")
+        .select("username, avatar_url, is_admin")
+        .eq("user_id", session.user.id)
+        .maybeSingle();
+      if (!error) {
+        row = data;
+        loaded = true;
+      } else {
+        console.warn("profile load retry", attempt + 1, error.message);
+      }
+    }
+    if (!loaded) {
+      // All retries failed — trust the cached identity instead of forcing
+      // a sign-out; the username refreshes on the next successful visit.
+      console.error("profile load failed after retries");
+      if (profile.value) {
+        status.value = "ready";
+        return;
+      }
       status.value = "guest";
       setWasAuth(false);
       return;
