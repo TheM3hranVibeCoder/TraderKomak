@@ -369,7 +369,7 @@ nav.right-rail {
      High-impact release is < 15 min away. Visible on the rail regardless
      of which panel is open. */
   position: absolute;
-  top: 2px;
+  top: -5px;
   left: 50%;
   transform: translateX(-50%);
   min-width: 24px;
