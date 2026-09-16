@@ -38,16 +38,16 @@ describe("CandleAggregator OHLC", () => {
     expect(r2?.candle.open).toBe(1.2);
   });
 
-  it("handles 1s timeframe with real boundaries", () => {
-    const agg = new CandleAggregator("1s");
-    const base = Date.parse("2026-01-01T09:30:00.000Z");
+  it("handles 5s timeframe with real boundaries", () => {
+    const agg = new CandleAggregator("5s");
+    const base = Date.parse("2026-01-01T09:30:00.000Z"); // on a 5s boundary
     const r1 = agg.apply(tick(1.0, base + 200));
     const r2 = agg.apply(tick(1.1, base + 700));
     expect(r1?.candle.time).toBe(r2?.candle.time);
     expect(r2?.candle.high).toBe(1.1);
-    const r3 = agg.apply(tick(1.2, base + 1100));
+    const r3 = agg.apply(tick(1.2, base + 5100));
     expect(r3?.closed).not.toBeNull();
-    expect(r3?.candle.time).toBe(base / 1000 + 1);
+    expect(r3?.candle.time).toBe(base / 1000 + 5);
   });
 
   it("ignores stale ticks older than active bucket", () => {

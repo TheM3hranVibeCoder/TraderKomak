@@ -1,3 +1,4 @@
+import { isTimeframe } from "@traderkomak/shared";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -116,13 +117,26 @@ export function loadConfig(): AppConfig {
   const token = requireEnv("OANDA_API_TOKEN");
   const accountId = requireEnv("OANDA_ACCOUNT_ID");
 
-  const persistentAggregations = optionalEnv("PERSISTENT_AGGREGATIONS", "")
+  // Unsupported timeframes (e.g. the old "1s" default) would create a
+  // session with broken bucket math — filter them out and warn.
+  const persistentAggregationsRaw = optionalEnv("PERSISTENT_AGGREGATIONS", "")
     .split(",")
     .map((entry) => entry.trim())
     .filter((entry) => entry.includes(":"))
     .map((entry) => {
       const [instrument, timeframe] = entry.split(":");
       return { instrument: instrument!.trim(), timeframe: timeframe!.trim() };
+    })
+    .filter((pair) => {
+      // "1s" was removed from the supported timeframes; keeping an
+      // unsupported entry would create a session with broken bucket math.
+      if (!isTimeframe(pair.timeframe)) {
+        console.warn(
+          `[config] PERSISTENT_AGGREGATIONS: dropping unsupported timeframe "${pair.timeframe}" (${pair.instrument})`
+        );
+        return false;
+      }
+      return true;
     });
 
   return {
@@ -143,7 +157,7 @@ export function loadConfig(): AppConfig {
       apiUrl: optionalEnv("BINANCE_API_URL", "https://api.binance.com").replace(/\/$/, ""),
       streamUrl: optionalEnv("BINANCE_STREAM_URL", "wss://stream.binance.com:9443").replace(/\/$/, ""),
     },
-    persistentAggregations,
+    persistentAggregations: persistentAggregationsRaw,
     chatAdminKey: optionalEnv("CHAT_ADMIN_KEY", ""),
     chatOwnerNick: optionalEnv("CHAT_OWNER_NICK", "mehran"),
   };

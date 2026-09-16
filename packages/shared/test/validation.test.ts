@@ -35,7 +35,7 @@ describe("isTimeframe", () => {
 
   it("rejects invalid timeframes", () => {
     expect(isTimeframe("2s")).toBe(false);
-    expect(isTimeframe("1M")).toBe(false);
+    expect(isTimeframe("7m")).toBe(false);
     expect(isTimeframe("")).toBe(false);
     expect(isTimeframe(null)).toBe(false);
   });

@@ -8,7 +8,8 @@ import {
 
 describe("TIMEFRAME_SECONDS", () => {
   it("maps correctly", () => {
-    expect(TIMEFRAME_SECONDS["1s"]).toBe(1);
+    // "1s" was removed from the supported timeframes — must stay undefined.
+    expect(TIMEFRAME_SECONDS["1s"]).toBeUndefined();
     expect(TIMEFRAME_SECONDS["5s"]).toBe(5);
     expect(TIMEFRAME_SECONDS["10s"]).toBe(10);
     expect(TIMEFRAME_SECONDS["30s"]).toBe(30);
@@ -17,8 +18,8 @@ describe("TIMEFRAME_SECONDS", () => {
 });
 
 describe("NATIVE_HISTORY_GRANULARITY", () => {
-  it("has null for 1s", () => {
-    expect(NATIVE_HISTORY_GRANULARITY["1s"]).toBeNull();
+  it("has no entry for 1s (timeframe removed)", () => {
+    expect(NATIVE_HISTORY_GRANULARITY["1s"]).toBeUndefined();
   });
   it("maps 5s to S5 and 1m to M1", () => {
     expect(NATIVE_HISTORY_GRANULARITY["5s"]).toBe("S5");
@@ -27,8 +28,8 @@ describe("NATIVE_HISTORY_GRANULARITY", () => {
 });
 
 describe("nativeCandlesNeeded", () => {
-  it("returns 0 for 1s", () => {
-    expect(nativeCandlesNeeded("1s", 500)).toBe(0);
+  it("returns count for 5s (smallest native granularity)", () => {
+    expect(nativeCandlesNeeded("5s", 500)).toBe(500);
   });
   it("calculates multiplier for 10s and 30s", () => {
     expect(nativeCandlesNeeded("10s", 100)).toBe(200); // 10/5 * 100

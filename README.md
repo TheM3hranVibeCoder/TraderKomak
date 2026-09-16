@@ -189,7 +189,7 @@ Vue mount → market store loadHistory()
 
 ```
 Market-server start:
-  CandleFeed.startPersistent(PERSISTENT_AGGREGATIONS)   # e.g. EUR_USD:1s is always buffered
+  CandleFeed.startPersistent(PERSISTENT_AGGREGATIONS)   # e.g. EUR_USD:5s is always buffered
   → OandaStreamClient.setInstruments(sessionUnion)
   → stream.start() dials GET /v3/accounts/{id}/pricing/stream?instruments=...
 
@@ -210,7 +210,7 @@ Watchdog: any 60 s of stream silence forces a reconnect.
 Reconnect: exponential backoff with jitter, capped at 30 s; attempt counter resets on success; only one dial at a time; instrument-set changes trigger an immediate redial.
 ```
 
-**Persistence note:** `1s` has no native history — its only source is this live buffer. `PERSISTENT_AGGREGATIONS=EUR_USD:1s` keeps the `1s` session alive even with no subscribers so history accumulates.
+**Persistence note:** `1s` has no native history — its only source is this live buffer. `PERSISTENT_AGGREGATIONS=EUR_USD:5s` keeps the `1s` session alive even with no subscribers so history accumulates.
 
 ---
 
@@ -277,7 +277,7 @@ OANDA_API_TOKEN=***    # secret
 OANDA_ACCOUNT_ID=101-001-xxxxxxx-xxx
 OANDA_API_URL=https://api-fxpractice.oanda.com
 OANDA_STREAM_URL=https://stream-fxpractice.oanda.com
-PERSISTENT_AGGREGATIONS=EUR_USD:1s
+PERSISTENT_AGGREGATIONS=EUR_USD:5s
 ```
 
 Example `Dockerfile` pattern or direct `npm run build && npm run start:server`. The process must be **persistent** — the stream is a long-lived HTTP response, not a cron/job.
