@@ -114,20 +114,32 @@ function scrollTop(): void {
   });
 }
 
-/** On open: jump to the FIRST UNSEEN message (or bottom when all seen). */
+/** On open: jump to the FIRST UNSEEN message (or bottom when all seen).
+ *  Uses direct scrollTop math — scrollIntoView walks ancestor containers
+ *  and glitches mid-animation. On touch devices the panel is mid-slide
+ *  (320ms), so the jump waits for the animation to finish. */
 function jumpToUnseen(): void {
-  void nextTick(() => {
+  const jump = () => {
     const el = listEl.value;
     if (!el) return;
     if (chat.firstUnseenTs) {
-      const target = el.querySelector(`[data-ts="${chat.firstUnseenTs}"]`);
+      const target = el.querySelector(`[data-ts="${chat.firstUnseenTs}"]`) as HTMLElement | null;
       if (target) {
-        target.scrollIntoView({ block: "start" });
+        const tr = target.getBoundingClientRect();
+        const lr = el.getBoundingClientRect();
+        el.scrollTop += tr.top - lr.top - 6;
         return;
       }
     }
     el.scrollTop = el.scrollHeight;
-  });
+  };
+  const coarse = window.matchMedia("(pointer: coarse)").matches;
+  if (coarse) {
+    void nextTick(jump);
+    setTimeout(jump, 360); // after the slide-in settles; images may still shift
+  } else {
+    void nextTick(jump);
+  }
 }
 
 /** Down-arrow visibility: user is away from the bottom of the list. */
