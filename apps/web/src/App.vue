@@ -347,24 +347,29 @@ nav.right-rail {
   flex-shrink: 0;
 }
 .alarm-badge {
+  /* News countdown pill (like the chat unread badge): shows m:ss when a
+     High-impact release is < 15 min away. Visible on the rail regardless
+     of which panel is open. */
   position: absolute;
-  bottom: 3px;
-  left: 1px;
-  right: 1px;
-  display: grid;
-  place-items: center;
-  border-radius: 5px;
-  background: rgba(239, 68, 68, 0.95);
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 24px;
+  padding: 1px 4px;
+  border-radius: 99px;
+  background: #ef4444;
   color: #fff;
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 900;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
-  animation: railAlarm 1s steps(2, start) infinite;
+  white-space: nowrap;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  z-index: 5;
+  animation: alarmPulse 1s ease-in-out infinite;
 }
-@keyframes railAlarm {
+@keyframes alarmPulse {
   50% {
-    opacity: 0.45;
+    transform: translateX(-50%) scale(1.15);
   }
 }
 .rail-half.news.alarm {
