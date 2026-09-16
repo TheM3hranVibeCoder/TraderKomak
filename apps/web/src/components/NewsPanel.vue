@@ -40,6 +40,20 @@ function rowState(it: NewsItem): { label: string; cls: string } {
   return { label: "released", cls: "released" };
 }
 
+/** Is the selected day OUTSIDE the loaded calendar's coverage? The free
+ *  Forex Factory feed only carries the CURRENT week, so past/future weeks
+ *  are always empty — shown as an informational note, not a "retry" error. */
+const outOfFeedRange = computed(() => {
+  if (!news.items.length) return false;
+  const min = Math.min(...news.items.map((i) => i.date));
+  const max = Math.max(...news.items.map((i) => i.date));
+  const minDay = new Date(min);
+  const minStart = new Date(minDay.getFullYear(), minDay.getMonth(), minDay.getDate()).getTime();
+  const maxDay = new Date(max);
+  const maxStart = new Date(maxDay.getFullYear(), maxDay.getMonth(), maxDay.getDate()).getTime();
+  return news.selectedStart < minStart || news.selectedStart > maxStart;
+});
+
 const panelEl = ref<HTMLElement | null>(null);
 function closePanel(): void {
   news.setOpen(false);
@@ -71,6 +85,10 @@ onMounted(() => {
           ⚠ {{ news.error }}
           <button class="retry-btn" @click="news.refresh()">Retry</button>
         </div>
+        <div v-else-if="news.dayItems.length === 0 && outOfFeedRange" class="news-empty">
+          📅 Only the current week's calendar is available.
+          <button class="retry-btn" @click="news.goToRelevantDay()">Back to this week</button>
+        </div>
         <div v-else-if="news.dayItems.length === 0" class="news-empty">
           No medium/high impact news on this day
           <button class="retry-btn" @click="news.refresh()">Retry</button>
@@ -84,7 +102,6 @@ onMounted(() => {
             <span class="row-title">{{ it.title }}</span>
             <span class="row-vals">
               <span v-if="it.actual" class="val actual">A: {{ it.actual }}</span>
-              <span v-else-if="rowState(it).cls === 'waiting'" class="val waiting">A: waiting…</span>
               <span v-if="it.forecast" class="val">F: {{ it.forecast }}</span>
               <span v-if="it.previous" class="val">P: {{ it.previous }}</span>
               <span v-if="!it.forecast && !it.previous && !it.actual" class="val muted">—</span>

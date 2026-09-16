@@ -2,7 +2,7 @@
 import { ref, watch, onMounted, onBeforeUnmount, nextTick, computed, onUnmounted } from "vue";
 import { createChartAdapter, type ChartAdapter } from "@/chart/chartAdapter";
 import { useThemeStore } from "@/stores/theme";
-import { useMarketStore } from "@/stores/market";
+import { useMarketStore, sanitizeCandles, isSaneCandle } from "@/stores/market";
 import { useDrawingsStore, type DrawingRect, type DrawingTrend, type DrawingPoly, type DrawingPosition, type DrawingHLine, type DrawingHRay, type DrawingVLine, type SingleKind, type SingleDrawing, type DashStyle } from "@/stores/drawings";
 import { useReplayStore } from "@/stores/replay";
 import { useDemoStore, demoValuePerPrice, type DemoSide, type DemoStatus, type DemoKind } from "@/stores/demo";
@@ -1299,11 +1299,14 @@ watch(
     }
     // Single new candle appended at end (live) — update without refit
     if (next.length === prev.length + 1 && next[next.length - 2]!.time === prevLast.time && nextLast.time > prevLast.time) {
+      if (!isSaneCandle(nextLast)) return;
       commitWhenStable(() => adapter!.updateCandle(nextLast));
       return;
     }
     if (next.length !== prev.length) {
-      commitWhenStable(() => adapter!.setData(next));
+      const safe = sanitizeCandles(next);
+      if (!safe.length) return;
+      commitWhenStable(() => adapter!.setData(safe));
       if (next.length < prev.length && preShrinkRange) {
         restoreRange(preShrinkRange, prev.length - next.length);
       }
@@ -1324,12 +1327,14 @@ watch(
           np.low !== pp.low ||
           np.close !== pp.close);
       if (olderChanged) {
-        commitWhenStable(() => adapter!.setData(next));
+        const safe = sanitizeCandles(next);
+        if (safe.length) commitWhenStable(() => adapter!.setData(safe));
       } else {
         commitWhenStable(() => adapter!.updateCandle(nextLast));
       }
     } else {
-      commitWhenStable(() => adapter!.setData(next));
+      const safe = sanitizeCandles(next);
+      if (safe.length) commitWhenStable(() => adapter!.setData(safe));
     }
   },
   { deep: false }

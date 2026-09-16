@@ -189,6 +189,12 @@ export function startCloudSync(): void {
         return;
       }
       if (data?.data && typeof data.data === "object") {
+        // The apply churns the chart (indicator series add/remove → pane
+        // rebuilds, drawings replaced). Landing it during the chart's
+        // initial layout/resize window crashed LWC's render loop ("Value
+        // is null") — defer until the chart has fully settled.
+        await new Promise((r) => setTimeout(r, 1500));
+        if (auth.status !== "ready" || activeUserId !== userId) return;
         applyLocal(data.data as CloudData);
       } else {
         // First login for this account — seed the cloud with local state.

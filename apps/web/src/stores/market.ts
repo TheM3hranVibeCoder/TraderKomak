@@ -36,7 +36,7 @@ const cacheKey = (inst: string, tf: string) => `tk-candles:${inst}:${tf}`;
 const CANDLE_CACHE_MAX = 4000;
 
 /** OHLC sanity: finite numbers, high ≥ max(o,c), low ≤ min(o,c). */
-function isSaneCandle(c: unknown): c is Candle {
+export function isSaneCandle(c: unknown): c is Candle {
   if (!c || typeof c !== "object") return false;
   const k = c as Record<string, unknown>;
   const time = k.time;
@@ -93,6 +93,13 @@ function loadPersistedTimeframe(): typeof DEFAULT_TIMEFRAME {
     if (v && isTimeframe(v)) return v as typeof DEFAULT_TIMEFRAME;
   } catch {}
   return DEFAULT_TIMEFRAME;
+}
+
+/** Filter a candle list down to chart-safe rows (last-line defense before
+ *  anything reaches Lightweight Charts — a null/NaN row crashes its render
+ *  loop and blanks the whole chart). */
+export function sanitizeCandles(list: Candle[]): Candle[] {
+  return list.filter((c) => isSaneCandle(c));
 }
 
 export const useMarketStore = defineStore("market", () => {
