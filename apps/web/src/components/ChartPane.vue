@@ -819,6 +819,8 @@ function relLuma(hex: string): number {
 /** Is the EFFECTIVE chart background light or dark? Resolves the real
  *  rendered colors: a template/custom background when set, the theme's
  *  own gradient otherwise — so the ink always matches what is painted. */
+const autoInkColor = computed(() => (chartBgIsLight() ? "#101318" : "#e8ecf4"));
+
 function chartBgIsLight(): boolean {
   const s = chartStyle.value;
   if (s.bgMode === "solid") return relLuma(s.bgSolid ?? themeBgPair()[0]) > 0.5;
@@ -4238,7 +4240,7 @@ onBeforeUnmount(() => {
   <div ref="paneRef" class="chart-pane">
     <!-- Top-left symbol label like TradingView — transparent, only letters with flags -->
     <div v-if="instrument" class="chart-symbol-label">
-      <span class="label-text">
+      <span class="label-text" :style="{ color: autoInkColor }">
         <template v-for="(part, idx) in symbolParts(instrument)" :key="part">
           <img v-if="flagFor(part).type === 'flag'" :src="flagFor(part).value" :alt="part" class="flag-img" />
           <span v-else class="flag-emoji">{{ flagFor(part).value }}</span>
@@ -6202,7 +6204,6 @@ onBeforeUnmount(() => {
 .label-text {
   font-weight: 800;
   font-size: 13px;
-  color: var(--text);
   letter-spacing: -0.02em;
   text-shadow: 0 1px 8px rgba(0, 0, 0, 0.08);
   display: inline-flex;
