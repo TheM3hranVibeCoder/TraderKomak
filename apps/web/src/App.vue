@@ -35,14 +35,32 @@ const wasAuth = wasAuthOnDevice();
 
 // Phone: the drawing-tools column and the watchlist/chat/news rail start
 // collapsed so the chart gets the full width; the edge arrows toggle them.
+// Both states PERSIST (with the panels' own open state) so a refresh
+// restores exactly what was on screen instead of hanging an orphan panel
+// next to a collapsed rail.
 const isPhone = ref(false);
-const toolsOpen = ref(false);
-const railOpen = ref(false);
+const RAIL_KEY = "tk-rail-open";
+const TOOLS_KEY = "tk-tools-open";
+const toolsOpen = ref(localStorage.getItem(TOOLS_KEY) === "1");
+const railOpen = ref(
+  localStorage.getItem(RAIL_KEY) === "1" ||
+  chat.open || watchlist.isOpen || news.open
+);
+watch([toolsOpen, railOpen], ([t, r]) => {
+  try {
+    localStorage.setItem(TOOLS_KEY, t ? "1" : "0");
+    localStorage.setItem(RAIL_KEY, r ? "1" : "0");
+  } catch {}
+});
 function onResize(): void {
   const phone = window.innerWidth <= 640;
   if (phone && !isPhone.value) {
-    toolsOpen.value = false;
-    railOpen.value = false;
+    // Entering phone width collapses the columns — unless a panel is open
+    // (restoring its rail too), so nothing is left hanging.
+    if (!(chat.open || watchlist.isOpen || news.open)) {
+      toolsOpen.value = false;
+      railOpen.value = false;
+    }
   }
   isPhone.value = phone;
 }
