@@ -60,7 +60,9 @@ export const useWatchlistStore = defineStore("watchlist", () => {
   watch(
     instruments,
     (v) => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(v));
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(v));
+      } catch {}
       // Ensure prices map has entries
       for (const inst of v) {
         if (!prices.value.has(inst)) {
@@ -85,7 +87,7 @@ export const useWatchlistStore = defineStore("watchlist", () => {
   );
 
   watch(isOpen, (v) => {
-    localStorage.setItem("tk-watchlist-open", String(v));
+    try { localStorage.setItem("tk-watchlist-open", String(v)); } catch {}
   });
 
   function add(instrument: string) {

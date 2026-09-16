@@ -359,11 +359,15 @@ export const useDemoStore = defineStore("demo", () => {
   /** Replay backward past a trade's entry → the whole trade is deleted. */
   function deleteBeyond(cutoff: number, symbol: string): void {
     const before = positions.value.length;
-    const kept = positions.value.filter((p) => p.symbol !== symbol || p.entry <= cutoff);
-    if (kept.length !== before) {
-      positions.value = kept;
-      persist();
-    }
+    const removed = positions.value.filter((p) => p.symbol === symbol && p.entry > cutoff);
+    if (!removed.length) return;
+    // Rewinding the replay deletes these trades — any P&L they already
+    // booked must be REVERSED, or the balance keeps phantom profits/losses
+    // forever (persisted via localStorage).
+    const refunded = removed.reduce((sum, p) => sum + (p.status === "closed" ? p.pnl ?? 0 : 0), 0);
+    positions.value = positions.value.filter((p) => p.symbol !== symbol || p.entry <= cutoff);
+    if (refunded !== 0) balance.value = +(balance.value - refunded).toFixed(2);
+    persist();
   }
 
   watch(lastPrice, (price) => {

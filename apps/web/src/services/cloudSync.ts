@@ -148,11 +148,36 @@ export function startCloudSync(): void {
   started = true;
   const auth = useAuthStore();
 
+  /** Watchers/listeners owned by the current "ready" activation. */
+  let stops: Array<() => void> = [];
+  let activeUserId: string | null = null;
+
+  function teardown(): void {
+    for (const stop of stops) {
+      try { stop(); } catch {}
+    }
+    stops = [];
+    if (pushTimer) {
+      clearTimeout(pushTimer);
+      pushTimer = null;
+    }
+    activeUserId = null;
+  }
+
   watch(
     () => auth.status,
     async (status) => {
+      // Leaving "ready" (sign-out, session loss) tears everything down and
+      // cancels any pending push into the previous account.
+      if (status !== "ready") {
+        if (activeUserId) teardown();
+        return;
+      }
+      if (activeUserId === auth.userId) return;
+      if (activeUserId) teardown();
       const userId = auth.userId;
-      if (status !== "ready" || !userId) return;
+      if (!userId) return;
+      activeUserId = userId;
       const sb = supabase();
       const { data, error } = await sb
         .from("user_settings")
@@ -171,29 +196,39 @@ export function startCloudSync(): void {
       }
 
       // Push subsequent local changes (debounced), skipping our own apply.
+      // Every watcher/listener is registered HERE (inside the ready effect)
+      // and torn down when auth leaves "ready" — re-logins must not stack
+      // duplicate watchers, and a signed-out browser must never push edits
+      // into the previous account's cloud row.
       const d = useDrawingsStore();
       const w = useWatchlistStore();
       const m = useMarketStore();
+      const ind = useIndicatorsStore();
       const onChange = () => {
         if (applying) return;
         schedulePush(userId);
       };
-      watch(() => [d.drawings, d.lines, d.polys, d.positions, d.singles], onChange, { deep: true });
-      watch(() => [...w.instruments], onChange);
-      watch(() => [m.instrument, m.timeframe], onChange);
-      const ind = useIndicatorsStore();
-      watch(() => ind.addedMap, onChange, { deep: true });
-      watch(
-        () => [
-          ind.sessionsVisible, ind.sessionsLabels, ind.sessionsEnabled, ind.defs, ind.customs,
-          ind.rsiVisible, ind.rsiLength, ind.rsiColor, ind.rsiLevelColor, ind.rsiUpper, ind.rsiLower,
-          ind.smaVisible, ind.smaLength, ind.smaColor, ind.emaVisible, ind.emaLength, ind.emaColor,
-        ],
-        onChange,
-        { deep: true }
+      stops.push(
+        watch(() => [d.drawings, d.lines, d.polys, d.positions, d.singles], onChange, { deep: true }),
+        watch(() => [...w.instruments], onChange),
+        watch(() => [m.instrument, m.timeframe], onChange),
+        watch(() => ind.addedMap, onChange, { deep: true }),
+        watch(
+          () => [
+            ind.sessionsVisible, ind.sessionsLabels, ind.sessionsEnabled, ind.defs, ind.customs,
+            ind.rsiVisible, ind.rsiLength, ind.rsiColor, ind.rsiLevelColor, ind.rsiUpper, ind.rsiLower,
+            ind.smaVisible, ind.smaLength, ind.smaColor, ind.emaVisible, ind.emaLength, ind.emaColor,
+          ],
+          onChange,
+          { deep: true }
+        )
       );
-      // ChartPane announces chart-style / template writes.
-      window.addEventListener("tk-local-change", onChange as EventListener);
+      const onLocalChange = () => {
+        if (applying) return;
+        schedulePush(userId);
+      };
+      window.addEventListener("tk-local-change", onLocalChange as EventListener);
+      stops.push(() => window.removeEventListener("tk-local-change", onLocalChange as EventListener));
     },
     { immediate: true }
   );

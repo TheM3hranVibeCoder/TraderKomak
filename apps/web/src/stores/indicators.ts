@@ -403,6 +403,7 @@ export const useIndicatorsStore = defineStore("indicators", () => {
     [sessionsAdded, sessionsVisible, sessionsLabels, sessionsEnabled, defs, customs, rsiAdded, rsiVisible, rsiLength, rsiColor, rsiLevelColor, rsiUpper, rsiLower,
      smaAdded, smaVisible, smaLength, smaColor, emaAdded, emaVisible, emaLength, emaColor, addedMap],
     () => {
+      try {
       localStorage.setItem(
         KEY,
         JSON.stringify({
@@ -430,6 +431,7 @@ export const useIndicatorsStore = defineStore("indicators", () => {
           addedMap: addedMap.value,
         })
       );
+      } catch {}
     },
     { deep: true }
   );

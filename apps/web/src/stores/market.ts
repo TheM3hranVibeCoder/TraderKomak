@@ -105,12 +105,16 @@ export const useMarketStore = defineStore("market", () => {
   const isLoadingMore = ref(false);
   const hasMore = ref(true);
 
-  // Map time → index for O(1) update-or-append.
-  const timeIndex = computed(() => {
-    const map = new Map<number, number>();
-    candles.value.forEach((c, i) => map.set(c.time, i));
-    return map;
-  });
+  // Map time → index for O(1) update-or-append. Maintained INCREMENTALLY
+  // by the writers below (replace/prepend/append/truncate) instead of a
+  // computed that rebuilt a 20k-entry Map on every live tick.
+  const timeIndexMap = new Map<number, number>();
+  const timeIndex = computed(() => timeIndexMap);
+
+  function rebuildTimeIndex(): void {
+    timeIndexMap.clear();
+    candles.value.forEach((c, i) => timeIndexMap.set(c.time, i));
+  }
 
   let ws: MarketWsClient | null = null;
   let loadSeq = 0;
@@ -245,12 +249,15 @@ export const useMarketStore = defineStore("market", () => {
       // history + live race; keep sorted).
       if (candles.value.length > 0 && candle.time < candles.value[candles.value.length - 1]!.time) {
         candles.value = [...candles.value, { ...candle }].sort((a, b) => a.time - b.time);
+        rebuildTimeIndex();
       } else {
+        timeIndexMap.set(candle.time, candles.value.length);
         candles.value = [...candles.value, { ...candle }];
       }
       // Cap the in-memory series (initial window + lazy-loaded history)
       if (candles.value.length > MAX_SERIES) {
         candles.value = candles.value.slice(-MAX_SERIES);
+        rebuildTimeIndex();
       }
     }
     void closed; // reserved for future use (e.g. close animation)
@@ -329,6 +336,7 @@ export const useMarketStore = defineStore("market", () => {
         }
         const cached = cachedRaw.slice(keepFrom);
         candles.value = cached.length > 0 ? mergeCandles(data, cached) : data;
+        rebuildTimeIndex();
         hasMore.value = data.length >= HISTORY_COUNT;
         awaitingHistory.value = false; // history landed → accept live frames
         if (data.length === 0) {
@@ -372,6 +380,7 @@ export const useMarketStore = defineStore("market", () => {
         return false;
       }
       candles.value = [...older.sort((a, b) => a.time - b.time), ...candles.value];
+      rebuildTimeIndex();
       // Persist the lazy-loaded history so future visits skip re-fetching it
       saveCache(wantInstrument, wantTimeframe, [...loadCache(wantInstrument, wantTimeframe), ...older]);
       if (more.length < LAZY_BATCH) hasMore.value = false;
@@ -390,6 +399,7 @@ export const useMarketStore = defineStore("market", () => {
     ensureWs().unsubscribe(); // stop old stream immediately
     instrument.value = next;
     candles.value = [];
+    rebuildTimeIndex();
     error.value = null;
     await loadHistory();
     ensureWs().subscribe(instrument.value, timeframe.value);
@@ -402,6 +412,7 @@ export const useMarketStore = defineStore("market", () => {
     ensureWs().unsubscribe();
     timeframe.value = next;
     candles.value = [];
+    rebuildTimeIndex();
     error.value = null;
     await loadHistory();
     ensureWs().subscribe(instrument.value, timeframe.value);
@@ -447,6 +458,7 @@ export const useMarketStore = defineStore("market", () => {
       }
       const base = baseRaw.slice(keepFrom);
       candles.value = mergeCandles(base.length > 0 ? base : [], data);
+      rebuildTimeIndex();
     } catch {
       // offline / transient — the stream keeps running; try again next focus
     } finally {

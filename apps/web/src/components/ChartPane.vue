@@ -658,10 +658,15 @@ function armDemo(side: DemoSide, kind: DemoKind): void {
   if (!c.length) return;
   // Market: entry is the current price — in replay mode that is the last
   // VISIBLE (boundary) candle's close, not the live price
-  const last =
-    replay.active && replay.cutoff !== null
-      ? c.filter((x) => x.time <= replay.cutoff!).slice(-1)[0]!.close
-      : c[c.length - 1]!.close;
+  let last = c[c.length - 1]!.close;
+  if (replay.active && replay.cutoff !== null) {
+    const shown = c.filter((x) => x.time <= replay.cutoff!);
+    if (!shown.length) {
+      demo.error = "No candles at the replay boundary";
+      return;
+    }
+    last = shown[shown.length - 1]!.close;
+  }
   const long = side === "long";
   const dir = long ? 1 : -1;
   // default SL/TP distances scale with the timeframe via the average
@@ -1172,11 +1177,12 @@ watch(
     // Demo positions track the price AT the replay boundary. Forward steps
     // process the whole revealed candle — its WICK can fill pending limits
     // and hit TP/SL, not just the close.
+    // Stepping backward past a trade's entry deletes the whole trade —
+    // BEFORE pricing, so a doomed position never books a phantom exit.
+    if (cutoff < prev) demo.deleteBeyond(cutoff, market.instrument);
     const lastShown = displayCandles.value[displayCandles.value.length - 1];
     if (lastShown && cutoff > prev) demo.processReplayCandle(lastShown, market.instrument);
     else if (lastShown) demo.processReplayPrice(lastShown.close, market.instrument);
-    // Stepping backward past a trade's entry deletes the whole trade
-    if (cutoff < prev) demo.deleteBeyond(cutoff, market.instrument);
     if (cutoff <= prev) return;
     const idx = displayCandles.value.length - 1;
     const r = adapter?.getLogicalRange();
