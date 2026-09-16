@@ -394,8 +394,8 @@ function pushMaData(): void {
     }
     return pts;
   };
-  if (indicators.smaAdded) adapter.setMaData("sma", toPoints(computeSma(closes, indicators.smaLength)));
-  if (indicators.emaAdded) adapter.setMaData("ema", toPoints(computeEma(closes, indicators.emaLength)));
+  if (indicators.smaAdded) commitWhenStable(() => adapter?.setMaData("sma", toPoints(computeSma(closes, indicators.smaLength))));
+  if (indicators.emaAdded) commitWhenStable(() => adapter?.setMaData("ema", toPoints(computeEma(closes, indicators.emaLength))));
 }
 
 function syncMa(kind: "sma" | "ema"): void {
@@ -447,7 +447,7 @@ function pushRsiData(): void {
     if (v == null || !Number.isFinite(v)) continue;
     points.push({ time: candles[i]!.time, value: v });
   }
-  adapter.setRsiData(points);
+  commitWhenStable(() => adapter?.setRsiData(points));
   rsiPaneH.value = adapter.rsiPaneHeight();
 }
 
@@ -1009,6 +1009,17 @@ function onTemplateChange(): void {
 const containerRef = ref<HTMLElement | null>(null);
 let adapter: ChartAdapter | null = null;
 let ro: ResizeObserver | null = null;
+/** True while a chart resize is mid-flight; data commits wait one frame. */
+let chartResizeInFlight = false;
+let chartResizeFlush: (() => void) | null = null;
+/** Run a chart data commit now, or right after the in-flight resize lands. */
+function commitWhenStable(fn: () => void): void {
+  if (chartResizeInFlight) {
+    chartResizeFlush = fn;
+    return;
+  }
+  fn();
+}
 
 /** Candles the chart actually shows: in replay mode everything after the
  *  replay boundary is hidden. The full series stays untouched in the store,
@@ -1288,11 +1299,11 @@ watch(
     }
     // Single new candle appended at end (live) — update without refit
     if (next.length === prev.length + 1 && next[next.length - 2]!.time === prevLast.time && nextLast.time > prevLast.time) {
-      adapter.updateCandle(nextLast);
+      commitWhenStable(() => adapter!.updateCandle(nextLast));
       return;
     }
     if (next.length !== prev.length) {
-      adapter.setData(next);
+      commitWhenStable(() => adapter!.setData(next));
       if (next.length < prev.length && preShrinkRange) {
         restoreRange(preShrinkRange, prev.length - next.length);
       }
@@ -1313,12 +1324,12 @@ watch(
           np.low !== pp.low ||
           np.close !== pp.close);
       if (olderChanged) {
-        adapter.setData(next);
+        commitWhenStable(() => adapter!.setData(next));
       } else {
-        adapter.updateCandle(nextLast);
+        commitWhenStable(() => adapter!.updateCandle(nextLast));
       }
     } else {
-      adapter.setData(next);
+      commitWhenStable(() => adapter!.setData(next));
     }
   },
   { deep: false }
@@ -4150,6 +4161,12 @@ onMounted(async () => {
   ro = new ResizeObserver(() => {
     if (!containerRef.value || !adapter) return;
     const { clientWidth, clientHeight } = containerRef.value;
+    if (clientWidth === 0 || clientHeight === 0) return; // hidden mid-layout
+    // Mark a resize in flight: data commits (setData/update) from watchers
+    // are deferred to the NEXT frame. Calling series.setData while LWC is
+    // inside its own resize/render cycle crashes the render loop with
+    // "Value is null" and blanks the candles until reload.
+    chartResizeInFlight = true;
     adapter.resize(clientWidth, clientHeight);
     // Re-measure the axis sizes on every layout change
     updateAxisSizes();
@@ -4158,6 +4175,10 @@ onMounted(async () => {
     // around) until the next pan/zoom event lands. The rAF guarantees the
     // library has finished its own re-layout before we read coordinates.
     requestAnimationFrame(() => {
+      chartResizeInFlight = false;
+      const flush = chartResizeFlush;
+      chartResizeFlush = null;
+      flush?.();
       if (!adapter) return;
       updateBadgePosition();
       recalcRects();
