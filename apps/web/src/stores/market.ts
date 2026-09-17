@@ -460,32 +460,35 @@ export const useMarketStore = defineStore("market", () => {
       let data = await fetchCandles(wantInstrument, wantTimeframe, HISTORY_COUNT);
       if (!data.length || mySeq !== loadSeq) return;
       if (instrument.value !== wantInstrument || timeframe.value !== wantTimeframe) return;
-      // A REST snapshot can LAG the live WS stream for the still-open
-      // bucket. Overwriting our fresher open candle with it made the last
-      // candle flash/shrink for a second on every tab return (until the
-      // next WS tick rebuilt it). Keep OUR open candle; merge the rest.
-      let keepLive: Candle | null = null;
+      // A REST snapshot can LAG the live WS stream — not just for the
+      // still-open bucket but for several closed ones (bucket-cache lag).
+      // Keep OUR open candle's fresher OHLC on a time match, and keep EVERY
+      // local candle newer than the fetched tail: dropping them erased the
+      // last live candles on tab return (they only came back after a
+      // timeframe switch refetched the true tail).
       const lastExisting = candles.value[candles.value.length - 1];
       const lastIncoming = data[data.length - 1];
       if (lastExisting && lastIncoming && lastIncoming.time === lastExisting.time) {
-        keepLive = lastExisting;
         data = data.slice(0, -1);
       }
       const tfSec = TIMEFRAME_SECONDS[wantTimeframe as keyof typeof TIMEFRAME_SECONDS] ?? 60;
       const maxGapSec = Math.max(120 * tfSec, 1800);
+      const incomingFirstTime = data.length > 0 ? data[0]!.time : Number.POSITIVE_INFINITY;
+      const incomingLastTime = data.length > 0 ? data[data.length - 1]!.time : Number.NEGATIVE_INFINITY;
       // Keep the older local candles only while they stay time-connected to
       // the fetched window (same rule as the loadHistory cache merge) —
       // otherwise a long absence would glue two regions together.
-      const baseRaw = candles.value.filter((c) => c.time < data[0]!.time);
+      const baseRaw = candles.value.filter((c) => c.time < incomingFirstTime);
       let keepFrom = baseRaw.length;
       while (keepFrom > 0) {
-        const nextTime = keepFrom < baseRaw.length ? baseRaw[keepFrom]!.time : data[0]!.time;
+        const nextTime = keepFrom < baseRaw.length ? baseRaw[keepFrom]!.time : incomingFirstTime;
         if (nextTime - baseRaw[keepFrom - 1]!.time <= maxGapSec) keepFrom--;
         else break;
       }
       const base = baseRaw.slice(keepFrom);
-      let merged = mergeCandles(base.length > 0 ? base : [], data);
-      if (keepLive) merged = mergeCandles(merged, [keepLive]);
+      let merged = mergeCandles(base, data);
+      const newerLocal = candles.value.filter((c) => c.time > incomingLastTime);
+      if (newerLocal.length > 0) merged = mergeCandles(merged, newerLocal);
       candles.value = merged;
       rebuildTimeIndex();
     } catch {
