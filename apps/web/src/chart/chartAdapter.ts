@@ -89,6 +89,10 @@ export interface ChartAdapter {
   /** Show / hide the library's own crosshair (magnet mode replaces it with
    *  a snapping crosshair while a drawing tool is active). */
   setCrosshairVisible(on: boolean): void;
+  /** Fires when an internal Lightweight-Charts call throws (render-loop
+   *  corruption — e.g. the intermittent "Value is null"). The host rebuilds
+   *  the chart in place instead of leaving a permanently blank canvas. */
+  onChartCrash(cb: (err: unknown) => void): void;
 }
 
 function toLW(c: Candle): CandlestickData<Time> {
@@ -150,6 +154,10 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
   const isDarkInitial = document.documentElement.getAttribute("data-theme") !== "light";
   const colors = themeColors(isDarkInitial);
   let isDarkNow = isDarkInitial;
+  /** True once destroyed — every call afterwards is a no-op (LWC answers
+   *  calls on a destroyed chart with "Value is null"). */
+  let dead = false;
+  let crashCb: ((err: unknown) => void) | null = null;
 
   /* ── Visitor-local time formatting for the time scale + crosshair ────
    *  Lightweight-Charts renders raw timestamps in UTC by default; these
@@ -438,7 +446,7 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     return lastData[idx]!.time;
   }
 
-  return {
+  const impl: ChartAdapter = {
     setData(candles: Candle[]): void {
       // Capture the user's viewport BEFORE replacing data so it survives
       // candle closes, snapshots and lazy-loads.
@@ -788,7 +796,49 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     },
 
     destroy(): void {
-      chart.remove();
+      dead = true;
+      try {
+        chart.remove();
+      } catch (err) {
+        // A corrupted chart's teardown can itself throw — report and move on
+        try {
+          crashCb?.(err);
+        } catch {
+          // never let the reporter break the call site
+        }
+      }
+    },
+
+    onChartCrash(cb: (err: unknown) => void): void {
+      crashCb = cb;
     },
   };
+
+  // Post-destroy calls (deferred commits / rAF flushes racing unmount) hit a
+  // chart whose internal state is gone — LWC answers with "Value is null"
+  // and its render loop stays dead. No-op every call once destroyed, and
+  // report LIVE-chart internal throws to the host so it can rebuild.
+  const wrapped = {} as Record<string, unknown>;
+  for (const [key, value] of Object.entries(impl)) {
+    if (typeof value !== "function") {
+      wrapped[key] = value;
+      continue;
+    }
+    const fn = value as (...args: unknown[]) => unknown;
+    wrapped[key] = (...args: unknown[]) => {
+      if (dead) return undefined;
+      try {
+        return fn(...args);
+      } catch (err) {
+        if (dead) return undefined;
+        try {
+          crashCb?.(err);
+        } catch {
+          // never let the reporter break the call site
+        }
+        throw err;
+      }
+    };
+  }
+  return wrapped as unknown as ChartAdapter;
 }

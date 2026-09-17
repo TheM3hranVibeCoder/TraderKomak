@@ -1021,6 +1021,99 @@ function commitWhenStable(fn: () => void): void {
   fn();
 }
 
+/* ── Chart crash recovery ─────────────────────────────────────────────
+ * Lightweight-Charts' render loop can die on an internal null (the
+ * intermittent "Value is null" during rapid TF switches / refreshes /
+ * resize races). Once it throws, the chart stays blank until reload —
+ * no data commit revives it. Instead we rebuild the chart IN PLACE:
+ * the container keeps its DOM listeners (they target the container, not
+ * the chart canvases), so only the chart object, its series and its
+ * subscriptions are recreated, then the full visual + data state is
+ * re-applied. The crash becomes a one-frame hiccup instead of a dead
+ * canvas. */
+let chartRebuildQueued = false;
+let chartCrashCount = 0;
+
+function safeCommit(fn: () => void): void {
+  try {
+    fn();
+  } catch (err) {
+    console.error("[chart] commit failed — scheduling chart rebuild", err);
+    scheduleChartRebuild();
+  }
+}
+
+function scheduleChartRebuild(): void {
+  if (chartRebuildQueued) return;
+  if (chartCrashCount >= 3) {
+    // Bounded: a chart that crashes 3 rebuilds in a row waits for reload
+    console.error("[chart] rebuild limit reached — waiting for reload");
+    return;
+  }
+  chartRebuildQueued = true;
+  queueMicrotask(() => {
+    chartRebuildQueued = false;
+    try {
+      rebuildChart();
+      // Reset the budget only after the rebuilt chart stayed stable a beat
+      setTimeout(() => {
+        chartCrashCount = 0;
+      }, 2000);
+    } catch (err) {
+      console.error("[chart] rebuild failed", err);
+      chartCrashCount++;
+    }
+  });
+}
+
+function rebuildChart(): void {
+  const host = containerRef.value;
+  if (!host) return;
+  ro?.disconnect();
+  try {
+    adapter?.destroy();
+  } catch {
+    // the chart is already broken — teardown may throw; ignore
+  }
+  adapter = createChartAdapter(host);
+  applyChartStyle();
+  adapter.setTheme(themeStore.theme === "dark");
+  applyChartStyle(); // re-apply saved axis/crosshair colors over the theme reset
+  if (props.instrument) adapter.setInstrument(props.instrument);
+  adapter.onChartCrash((err) => {
+    console.error("[chart] LWC internal error", err);
+    scheduleChartRebuild();
+  });
+  if (visibleCb) adapter.subscribeVisibleRange(visibleCb);
+  if (dataCb) adapter.subscribeDataChanged(dataCb);
+  (window as unknown as Record<string, unknown>).__tkChartAdapter = adapter;
+  // setData's fresh-mount branch re-arms autoscale + the standard zoom;
+  // MA/RSI series (and the RSI pane + level lines) are recreated lazily
+  // by their setters below.
+  commitChartData(displayCandles.value);
+  if (indicators.smaAdded) {
+    adapter.setMaStyle("sma", indicators.smaColor);
+    adapter.setMaVisible("sma", indicators.smaVisible);
+  }
+  if (indicators.emaAdded) {
+    adapter.setMaStyle("ema", indicators.emaColor);
+    adapter.setMaVisible("ema", indicators.emaVisible);
+  }
+  if (indicators.rsiAdded) {
+    adapter.setRsiStyle(indicators.rsiColor);
+    adapter.setRsiLevels(indicators.rsiUpper, indicators.rsiLower, indicators.rsiLevelColor);
+    rsiPaneH.value = adapter.rsiPaneHeight();
+  }
+  // Replay keeps its frozen scale and hidden live label
+  adapter.setPriceAutoScale(!replay.active);
+  adapter.setLastValueVisible(!replay.active);
+  requestAnimationFrame(updateAxisSizes);
+  updateBadgePosition();
+  recalcRects();
+  extendRecalcFrames(300);
+  ro?.observe(host);
+}
+
 /** Candles the chart actually shows: in replay mode everything after the
  *  replay boundary is hidden. The full series stays untouched in the store,
  *  so lazy-loading keeps working and exit restores the chart instantly. */
@@ -1277,8 +1370,13 @@ function maRsiPointsFor(candles: Candle[]) {
   };
 }
 
-/** Main candles + overlays committed together — never a gap. */
+/** Main candles + overlays committed together — never a gap.
+ *  Any internal LWC throw is caught → chart rebuild (see recovery block). */
 function commitChartData(candles: Candle[]): void {
+  safeCommit(() => commitChartDataInner(candles));
+}
+
+function commitChartDataInner(candles: Candle[]): void {
   if (!adapter) return;
   const safe = sanitizeCandles(candles);
   if (!safe.length) {
@@ -1301,6 +1399,10 @@ function commitChartData(candles: Candle[]): void {
 
 /** Live head update: last candle + matching overlay tail in one callback. */
 function commitChartTail(lastCandle: Candle): void {
+  safeCommit(() => commitChartTailInner(lastCandle));
+}
+
+function commitChartTailInner(lastCandle: Candle): void {
   if (!adapter) return;
   if (!isSaneCandle(lastCandle)) return;
   const pts = maRsiPointsFor(displayCandles.value);
@@ -3776,6 +3878,10 @@ onMounted(async () => {
   applyChartStyle();
   adapter.setTheme(themeStore.theme === "dark");
   applyChartStyle(); // re-apply saved axis/crosshair colors over the theme reset
+  adapter.onChartCrash((err) => {
+    console.error("[chart] LWC internal error", err);
+    scheduleChartRebuild();
+  });
   if (props.instrument) adapter.setInstrument(props.instrument);
   adapter.setData(displayCandles.value);
   // Measure the price/time scales once LWC has laid out its panes
@@ -4234,8 +4340,10 @@ onMounted(async () => {
       chartResizeInFlight = false;
       const flush = chartResizeFlush;
       chartResizeFlush = null;
-      flush?.();
+      // Unmount (or a crash rebuild) landed before this frame — never flush
+      // queued data into a dead chart
       if (!adapter) return;
+      flush?.();
       updateBadgePosition();
       recalcRects();
       extendRecalcFrames(300);
