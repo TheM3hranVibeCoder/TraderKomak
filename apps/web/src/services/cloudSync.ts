@@ -42,6 +42,16 @@ let applying = false;
  *  chart switched to 5m by itself"). */
 const bootAt = Date.now();
 const RESTORE_WINDOW_MS = 15_000;
+/** Last time the user changed anything locally. When pushes fail (flaky
+ *  links drop the upsert), the cloud row goes stale — without this stamp
+ *  the stale row wins on the next boot and reverts the user's timeframe /
+ *  indicators (reported as "1h after refresh" and "SMA/EMA appear by
+ *  themselves"). Newer side wins, period. */
+const LOCAL_CHANGE_KEY = "tk-cloud-local-change-at";
+
+function markLocalChange(): void {
+  try { localStorage.setItem(LOCAL_CHANGE_KEY, String(Date.now())); } catch {}
+}
 
 function snapshot(): CloudData {
   const d = useDrawingsStore();
@@ -68,15 +78,23 @@ function snapshot(): CloudData {
   };
 }
 
-async function push(userId: string): Promise<void> {
+async function push(userId: string, retried = false): Promise<void> {
   const payload = snapshot();
   const { error } = await supabase()
     .from("user_settings")
     .upsert({ user_id: userId, data: payload, updated_at: new Date().toISOString() });
-  if (error) console.error("cloud push failed", error);
+  if (error) {
+    console.error("cloud push failed", error);
+    // One quiet retry — flaky links drop the upsert, and a stale cloud row
+    // would otherwise win on the next boot.
+    if (!retried) setTimeout(() => { void push(userId, true); }, 3000);
+  }
 }
 
 function schedulePush(userId: string): void {
+  // Stamp FIRST (before the debounce): the timestamp must survive even if
+  // the push itself never makes it out.
+  markLocalChange();
   if (pushTimer) clearTimeout(pushTimer);
   pushTimer = setTimeout(() => {
     pushTimer = null;
@@ -199,6 +217,18 @@ export function startCloudSync(): void {
         return;
       }
       if (data?.data && typeof data.data === "object") {
+        // Last-write-wins: pushes fail silently on flaky links, so the cloud
+        // row can be OLDER than this device's state. Applying it anyway
+        // reverted the user's timeframe/indicators after every refresh.
+        // If this device changed something more recently than the cloud
+        // row, keep local and heal the cloud row instead.
+        let localAt = 0;
+        try { localAt = Number(localStorage.getItem(LOCAL_CHANGE_KEY)) || 0; } catch {}
+        const cloudAt = typeof data.updated_at === "string" ? Date.parse(data.updated_at) || 0 : 0;
+        if (localAt > cloudAt) {
+          await push(userId);
+          return;
+        }
         // The apply churns the chart (indicator series add/remove → pane
         // rebuilds, drawings replaced). Landing it during the chart's
         // initial layout/resize window crashed LWC's render loop ("Value
