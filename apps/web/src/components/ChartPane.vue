@@ -1252,14 +1252,60 @@ function flagFor(currency: string): { type: "flag" | "icon"; value: string } {
   return { type: "icon", value: "◈" };
 }
 
+/* ── Atomic multi-series commit ────────────────────────────────────────
+ * The main candle series and the MA/RSI overlays MUST update in ONE
+ * callback. Updating them separately (main now, overlays nextTick) leaves
+ * a window where the time scale contains overlay bars the candlestick
+ * series has no data for — LWC's renderer then hits a null bar and dies
+ * with "Value is null", blanking the whole chart until reload. */
+
+function maRsiPointsFor(candles: Candle[]) {
+  const closes = candles.map((c) => c.close);
+  const toPoints = (vals: (number | null)[]) => {
+    const pts: { time: number; value: number }[] = [];
+    for (let i = 0; i < candles.length; i++) {
+      const v = vals[i];
+      if (v == null || !Number.isFinite(v)) continue;
+      pts.push({ time: candles[i]!.time, value: v });
+    }
+    return pts;
+  };
+  return {
+    sma: toPoints(computeSma(closes, indicators.smaLength)),
+    ema: toPoints(computeEma(closes, indicators.emaLength)),
+    rsi: toPoints(computeRsi(closes, indicators.rsiLength)),
+  };
+}
+
+/** Main candles + overlays committed together — never a gap. */
+function commitChartData(candles: Candle[]): void {
+  if (!adapter) return;
+  const safe = sanitizeCandles(candles);
+  if (!safe.length) return;
+  const pts = maRsiPointsFor(safe);
+  adapter.setData(safe);
+  if (indicators.smaAdded) adapter.setMaData("sma", pts.sma);
+  if (indicators.emaAdded) adapter.setMaData("ema", pts.ema);
+  if (indicators.rsiAdded) adapter.setRsiData(pts.rsi);
+}
+
+/** Live head update: last candle + matching overlay tail in one callback. */
+function commitChartTail(lastCandle: Candle): void {
+  if (!adapter) return;
+  if (!isSaneCandle(lastCandle)) return;
+  const pts = maRsiPointsFor(displayCandles.value);
+  adapter.updateCandle(lastCandle);
+  if (indicators.smaAdded && pts.sma.length) adapter.updateMaLast("sma", pts.sma[pts.sma.length - 1]!);
+  if (indicators.emaAdded && pts.ema.length) adapter.updateMaLast("ema", pts.ema[pts.ema.length - 1]!);
+  if (indicators.rsiAdded && pts.rsi.length) adapter.updateRsiLast(pts.rsi[pts.rsi.length - 1]!);
+}
+
 watch(
   displayCandles,
   (next, prev) => {
     if (!adapter) return;
     // Re-anchor the badge after any data change (scale may shift)
     nextTick(updateBadgePosition);
-    if (indicators.rsiAdded) nextTick(pushRsiData);
-    if (indicators.smaAdded || indicators.emaAdded) nextTick(pushMaData);
     if (!prev || prev.length === 0 || next.length === 0) {
       // Fresh history after a symbol/timeframe switch (or first load): the
       // price scale may carry a MANUALLY-dragged range from the previous
@@ -1268,14 +1314,14 @@ watch(
       // the y-axis refits to the new symbol's own price range. Replay keeps
       // its frozen scale.
       adapter.setPriceAutoScale(!replay.active);
-      adapter.setData(next);
+      commitChartData(next);
       return;
     }
     // Detect lazy-load prepend (older candles added to front)
     const isPrepend = next.length > prev.length && next[0]!.time < prev[0]!.time;
     if (isPrepend) {
       const prevRange = adapter.getLogicalRange();
-      adapter.setData(next);
+      commitChartData(next);
       if (prevRange) {
         const added = next.length - prev.length;
         adapter.setLogicalRange({ from: prevRange.from + added, to: prevRange.to + added });
@@ -1283,7 +1329,7 @@ watch(
       return;
     }
     if (next.length < prev.length - 5) {
-      adapter.setData(next);
+      commitChartData(next);
       return;
     }
     // Removing candle(s) from the END (replay backward step): restore the
@@ -1293,20 +1339,17 @@ watch(
     const prevLast = prev[prev.length - 1];
     const nextLast = next[next.length - 1];
     if (!nextLast || !prevLast) {
-      adapter.setData(next);
+      commitChartData(next);
       restoreRange(preShrinkRange, prev.length - next.length);
       return;
     }
-    // Single new candle appended at end (live) — update without refit
+    // Single new candle appended at end (live) — tail update in one commit
     if (next.length === prev.length + 1 && next[next.length - 2]!.time === prevLast.time && nextLast.time > prevLast.time) {
-      if (!isSaneCandle(nextLast)) return;
-      commitWhenStable(() => adapter!.updateCandle(nextLast));
+      commitWhenStable(() => commitChartTail(nextLast));
       return;
     }
     if (next.length !== prev.length) {
-      const safe = sanitizeCandles(next);
-      if (!safe.length) return;
-      commitWhenStable(() => adapter!.setData(safe));
+      commitWhenStable(() => commitChartData(next));
       if (next.length < prev.length && preShrinkRange) {
         restoreRange(preShrinkRange, prev.length - next.length);
       }
@@ -1327,14 +1370,12 @@ watch(
           np.low !== pp.low ||
           np.close !== pp.close);
       if (olderChanged) {
-        const safe = sanitizeCandles(next);
-        if (safe.length) commitWhenStable(() => adapter!.setData(safe));
+        commitWhenStable(() => commitChartData(next));
       } else {
-        commitWhenStable(() => adapter!.updateCandle(nextLast));
+        commitWhenStable(() => commitChartTail(nextLast));
       }
     } else {
-      const safe = sanitizeCandles(next);
-      if (safe.length) commitWhenStable(() => adapter!.setData(safe));
+      commitWhenStable(() => commitChartData(next));
     }
   },
   { deep: false }
@@ -4421,6 +4462,10 @@ onBeforeUnmount(() => {
     <div v-if="isLoading" class="overlay center loading-only">
       <span class="overlay-spinner large"></span>
     </div>
+    <!-- A history-fetch failure must NEVER blank a chart that still has
+         candles (the live stream keeps the head fresh) — it surfaces as a
+         small banner instead of the full-screen error. -->
+    <div v-else-if="error && candles.length > 0" class="data-hiccup">⚠ {{ error }} — retrying…</div>
     <div v-else-if="error" class="overlay error">⚠ {{ error }}</div>
     <div v-else-if="candles.length === 0" class="overlay muted center">
       <span class="overlay-title">No candles yet — waiting for market data</span>
@@ -5652,6 +5697,21 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.data-hiccup {
+  position: absolute;
+  top: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.92);
+  color: #1f2430;
+  font-size: 11.5px;
+  font-weight: 700;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
 /* RSI indicator sub-pane */
 .rsi-legend {
   position: absolute;
