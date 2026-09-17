@@ -1391,11 +1391,11 @@ function maRsiPointsFor(candles: Candle[]) {
 
 /** Main candles + overlays committed together — never a gap.
  *  Any internal LWC throw is caught → chart rebuild (see recovery block). */
-function commitChartData(candles: Candle[]): void {
-  safeCommit(() => commitChartDataInner(candles));
+function commitChartData(candles: Candle[], freshMount = false): void {
+  safeCommit(() => commitChartDataInner(candles, freshMount));
 }
 
-function commitChartDataInner(candles: Candle[]): void {
+function commitChartDataInner(candles: Candle[], freshMount = false): void {
   if (!adapter) return;
   const safe = sanitizeCandles(candles);
   if (!safe.length) {
@@ -1414,6 +1414,19 @@ function commitChartDataInner(candles: Candle[]): void {
   if (indicators.smaAdded) adapter.setMaData("sma", pts.sma);
   if (indicators.emaAdded) adapter.setMaData("ema", pts.ema);
   if (indicators.rsiAdded) adapter.setRsiData(pts.rsi);
+  if (freshMount && !replay.active) {
+    // Fresh history after a refresh / symbol / timeframe switch: the MA/RSI
+    // series just (re)entered the chart, and their pane recalcs can re-anchor
+    // the viewport (reported as the live candle landing on the LEFT edge with
+    // empty future space on the right). Re-assert the standard live-edge view
+    // one frame later, after the library's own scheduled work settles — it is
+    // the final word on where a fresh chart opens. (focusLast no-ops while
+    // the chart is still empty.)
+    requestAnimationFrame(() => {
+      if (!adapter) return;
+      adapter.focusLast();
+    });
+  }
 }
 
 /** Live head update: last candle + matching overlay tail in one callback. */
@@ -1450,7 +1463,7 @@ watch(
       // the y-axis refits to the new symbol's own price range. Replay keeps
       // its frozen scale.
       adapter.setPriceAutoScale(!replay.active);
-      commitChartData(next);
+      commitChartData(next, true);
       return;
     }
     // Detect lazy-load prepend (older candles added to front)
@@ -3908,7 +3921,7 @@ onMounted(async () => {
   });
   window.addEventListener("error", onWindowChartError);
   if (props.instrument) adapter.setInstrument(props.instrument);
-  commitChartData(displayCandles.value); // sanitized + atomic (cached candles may be unsorted)
+  commitChartData(displayCandles.value, true); // sanitized + atomic (cached candles may be unsorted)
   // Measure the price/time scales once LWC has laid out its panes
   requestAnimationFrame(updateAxisSizes);
   // Make sure drawings stored from a previous session render as soon as the
