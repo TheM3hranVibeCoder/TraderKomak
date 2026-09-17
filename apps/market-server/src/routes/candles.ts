@@ -41,12 +41,6 @@ export function registerCandlesRoute(
   const { rest, feed } = deps;
 
   app.get("/api/candles", async (request, reply) => {
-    const ip = request.ip ?? "unknown";
-    if (rateLimited(ip)) {
-      return reply.code(429).send({
-        error: { code: "RATE_LIMITED", message: "Too many requests — slow down" },
-      });
-    }
     const query = request.query as Record<string, unknown>;
 
     if (!isInstrument(query.instrument)) {
@@ -62,6 +56,19 @@ export function registerCandlesRoute(
       });
     }
     const timeframe: Timeframe = query.timeframe;
+
+    // Rate limit per IP — but degrade to STALE cached history instead of a
+    // hard 429 when we have it: phones behind carrier CGNAT share one IP,
+    // and a blank chart is never an acceptable answer.
+    const ip = request.ip ?? "unknown";
+    if (rateLimited(ip)) {
+      const stale = lastGood.get(`${instrument}|${timeframe}|${bucketCount(DEFAULT_COUNT)}`)
+        ?? [...lastGood.entries()].find(([k]) => k.startsWith(`${instrument}|${timeframe}|`))?.[1];
+      if (stale) return reply.send({ instrument, timeframe, candles: stale.candles, stale: true });
+      return reply.code(429).send({
+        error: { code: "RATE_LIMITED", message: "Too many requests — slow down" },
+      });
+    }
 
     let count = DEFAULT_COUNT;
     if (query.count !== undefined) {
@@ -98,8 +105,14 @@ export function registerCandlesRoute(
       if (hit) return reply.send({ instrument, timeframe, candles: hit });
       const candles = await resolveHistory(rest, feed, instrument, timeframe, count, to);
       historyCachePut(key, candles);
+      lastGood.set(`${instrument}|${timeframe}|${bucketCount(count)}`, { at: Date.now(), candles });
       return reply.send({ instrument, timeframe, candles });
     } catch (err) {
+      // Upstream failure (OANDA 429/5xx, network): serve the last good
+      // history for this symbol/timeframe marked stale — the live WS keeps
+      // the chart head fresh, so stale history beats a blank chart.
+      const stale = [...lastGood.entries()].find(([k]) => k.startsWith(`${instrument}|${timeframe}|`))?.[1];
+      if (stale) return reply.send({ instrument, timeframe, candles: stale.candles, stale: true });
       return sendHistoryError(reply, err);
     }
   });
@@ -121,9 +134,15 @@ function bucketCount(count: number): number {
   return COUNT_BUCKETS[COUNT_BUCKETS.length - 1]!;
 }
 
+/** Last GOOD result per cache key — served (marked stale) when the rate
+ *  limit trips or upstream fails, so a client NEVER gets a blank chart
+ *  where cached history exists. Phones behind carrier CGNAT share IPs,
+ *  so per-IP limits must degrade gracefully, never hard-fail. */
+const lastGood = new Map<string, { at: number; candles: unknown[] }>();
+
 /** Simple fixed-window per-IP rate limiter (no external deps). */
 const RATE_WINDOW_MS = 60_000;
-const RATE_MAX = 90;
+const RATE_MAX = 240;
 const rateMap = new Map<string, { n: number; resetAt: number }>();
 function rateLimited(ip: string): boolean {
   const now = Date.now();
