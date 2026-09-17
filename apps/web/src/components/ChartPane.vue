@@ -1033,6 +1033,9 @@ function commitWhenStable(fn: () => void): void {
  * canvas. */
 let chartRebuildQueued = false;
 let chartCrashCount = 0;
+/** Set on every completed rebuild: errors landing within the window come
+ *  from the DESTROYED chart's still-pending rAF — harmless, never rebuild. */
+let lastRebuildAt = -Infinity;
 
 function safeCommit(fn: () => void): void {
   try {
@@ -1045,6 +1048,9 @@ function safeCommit(fn: () => void): void {
 
 function scheduleChartRebuild(): void {
   if (chartRebuildQueued) return;
+  // Straggler: LWC's rAF scheduled by the OLD chart fires after the rebuild
+  // and throws on destroyed state — the NEW chart is healthy, ignore it.
+  if (performance.now() - lastRebuildAt < 150) return;
   if (chartCrashCount >= 3) {
     // Bounded: a chart that crashes 3 rebuilds in a row waits for reload
     console.error("[chart] rebuild limit reached — waiting for reload");
@@ -1055,6 +1061,7 @@ function scheduleChartRebuild(): void {
     chartRebuildQueued = false;
     try {
       rebuildChart();
+      lastRebuildAt = performance.now();
       // Reset the budget only after the rebuilt chart stayed stable a beat
       setTimeout(() => {
         chartCrashCount = 0;
@@ -3901,7 +3908,7 @@ onMounted(async () => {
   });
   window.addEventListener("error", onWindowChartError);
   if (props.instrument) adapter.setInstrument(props.instrument);
-  adapter.setData(displayCandles.value);
+  commitChartData(displayCandles.value); // sanitized + atomic (cached candles may be unsorted)
   // Measure the price/time scales once LWC has laid out its panes
   requestAnimationFrame(updateAxisSizes);
   // Make sure drawings stored from a previous session render as soon as the

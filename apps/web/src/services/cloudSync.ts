@@ -36,6 +36,12 @@ const PUSH_DEBOUNCE_MS = 1500;
 let started = false;
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
 let applying = false;
+/** App boot time — symbol/timeframe restore is a BOOT-ONLY convenience.
+ *  On flaky links the user_settings fetch lands minutes late and applying
+ *  it then yanks the user off whatever they're watching (reported as "the
+ *  chart switched to 5m by itself"). */
+const bootAt = Date.now();
+const RESTORE_WINDOW_MS = 15_000;
 
 function snapshot(): CloudData {
   const d = useDrawingsStore();
@@ -130,11 +136,15 @@ function applyLocal(cloud: CloudData): void {
     }
 
     // Symbol/timeframe last — setInstrument may trigger a history fetch.
-    if (cloud.instrument && isInstrument(cloud.instrument) && cloud.instrument !== m.instrument) {
-      void m.setInstrument(cloud.instrument);
-    }
-    if (cloud.timeframe && isTimeframe(cloud.timeframe) && cloud.timeframe !== m.timeframe) {
-      void m.setTimeframe(cloud.timeframe as Timeframe);
+    // Only inside the boot window: a late-arriving cloud row must never
+    // stomp the symbol/timeframe the user is actively watching.
+    if (Date.now() - bootAt <= RESTORE_WINDOW_MS) {
+      if (cloud.instrument && isInstrument(cloud.instrument) && cloud.instrument !== m.instrument) {
+        void m.setInstrument(cloud.instrument);
+      }
+      if (cloud.timeframe && isTimeframe(cloud.timeframe) && cloud.timeframe !== m.timeframe) {
+        void m.setTimeframe(cloud.timeframe as Timeframe);
+      }
     }
   } finally {
     // Let the watchers we just triggered settle before re-enabling pushes.

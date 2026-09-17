@@ -97,9 +97,19 @@ function loadPersistedTimeframe(): typeof DEFAULT_TIMEFRAME {
 
 /** Filter a candle list down to chart-safe rows (last-line defense before
  *  anything reaches Lightweight Charts — a null/NaN row crashes its render
- *  loop and blanks the whole chart). */
+ *  loop and blanks the whole chart). Also ENFORCES the engine's data
+ *  contract: strictly ascending times, no duplicates — unordered rows make
+ *  the library's internal binary searches fail ("Value is null"). */
 export function sanitizeCandles(list: Candle[]): Candle[] {
-  return list.filter((c) => isSaneCandle(c));
+  const seen = new Set<number>();
+  const safe: Candle[] = [];
+  for (const c of list) {
+    if (!isSaneCandle(c) || seen.has(c.time)) continue;
+    seen.add(c.time);
+    safe.push(c);
+  }
+  safe.sort((a, b) => a.time - b.time);
+  return safe;
 }
 
 export const useMarketStore = defineStore("market", () => {
