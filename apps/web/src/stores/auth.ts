@@ -105,7 +105,14 @@ export const useAuthStore = defineStore("auth", () => {
       ({ data } = await sb.auth.getSession());
     }
     await applySession(data.session);
-    sb.auth.onAuthStateChange((_evt, session) => {
+    sb.auth.onAuthStateChange((evt, session) => {
+      // Diagnostic: a spontaneous sign-out must be EXPLAINABLE. Supabase
+      // fires SIGNED_OUT on real sign-outs — and when a refresh token is
+      // permanently invalid (JWT secret rotated / API keys migrated on the
+      // project invalidates every stored session at once).
+      if (evt === "SIGNED_OUT") {
+        console.warn("[auth] event: SIGNED_OUT", session ? "(with session)" : "(no session)");
+      }
       void applySession(session);
     });
   }
