@@ -29,7 +29,12 @@ export interface ChartAdapter {
   /** Exact time-scale height, from the chart API. */
   timeScaleHeight(): number;
   setData(candles: Candle[]): void;
-  updateCandle(candle: Candle): void;
+  /** Strict tail contract: true = pure tail update applied (last-bar
+   *  correction or newer-bar append). false = diverged (mid-bar correction
+   *  or out-of-order bucket) — untouched; caller must do a full setData
+   *  commit, since non-tail series.update() calls re-index rows under the
+   *  render loop and crash it ("Value is null"). */
+  updateCandle(candle: Candle): boolean;
   fitContent(): void;
   /** Scroll so the newest candle sits at the right edge with the standard
    *  free margin — used by replay mode on start / play / exit. */
@@ -507,35 +512,39 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       notifyDataChanged();
     },
 
-    updateCandle(candle: Candle): void {
+    updateCandle(candle: Candle): boolean {
       const idx = lastData.findIndex((c) => c.time === candle.time);
       if (idx >= 0) {
+        if (idx !== lastData.length - 1) {
+          // A correction to a NON-last bar can't go through series.update()
+          // (it would need a second update on an OLDER bar — LWC throws
+          // "Cannot update oldest data"); full commit instead.
+          return false;
+        }
         // Update in place, re-chained to the predecessor (the server's
-        // reconcile may correct any candle after the fact).
+        // reconcile may correct the live candle after the fact).
         lastData[idx] = chainTo(idx > 0 ? lastData[idx - 1]!.close : candle.open, candle);
         series.update(toLW(lastData[idx]));
       } else {
-        // New bucket — insert WITHOUT touching the viewport. The chart must
-        // never move on its own: if the user is at the live edge they can
-        // pan right to reveal new bars; if scrolled away, nothing shifts.
-        lastData.push({ ...candle });
-        lastData.sort((a, b) => a.time - b.time);
-        const at = lastData.findIndex((c) => c.time === candle.time);
-        lastData[at] = chainTo(at > 0 ? lastData[at - 1]!.close : candle.open, lastData[at]!);
-        series.update(toLW(lastData[at]));
-      }
-      // The updated/corrected candle changes the close its successor was
-      // chained to — re-chain the neighbour so bodies never detach.
-      const nextIdx = lastData.findIndex((c) => c.time === candle.time) + 1;
-      const next = lastData[nextIdx];
-      if (next && next.open !== lastData[nextIdx - 1]!.close) {
-        lastData[nextIdx] = chainTo(lastData[nextIdx - 1]!.close, next);
-        series.update(toLW(lastData[nextIdx]));
+        const last = lastData[lastData.length - 1];
+        if (last && candle.time <= last.time) {
+          // Out-of-order bucket — inserting it mid-grid would re-index
+          // timescale rows under the render loop; full commit instead.
+          return false;
+        }
+        // New bucket — append at the tail WITHOUT touching the viewport.
+        // The chart must never move on its own: if the user is at the live
+        // edge they can pan right to reveal new bars; if scrolled away,
+        // nothing shifts.
+        const chained = chainTo(last ? last.close : candle.open, candle);
+        lastData.push(chained);
+        series.update(toLW(chained));
       }
       // Cap in sync with the market store's HISTORY_COUNT (20000) — a stale
       // smaller cap made focusLast teleport the viewport to old bars.
       if (lastData.length > 20000) lastData = lastData.slice(-20000);
       notifyDataChanged();
+      return true;
     },
 
     fitContent(): void {

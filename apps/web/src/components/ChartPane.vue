@@ -1066,6 +1066,18 @@ function scheduleChartRebuild(): void {
   });
 }
 
+/** LWC's render pass runs in its OWN requestAnimationFrame — an internal
+ *  throw there ("Value is null" from the candlestick item colorer) never
+ *  reaches any try/catch we own. Catch it at the window level and rebuild
+ *  the chart instead of leaving a blank canvas until reload. */
+function onWindowChartError(ev: ErrorEvent): void {
+  const msg = ev.message ?? "";
+  if (msg.includes("Value is null") || msg.includes("Value is undefined")) {
+    console.error("[chart] LWC render loop crashed — scheduling rebuild:", msg);
+    scheduleChartRebuild();
+  }
+}
+
 function rebuildChart(): void {
   const host = containerRef.value;
   if (!host) return;
@@ -1405,8 +1417,13 @@ function commitChartTail(lastCandle: Candle): void {
 function commitChartTailInner(lastCandle: Candle): void {
   if (!adapter) return;
   if (!isSaneCandle(lastCandle)) return;
+  if (!adapter.updateCandle(lastCandle)) {
+    // Engine diverged from the store (mid-bar correction / snapshot
+    // resync) — the atomic full commit keeps the render loop consistent.
+    commitChartDataInner(displayCandles.value);
+    return;
+  }
   const pts = maRsiPointsFor(displayCandles.value);
-  adapter.updateCandle(lastCandle);
   if (indicators.smaAdded && pts.sma.length) adapter.updateMaLast("sma", pts.sma[pts.sma.length - 1]!);
   if (indicators.emaAdded && pts.ema.length) adapter.updateMaLast("ema", pts.ema[pts.ema.length - 1]!);
   if (indicators.rsiAdded && pts.rsi.length) adapter.updateRsiLast(pts.rsi[pts.rsi.length - 1]!);
@@ -3882,6 +3899,7 @@ onMounted(async () => {
     console.error("[chart] LWC internal error", err);
     scheduleChartRebuild();
   });
+  window.addEventListener("error", onWindowChartError);
   if (props.instrument) adapter.setInstrument(props.instrument);
   adapter.setData(displayCandles.value);
   // Measure the price/time scales once LWC has laid out its panes
@@ -4422,6 +4440,7 @@ onBeforeUnmount(() => {
     window.removeEventListener("pointermove", onMouseMoveRef);
   }
   ro?.disconnect();
+  window.removeEventListener("error", onWindowChartError);
   adapter?.destroy();
   adapter = null;
 });

@@ -31,7 +31,6 @@ const auth = useAuthStore();
 // session is still restoring we optimistically let returning users in
 // (flag survives on the device) so a refresh never flashes the landing —
 // guests (no flag) get the landing instantly, nothing leaks.
-const wasAuth = wasAuthOnDevice();
 
 // Phone: the drawing-tools column and the watchlist/chat/news rail start
 // collapsed so the chart gets the full width; the edge arrows toggle them.
@@ -84,6 +83,19 @@ const gate = computed(() => auth.status !== "ready");
 /** OAuth just redirected back — show a neutral splash while the session +
  *  profile are confirmed (never the chart: the user may still be new). */
 const oauthReturning = computed(() => auth.status === "loading" && authInFlight());
+/** Returning user with a session still being restored: show the splash,
+ *  never the landing — otherwise they'd hit "Sign in with Google", Google
+ *  would silently resume the existing session, and the landing would look
+ *  like a pointless roadblock. The flag flips off if the session turns out
+ *  to be gone (expired sliding window / signed out elsewhere). */
+const wasAuthFlag = ref(wasAuthOnDevice());
+watch(
+  () => auth.status,
+  (s) => {
+    if (s === "guest") wasAuthFlag.value = false;
+  }
+);
+const optimisticAuth = computed(() => wasAuthFlag.value && auth.status === "loading");
 
 // Signed-in identity drives the chat nickname; re-join when it lands.
 watch(
@@ -156,7 +168,7 @@ function onTimeframeChange(next: Timeframe): void {
 <template>
   <div class="app" :data-theme="theme.theme">
     <h1 class="sr-only">TraderKomak — live forex and crypto charting platform</h1>
-    <div v-if="oauthReturning" class="boot-splash" aria-hidden="true">
+    <div v-if="oauthReturning || optimisticAuth" class="boot-splash" aria-hidden="true">
       <img src="/favicon.png" alt="" width="72" height="72" />
     </div>
     <LandingPage v-else-if="gate" />
