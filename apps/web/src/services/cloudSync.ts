@@ -46,8 +46,14 @@ const RESTORE_WINDOW_MS = 15_000;
  *  links drop the upsert), the cloud row goes stale — without this stamp
  *  the stale row wins on the next boot and reverts the user's timeframe /
  *  indicators (reported as "1h after refresh" and "SMA/EMA appear by
- *  themselves"). Newer side wins, period. */
+ *  themselves"). */
 const LOCAL_CHANGE_KEY = "tk-cloud-local-change-at";
+/** Timestamp of the last CONFIRMED successful push (this device's clock).
+ *  Decision rule needs NO cross-device clock comparison: if a local change
+ *  happened after the last confirmed sync, local is definitively newer —
+ *  keep it and heal the cloud row. Otherwise the cloud row already contains
+ *  every local change, so applying it can never lose data. */
+const SYNCED_AT_KEY = "tk-cloud-synced-at";
 
 function markLocalChange(): void {
   try { localStorage.setItem(LOCAL_CHANGE_KEY, String(Date.now())); } catch {}
@@ -80,15 +86,19 @@ function snapshot(): CloudData {
 
 async function push(userId: string, retried = false): Promise<void> {
   const payload = snapshot();
+  const stamp = new Date().toISOString();
   const { error } = await supabase()
     .from("user_settings")
-    .upsert({ user_id: userId, data: payload, updated_at: new Date().toISOString() });
+    .upsert({ user_id: userId, data: payload, updated_at: stamp });
   if (error) {
     console.error("cloud push failed", error);
     // One quiet retry — flaky links drop the upsert, and a stale cloud row
     // would otherwise win on the next boot.
     if (!retried) setTimeout(() => { void push(userId, true); }, 3000);
+    return;
   }
+  // Confirmed: everything local up to this stamp is now safely in the cloud.
+  try { localStorage.setItem(SYNCED_AT_KEY, String(Date.parse(stamp))); } catch {}
 }
 
 function schedulePush(userId: string): void {
@@ -217,15 +227,23 @@ export function startCloudSync(): void {
         return;
       }
       if (data?.data && typeof data.data === "object") {
-        // Last-write-wins: pushes fail silently on flaky links, so the cloud
-        // row can be OLDER than this device's state. Applying it anyway
-        // reverted the user's timeframe/indicators after every refresh.
-        // If this device changed something more recently than the cloud
-        // row, keep local and heal the cloud row instead.
+        // Last-write-wins WITHOUT cross-device clock comparison: pushes fail
+        // silently on flaky links, so the cloud row can be OLDER than this
+        // device's state (it reverted timeframe/indicators after refresh).
+        // If anything changed locally after the last CONFIRMED sync, local
+        // is definitively newer — keep it and heal the cloud row. Otherwise
+        // the cloud row already contains every local change: apply it.
         let localAt = 0;
+        let syncedAt = 0;
         try { localAt = Number(localStorage.getItem(LOCAL_CHANGE_KEY)) || 0; } catch {}
-        const cloudAt = typeof data.updated_at === "string" ? Date.parse(data.updated_at) || 0 : 0;
-        if (localAt > cloudAt) {
+        try { syncedAt = Number(localStorage.getItem(SYNCED_AT_KEY)) || 0; } catch {}
+        if (!syncedAt && typeof data.updated_at === "string") {
+          // First boot after this update: baseline from the row itself so
+          // existing users don't shove an old local snapshot over a newer
+          // cloud row once.
+          syncedAt = Date.parse(data.updated_at) || 0;
+        }
+        if (localAt > syncedAt) {
           await push(userId);
           return;
         }
