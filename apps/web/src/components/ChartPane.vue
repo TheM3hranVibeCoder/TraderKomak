@@ -1281,7 +1281,17 @@ function maRsiPointsFor(candles: Candle[]) {
 function commitChartData(candles: Candle[]): void {
   if (!adapter) return;
   const safe = sanitizeCandles(candles);
-  if (!safe.length) return;
+  if (!safe.length) {
+    // Empty commit = symbol/timeframe switch clears the store first. The
+    // series AND overlays must clear TOGETHER (atomically), or the old
+    // timeframe's viewport position survives and the new data loads off
+    // the live edge (blank space at the right).
+    adapter.setData([]);
+    if (indicators.smaAdded) adapter.setMaData("sma", []);
+    if (indicators.emaAdded) adapter.setMaData("ema", []);
+    if (indicators.rsiAdded) adapter.setRsiData([]);
+    return;
+  }
   const pts = maRsiPointsFor(safe);
   adapter.setData(safe);
   if (indicators.smaAdded) adapter.setMaData("sma", pts.sma);
