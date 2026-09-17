@@ -101,15 +101,14 @@ function loadPersistedTimeframe(): typeof DEFAULT_TIMEFRAME {
  *  contract: strictly ascending times, no duplicates — unordered rows make
  *  the library's internal binary searches fail ("Value is null"). */
 export function sanitizeCandles(list: Candle[]): Candle[] {
-  const seen = new Set<number>();
-  const safe: Candle[] = [];
+  // Map keyed by time: duplicates collapse with the LAST entry winning
+  // (later rows are newer corrections), then sorted ascending.
+  const byTime = new Map<number, Candle>();
   for (const c of list) {
-    if (!isSaneCandle(c) || seen.has(c.time)) continue;
-    seen.add(c.time);
-    safe.push(c);
+    if (!isSaneCandle(c)) continue;
+    byTime.set(c.time, c);
   }
-  safe.sort((a, b) => a.time - b.time);
-  return safe;
+  return [...byTime.values()].sort((a, b) => a.time - b.time);
 }
 
 export const useMarketStore = defineStore("market", () => {

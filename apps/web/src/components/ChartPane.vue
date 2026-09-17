@@ -1108,8 +1108,10 @@ function rebuildChart(): void {
   (window as unknown as Record<string, unknown>).__tkChartAdapter = adapter;
   // setData's fresh-mount branch re-arms autoscale + the standard zoom;
   // MA/RSI series (and the RSI pane + level lines) are recreated lazily
-  // by their setters below.
-  commitChartData(displayCandles.value);
+  // by their setters below. freshMount also re-pins the live-edge viewport
+  // after those overlays re-enter the chart (same re-anchor risk as a
+  // refresh / timeframe switch).
+  commitChartData(displayCandles.value, true);
   if (indicators.smaAdded) {
     adapter.setMaStyle("sma", indicators.smaColor);
     adapter.setMaVisible("sma", indicators.smaVisible);
