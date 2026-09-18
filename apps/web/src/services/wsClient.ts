@@ -45,7 +45,10 @@ function wsUrl(): string {
 }
 
 function backoff(attempt: number): number {
-  const base = 1000;
+  // 350ms base: the first dial can fail on a flaky relay (console noise on
+  // cold loads); a near-immediate retry rides the warm DNS/TLS path and
+  // usually connects invisibly. The cap still protects under real outages.
+  const base = 350;
   const cap = 30000;
   const exp = Math.min(cap, base * 2 ** (attempt - 1));
   const jitter = (Math.random() * 2 - 1) * 0.2 * exp;
