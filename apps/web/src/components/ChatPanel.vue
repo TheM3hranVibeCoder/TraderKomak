@@ -114,25 +114,64 @@ function scrollTop(): void {
   });
 }
 
+/* ── Open anchoring ─────────────────────────────────────────────────────
+ *  The chat must open at the FIRST UNSEEN message (or the bottom). Two
+ *  things used to break it: a stale first-unseen anchor surviving reopens
+ *  (now consumed+cleared in the store at open), and image messages loading
+ *  AFTER the scroll pin, growing the list below the view ("opens a few
+ *  messages above the last"). The anchor re-asserts itself on image loads
+ *  during a short settle window — cancelled the moment the user scrolls
+ *  on their own. */
+let anchorTs: number | null = null;
+let settleUntil = 0;
+let userScrolled = false;
+
+function anchorTo(ts: number | null): void {
+  const el = listEl.value;
+  if (!el) return;
+  if (ts) {
+    const t = el.querySelector(`[data-ts="${ts}"]`) as HTMLElement | null;
+    if (t) {
+      const tr = t.getBoundingClientRect();
+      const lr = el.getBoundingClientRect();
+      el.scrollTop += tr.top - lr.top - 6;
+      return;
+    }
+  }
+  el.scrollTop = el.scrollHeight;
+}
+
+function onListImageLoad(e: Event): void {
+  if (Date.now() > settleUntil || userScrolled) return;
+  if ((e.target as HTMLElement)?.tagName !== "IMG") return;
+  anchorTo(anchorTs);
+}
+
+function markUserScroll(): void {
+  userScrolled = true;
+}
+
+let listBound = false;
+watch(listEl, (el) => {
+  if (el && !listBound) {
+    listBound = true;
+    // Capture phase: img load events don't bubble
+    el.addEventListener("load", onListImageLoad, true);
+    el.addEventListener("wheel", markUserScroll, { passive: true });
+    el.addEventListener("touchstart", markUserScroll, { passive: true });
+    el.addEventListener("pointerdown", markUserScroll, { passive: true });
+  }
+});
+
 /** On open: jump to the FIRST UNSEEN message (or bottom when all seen).
  *  Uses direct scrollTop math — scrollIntoView walks ancestor containers
  *  and glitches mid-animation. On touch devices the panel is mid-slide
  *  (320ms), so the jump waits for the animation to finish. */
-function jumpToUnseen(): void {
-  const jump = () => {
-    const el = listEl.value;
-    if (!el) return;
-    if (chat.firstUnseenTs) {
-      const target = el.querySelector(`[data-ts="${chat.firstUnseenTs}"]`) as HTMLElement | null;
-      if (target) {
-        const tr = target.getBoundingClientRect();
-        const lr = el.getBoundingClientRect();
-        el.scrollTop += tr.top - lr.top - 6;
-        return;
-      }
-    }
-    el.scrollTop = el.scrollHeight;
-  };
+function jumpToUnseen(targetTs: number): void {
+  anchorTs = targetTs || null;
+  userScrolled = false;
+  settleUntil = Date.now() + 1600;
+  const jump = () => anchorTo(anchorTs);
   const coarse = window.matchMedia("(pointer: coarse)").matches;
   if (coarse) {
     void nextTick(jump);
@@ -160,13 +199,20 @@ watch(
     const prevLen = old ? Number(old[0]) : 0;
     // Follow the bottom only when a message ARRIVES — deletions must not
     // yank the view away from where the moderator is working.
-    if (chat.messages.length > prevLen) scrollTop();
+    if (chat.messages.length > prevLen) {
+      // History landing right after open re-asserts the anchor (its images
+      // are still loading); later arrivals just follow the bottom.
+      if (Date.now() <= settleUntil && !userScrolled) anchorTo(anchorTs);
+      else scrollTop();
+    }
   }
 );
 watch(
   () => chat.open,
   (open) => {
-    if (open) jumpToUnseen();
+    // Consume the anchor so the NEXT open goes to the bottom — a surviving
+    // stale anchor re-jumped old messages on every reopen.
+    if (open) jumpToUnseen(chat.consumeFirstUnseen());
   }
 );
 
