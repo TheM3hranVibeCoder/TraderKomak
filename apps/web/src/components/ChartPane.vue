@@ -9,7 +9,7 @@ import { useDemoStore, demoValuePerPrice, type DemoSide, type DemoStatus, type D
 import { useIndicatorsStore, sessionKindAt, nextBoundaryAfter, boundaryEpoch, CHAIN_NEXT, tzOffsetMin, inSession, localMinutesOfDay, type SessionDef, type CustomSession } from "@/stores/indicators";
 import DemoPanel from "./DemoPanel.vue";
 import type { Candle } from "@traderkomak/shared";
-import { currencyFlagUrl, commodityIcon, symbolParts } from "@/utils/flags";
+import { currencyFlagUrl, commodityIcon, generatedCoinIcon, symbolParts } from "@/utils/flags";
 import { TIMEFRAME_SECONDS, instrumentPrecision, instrumentPipSize, providerOf, binanceBucketStart, oandaDailyBucketStart, oandaH4BucketStart, oandaWeeklyBucketStart, oandaMonthlyBucketStart } from "@traderkomak/shared";
 
 const props = defineProps<{
@@ -1363,6 +1363,9 @@ function flagFor(currency: string): { type: "flag" | "icon"; value: string } {
   if (flag) return { type: "flag", value: flag };
   const icon = commodityIcon(currency);
   if (icon) return { type: "icon", value: icon };
+  // Unmapped crypto (a freshly added catalog symbol): generated coin mark
+  const coin = generatedCoinIcon(currency);
+  if (coin) return { type: "icon", value: coin };
   return { type: "icon", value: "◈" };
 }
 

@@ -35,7 +35,10 @@ export function currencyFlagUrl(currency: string): string | null {
   const flag = flags[currency];
   if (flag) return `https://flagcdn.com/w20/${flag}.png`;
 
-  // Crypto → colored coin logos
+  // Crypto → colored coin logos. Two sources, verified per-coin:
+  //   • spothq/cryptocurrency-icons (SVG, consistent circle style) — repo
+  //     stopped updating ~2022, so newer coins aren't there
+  //   • CoinCap assets (PNG @2x) for everything newer
   const crypto: Record<string, string> = {
     BTC: "btc",
     ETH: "eth",
@@ -50,6 +53,22 @@ export function currencyFlagUrl(currency: string): string | null {
     LINK: "link",
     AVAX: "avax",
     UNI: "uni",
+    TRX: "trx",
+    ATOM: "atom",
+    XLM: "xlm",
+    FIL: "fil",
+    ICP: "icp",
+    ETC: "etc",
+    ALGO: "algo",
+    VET: "vet",
+    AAVE: "aave",
+    GRT: "grt",
+    SAND: "sand",
+    MANA: "mana",
+    CHZ: "chz",
+    STX: "stx",
+    CRV: "crv",
+    NEO: "neo",
     // Stablecoin quotes (Binance pairs)
     USDT: "usdt",
     USDC: "usdc",
@@ -61,12 +80,67 @@ export function currencyFlagUrl(currency: string): string | null {
   if (id) {
     return `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/${id}.svg`;
   }
+  // Coins the spothq repo predates — CoinCap carries them all (verified).
+  const coincap: Record<string, string> = {
+    SHIB: "shib",
+    PEPE: "pepe",
+    NEAR: "near",
+    APT: "apt",
+    ARB: "arb",
+    OP: "op",
+    INJ: "inj",
+    SUI: "sui",
+    SEI: "sei",
+    TIA: "tia",
+    HBAR: "hbar",
+    AXS: "axs",
+    GALA: "gala",
+    ENA: "ena",
+    WIF: "wif",
+    BONK: "bonk",
+    FLOKI: "floki",
+    JUP: "jup",
+    PYTH: "pyth",
+    WLD: "wld",
+    RUNE: "rune",
+    FET: "fet",
+    LDO: "ldo",
+    TON: "ton",
+    CAKE: "cake",
+    IMX: "imx",
+    FLOW: "flow",
+    POL: "pol",
+    EGLD: "egld",
+  };
+  if (coincap[currency]) {
+    return `https://assets.coincap.io/assets/icons/${coincap[currency]}@2x.png`;
+  }
 
   // Precious metals → inline SVG coins
   const metal = METAL_COINS[currency];
   if (metal) return svgDataUri(metal);
 
   return null;
+}
+
+const COIN_PALETTE = ["#F59E0B", "#38BDF8", "#A78BFA", "#34D399", "#F472B6", "#FB923C", "#60A5FA", "#4ADE80", "#E879F9", "#FACC15"];
+
+/** Any unmapped asset code (a newly added symbol without a known logo)
+ *  still gets a proper-looking coin: deterministic color from the code,
+ *  ticker text inside. Adding symbols "someday" needs zero icon work. */
+export function generatedCoinIcon(code: string): string | null {
+  if (!/^[A-Z]{2,10}$/.test(code)) return null;
+  let hash = 0;
+  for (let i = 0; i < code.length; i++) hash = (hash * 31 + code.charCodeAt(i)) >>> 0;
+  const fill = COIN_PALETTE[hash % COIN_PALETTE.length]!;
+  const label = code.length <= 4 ? code : code.slice(0, 4);
+  const svg =
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>` +
+    `<circle cx='16' cy='16' r='16' fill='${fill}'/>` +
+    `<text x='16' y='20.5' font-family='Arial,Helvetica,sans-serif' font-size='${label.length > 3 ? 9 : 11}' ` +
+    `font-weight='bold' fill='#1e1b4b' text-anchor='middle'>${label}</text>` +
+    `</svg>`;
+  return svgDataUri(svg);
 }
 
 function svgDataUri(svg: string): string {

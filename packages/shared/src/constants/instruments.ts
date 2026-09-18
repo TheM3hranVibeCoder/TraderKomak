@@ -29,8 +29,12 @@ export const SUPPORTED_INSTRUMENTS = [
   "ETH_USD",
 ] as const;
 
-/** Binance spot symbols (canonical = concatenated, e.g. BTCUSDT). */
+/** Binance spot symbols (canonical = concatenated, e.g. BTCUSDT).
+ *  Adding a symbol here is all it takes: the watchlist search offers it,
+ *  the Binance provider streams it on demand, and the icon layer falls
+ *  back to a generated coin mark when no logo is mapped in the web app. */
 export const SUPPORTED_BINANCE = [
+  // majors
   "BTCUSDT",
   "ETHUSDT",
   "BNBUSDT",
@@ -39,6 +43,55 @@ export const SUPPORTED_BINANCE = [
   "ADAUSDT",
   "DOGEUSDT",
   "UNIUSDT",
+  // large caps
+  "TRXUSDT",
+  "LINKUSDT",
+  "AVAXUSDT",
+  "DOTUSDT",
+  "LTCUSDT",
+  "BCHUSDT",
+  "ATOMUSDT",
+  "XLMUSDT",
+  "NEARUSDT",
+  "APTUSDT",
+  "ARBUSDT",
+  "OPUSDT",
+  "INJUSDT",
+  "SUIUSDT",
+  "SEIUSDT",
+  "TIAUSDT",
+  "FILUSDT",
+  "ICPUSDT",
+  "ETCUSDT",
+  "ALGOUSDT",
+  "VETUSDT",
+  "HBARUSDT",
+  "AAVEUSDT",
+  "GRTUSDT",
+  "SANDUSDT",
+  "MANAUSDT",
+  "AXSUSDT",
+  "GALAUSDT",
+  "CHZUSDT",
+  "ENAUSDT",
+  "WIFUSDT",
+  "BONKUSDT",
+  "FLOKIUSDT",
+  "JUPUSDT",
+  "PYTHUSDT",
+  "WLDUSDT",
+  "RUNEUSDT",
+  "FETUSDT",
+  "LDOUSDT",
+  "STXUSDT",
+  "TONUSDT",
+  "CAKEUSDT",
+  "IMXUSDT",
+  "FLOWUSDT",
+  "POLUSDT",
+  "EGLDUSDT",
+  "CRVUSDT",
+  "NEOUSDT",
 ] as const;
 
 /** Dukascopy bank datafeed symbols (free public data, UTC-based).
@@ -88,7 +141,9 @@ export function dukasSymbolOf(instrument: string): string {
 const JPY_QUOTE = new Set(["USD_JPY", "EUR_JPY", "GBP_JPY", "AUD_JPY"]);
 const METAL = new Set(["XAU_USD", "XAG_USD"]);
 const CRYPTO_MAJOR = new Set(["BTCUSDT", "ETHUSDT", "BNBUSDT"]);
-const CRYPTO_MINOR = new Set(["SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "UNIUSDT"]);
+const CRYPTO_MINOR: ReadonlySet<string> = new Set(SUPPORTED_BINANCE.filter((s) => !CRYPTO_MAJOR.has(s)));
+/** Sub-cent coins — 4 decimals renders 0.0000; these need 8. */
+const CRYPTO_MICRO = new Set(["PEPEUSDT", "SHIBUSDT", "BONKUSDT", "FLOKIUSDT"]);
 /** Explicit display precision for OANDA crypto pairs (user-facing request):
  *  BTC 1 decimal, ETH 2 decimals. */
 const OANDA_CRYPTO_PRECISION: Record<string, number> = {
@@ -125,6 +180,7 @@ export function instrumentPrecision(instrument: string): number {
   if (JPY_QUOTE.has(norm)) return 3;
   if (METAL.has(norm)) return 2;
   if (CRYPTO_MAJOR.has(norm)) return 2;
+  if (CRYPTO_MICRO.has(norm)) return 8;
   if (CRYPTO_MINOR.has(norm)) return 4;
   return 5;
 }
@@ -142,7 +198,7 @@ export function instrumentPipSize(instrument: string): number {
   const norm = normalizeInstrument(instrument).replace(/^D_/, "");
   if (JPY_QUOTE.has(norm)) return 0.01;
   if (METAL.has(norm)) return 0.01;
-  if (norm === "BTC_USD" || norm === "ETH_USD" || CRYPTO_MAJOR.has(norm) || CRYPTO_MINOR.has(norm)) return 1;
+  if (norm === "BTC_USD" || norm === "ETH_USD" || CRYPTO_MAJOR.has(norm) || CRYPTO_MINOR.has(norm) || CRYPTO_MICRO.has(norm)) return 1;
   if (norm === "SPX500_USD" || norm === "NAS100_USD" || norm === "BCO_USD") return 1;
   return 0.0001;
 }
