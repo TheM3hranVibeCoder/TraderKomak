@@ -4,9 +4,16 @@ import { useChatStore } from "@/stores/chat";
 import { useAuthStore } from "@/stores/auth";
 import type { ChatMessage } from "@traderkomak/shared";
 import { compressImage } from "@/utils/image";
+import { chatImgUrl } from "@/services/api";
 
 const chat = useChatStore();
 const auth = useAuthStore();
+
+/** Photo source for a message: own optimistic echoes carry the inline data
+ *  URL; server history/broadcasts carry an id → cacheable REST URL. */
+function msgSrc(m: ChatMessage): string | undefined {
+  return m.img ?? (m.imgId ? chatImgUrl(m.imgId) : undefined);
+}
 
 const draft = ref("");
 const pendingImg = ref<string | null>(null);
@@ -70,7 +77,7 @@ function startReply(m: ChatMessage): void {
   void nextTick(() => inputEl.value?.focus());
 }
 function quoteText(m: ChatMessage): string {
-  return m.text ? (m.text.startsWith("sticker:") ? m.text.slice(8) + " sticker" : m.text) : m.img ? "📷 photo" : "";
+  return m.text ? (m.text.startsWith("sticker:") ? m.text.slice(8) + " sticker" : m.text) : m.img || m.imgId ? "📷 photo" : "";
 }
 
 function onDocClick(e: MouseEvent): void {
@@ -434,11 +441,11 @@ onBeforeUnmount(() => {
                 <span class="q-text">{{ m.reply.text || (m.reply.img ? "📷 photo" : "") }}</span>
               </div>
               <img
-                v-if="m.img"
-                :src="m.img"
+                v-if="msgSrc(m)"
+                :src="msgSrc(m)"
                 class="msg-img"
                 alt="shared chart"
-                @click="openImage(m.img!)"
+                @click="openImage(msgSrc(m)!)"
               />
               <div
                 v-if="m.text"

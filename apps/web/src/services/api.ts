@@ -22,6 +22,13 @@ function httpBase(): string {
   return raw.replace(/\/$/, "");
 }
 
+/** Chat photos come from the server as an id (the history frame no longer
+ *  carries multi-MB base64); the bytes live at /api/chat-img/:id behind an
+ *  immutable browser cache, so each photo downloads exactly once. */
+export function chatImgUrl(imgId: string): string {
+  return `${httpBase()}/api/chat-img/${encodeURIComponent(imgId)}`;
+}
+
 export async function fetchCandles(
   instrument: string,
   timeframe: string,

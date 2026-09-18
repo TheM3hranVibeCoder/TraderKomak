@@ -109,8 +109,13 @@ export interface ChatMessage {
   id: string;
   from: string;
   text?: string;
-  /** Inline image as a data URL (compressed, ≤ ~280KB). */
+  /** Inline image as a data URL (client→server uploads; the sender's own
+   *  optimistic echo may still carry it). */
   img?: string;
+  /** Server-assigned image reference for history/broadcast payloads — the
+   *  client fetches `${API}/api/chat-img/${imgId}` (immutable browser
+   *  cache). Keeps multi-MB base64 out of every join's history frame. */
+  imgId?: string;
   ts: number;
   /** True when the author is the room owner/moderator. */
   owner?: boolean;
@@ -150,6 +155,7 @@ export interface ChatBroadcastMessage {
   from: string;
   text?: string;
   img?: string;
+  imgId?: string;
   ts: number;
   owner?: boolean;
   reply?: ChatReplyRef;

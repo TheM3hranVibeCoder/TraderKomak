@@ -84,6 +84,10 @@ export class ChatRoom {
   /** Presence heartbeat timer (reaps dead sockets). */
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   private history: ChatMessage[] = [];
+  /** Message id → image data URL, served via GET /api/chat-img/:id with
+   *  immutable cache headers. Keeps multi-MB base64 out of every join's
+   *  history frame (12s+ connects on slow links). */
+  private readonly imgStore = new Map<string, string>();
   /** Every nick the room has seen — powers the member/offline lists. */
   private readonly known = new Map<string, { lastSeen: number; ip?: string }>();
   private mod: ModState = { mutes: [], bans: [] };
@@ -106,6 +110,7 @@ export class ChatRoom {
   ) {
     this.history = this.loadHistory();
     this.mod = this.loadMod();
+    this.rebuildImgStore();
     // Members persist INDEPENDENTLY of chat history: history is capped at
     // 200 messages, so without this file, users whose messages aged out
     // silently vanished from the roster/admin panel.
@@ -136,6 +141,7 @@ export class ChatRoom {
       void this.pullFromRedis().then((remote) => {
         if (remote && this.history.length === 0) {
           this.history = remote.chat;
+          this.rebuildImgStore();
           this.mod = remote.mod;
           // Member roster persists too (nick → last seen + known IP)
           for (const k of remote.known) {
@@ -207,6 +213,17 @@ export class ChatRoom {
   }
 
   register(app: FastifyInstance): void {
+    // Chat photos: the history/broadcast frames carry only the message id —
+    // the actual bytes are fetched here once and then served from the
+    // browser's immutable cache (ids never repeat), so joins stay light.
+    app.get<{ Params: { id: string } }>("/api/chat-img/:id", (request, reply) => {
+      const img = this.getChatImg(String(request.params.id ?? "").slice(0, 64));
+      if (!img) return reply.code(404).send({ error: { code: "NOT_FOUND" } });
+      reply
+        .header("Content-Type", img.type)
+        .header("Cache-Control", "public, max-age=31536000, immutable")
+        .send(img.buffer);
+    });
     app.get("/chat", { websocket: true }, (socket, req) => {
       const conn: Conn = { socket, nick: null, admin: false, ip: req.ip ?? "", lastChatAt: 0, tgPopups: new Set(), alive: true };
       // IP bans are enforced before anything else — banned means banned.
@@ -309,7 +326,7 @@ export class ChatRoom {
       // (so the unread badge counts for visitors who haven't picked a nick
       // yet) but is not a member, stays out of the roster and cannot chat.
       if (rawNick.trim() === "") {
-        this.send(conn, { type: "history", messages: this.history });
+        this.send(conn, { type: "history", messages: this.history.map((m) => this.toWire(m)) });
         this.sendOnline(conn.socket);
         return;
       }
@@ -353,6 +370,39 @@ export class ChatRoom {
     // No join/leave notices — page refreshes would spam the room.
   }
 
+  /** Keep the data URL for GET /api/chat-img/:id — the wire form carries
+   *  only the id, so history frames stay tiny on slow links. */
+  private storeImg(m: ChatMessage): void {
+    if (m.img && m.id) this.imgStore.set(m.id, m.img);
+  }
+
+  private rebuildImgStore(): void {
+    this.imgStore.clear();
+    for (const m of this.history) this.storeImg(m);
+  }
+
+  /** Wire form of a stored message: the inline data URL is replaced by the
+   *  message id (the image itself is served, and browser-cached, via
+   *  /api/chat-img/:id). */
+  private toWire(m: ChatMessage): ChatMessage {
+    if (!m.img) return m;
+    const { img: _img, ...rest } = m;
+    return { ...rest, imgId: m.id };
+  }
+
+  /** Backs GET /api/chat-img/:id — null when the id is unknown. */
+  getChatImg(id: string): { buffer: Buffer; type: string } | null {
+    const dataUrl = this.imgStore.get(id);
+    if (!dataUrl) return null;
+    const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s.exec(dataUrl);
+    if (!match) return null;
+    try {
+      return { type: match[1]!, buffer: Buffer.from(match[2]!, "base64") };
+    } catch {
+      return null;
+    }
+  }
+
   private onChat(conn: Conn, text: string, img?: string, replyId?: string): void {
     if (!conn.nick) return; // must join first
     if (this.isMutedNick(conn.nick)) {
@@ -394,9 +444,16 @@ export class ChatRoom {
       reply,
     };
     this.history.push(message);
-    if (this.history.length > HISTORY_CAP) this.history.splice(0, this.history.length - HISTORY_CAP);
+    this.storeImg(message);
+    if (this.history.length > HISTORY_CAP) {
+      this.history.splice(0, this.history.length - HISTORY_CAP);
+      const keep = new Set(this.history.map((m) => m.id));
+      for (const id of this.imgStore.keys()) {
+        if (!keep.has(id)) this.imgStore.delete(id);
+      }
+    }
     this.schedulePersist();
-    this.broadcast({ type: "chat", ...message });
+    this.broadcast({ type: "chat", ...this.toWire(message) });
   }
 
   private onDelete(conn: Conn, id: string): void {

@@ -138,7 +138,13 @@ function addHealListeners(): void {
         // Own echo: swap the optimistic placeholder for the real message.
         if (msg.from === nick.value) {
           const pIdx = pendingLocal.findIndex(
-            (p) => p.from === msg.from && (p.text ?? "") === (msg.text ?? "") && !!p.img === !!msg.img
+            // The echo's image arrives as imgId (server-side URL ref) while
+            // the optimistic placeholder holds the local data URL — match on
+            // photo-presence, not the exact field.
+            (p) =>
+              p.from === msg.from &&
+              (p.text ?? "") === (msg.text ?? "") &&
+              !!(p.img ?? p.imgId) === !!(msg.img ?? msg.imgId)
           );
           if (pIdx >= 0) {
             const p = pendingLocal.splice(pIdx, 1)[0]!;
@@ -412,7 +418,7 @@ function addHealListeners(): void {
 
   /** Optimistic-echo bookkeeping: placeholders we rendered for our own
    *  sends, replaced by the server broadcast (deduped in onChat). */
-  const pendingLocal: { localId: string; from: string; text?: string; img?: string; reply?: ChatMessage["reply"] }[] = [];
+  const pendingLocal: { localId: string; from: string; text?: string; img?: string; imgId?: string; reply?: ChatMessage["reply"] }[] = [];
 
   /** Image + caption text in one message. */
   function sendChat(text: string | undefined, img: string | undefined): boolean {
