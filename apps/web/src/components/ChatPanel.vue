@@ -36,8 +36,13 @@ const REACTIONS: { kind: ChatReactionKind; emoji: string }[] = [
   { kind: "heart", emoji: "❤️" },
 ];
 const canReact = computed(() => !!chat.nick && !isMuted.value);
+/** Touch has no hover: one tap on a message toggles its picker. */
+const isCoarse = window.matchMedia("(pointer: coarse)").matches;
 const reactForId = ref<string | null>(null);
-function toggleReactPalette(m: ChatMessage): void {
+function onMsgTap(m: ChatMessage, ev: MouseEvent): void {
+  if (!isCoarse) return; // desktop uses hover
+  const t = ev.target as HTMLElement;
+  if (t.closest("button, img, a, .msg-quote, .rx-pop, .rx-chip")) return;
   reactForId.value = reactForId.value === m.id ? null : m.id;
 }
 function onReact(m: ChatMessage, kind: ChatReactionKind): void {
@@ -118,7 +123,8 @@ function onDocClick(e: MouseEvent): void {
   if (showMembers.value && !t.closest(".chat-online") && !t.closest(".members-pop")) {
     showMembers.value = false;
   }
-  if (reactForId.value && !t.closest(".rx-pop") && !t.closest(".rx-add")) {
+  // Tapping outside any message closes a touch-opened reaction picker
+  if (reactForId.value && !t.closest(".rx-pop") && !t.closest(".msg")) {
     reactForId.value = null;
   }
 }
@@ -432,7 +438,15 @@ onBeforeUnmount(() => {
           >🔇 {{ m.nick }} ✕</span>
         </div>
         <div ref="listEl" class="chat-list" @scroll="onListScroll">
-          <div v-for="m in chat.messages" :key="m.id" class="msg" :class="{ system: m.from === '' }" :data-ts="m.ts" :data-id="m.id">
+          <div
+            v-for="m in chat.messages"
+            :key="m.id"
+            class="msg"
+            :class="{ system: m.from === '' }"
+            :data-ts="m.ts"
+            :data-id="m.id"
+            @click="canReact && onMsgTap(m, $event)"
+          >
             <template v-if="m.from === ''">
               <span class="sys-text">— {{ m.text }} —</span>
             </template>
@@ -465,14 +479,6 @@ onBeforeUnmount(() => {
                   aria-label="Reply to this message"
                   @click="startReply(m)"
                 >↩</button>
-                <button
-                  v-if="canReact"
-                  class="rx-add"
-                  :class="{ open: reactForId === m.id }"
-                  title="Add reaction"
-                  aria-label="Add reaction"
-                  @click.stop="toggleReactPalette(m)"
-                >＋</button>
               </div>
               <div v-if="canReact" class="rx-pop" :class="{ open: reactForId === m.id }">
                 <button
@@ -481,7 +487,7 @@ onBeforeUnmount(() => {
                   class="rx-opt"
                   :title="r.kind"
                   :aria-label="'React ' + r.kind"
-                  @click.stop="onReact(m, r.kind)"
+                  @click="onReact(m, r.kind)"
                 >{{ r.emoji }}</button>
               </div>
               <div v-if="m.reply" class="msg-quote" role="button" tabindex="0" title="Jump to the original message" @click="jumpTo(m.reply.id)" @keydown.enter="jumpTo(m.reply.id)">
@@ -1179,33 +1185,14 @@ onBeforeUnmount(() => {
 .msg-reply-btn:hover { background: rgba(59, 130, 246, 0.15); }
 .msg:hover .msg-reply-btn { opacity: 1; }
 
-/* ── Reactions (Telegram-style: ＋ opens 👍👎❤️, chips show counts) ── */
+/* ── Reactions (Telegram-style: hover reveals 👍👎❤️ at the message's
+   bottom-right; chips show counts) ── */
 .msg { position: relative; }
-.rx-add {
-  width: 22px;
-  height: 20px;
-  margin-left: 4px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s ease, background 0.12s ease;
-  vertical-align: middle;
-}
-.rx-add:hover, .rx-add.open { background: rgba(59, 130, 246, 0.15); color: var(--accent); }
-.msg:hover .rx-add, .rx-add.open { opacity: 1; }
-@media (pointer: coarse) {
-  .rx-add { opacity: 1; } /* touch has no hover — keep it reachable */
-}
 .rx-pop {
   position: absolute;
   z-index: 5;
-  top: 26px;
-  right: 6px;
+  bottom: -14px;
+  right: 8px;
   display: flex;
   gap: 2px;
   padding: 3px;
@@ -1214,19 +1201,12 @@ onBeforeUnmount(() => {
   background: var(--glass-bg-hover);
   backdrop-filter: blur(8px);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
-  /* hidden until the cursor moves over the message (Telegram-desktop
-     style) or the ＋ button pins it open (touch) */
+  /* hidden until the cursor moves over the message */
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transform: translateY(-3px);
+  transform: translateY(3px);
   transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s;
-}
-.rx-pop.open {
-  opacity: 1;
-  visibility: visible;
-  pointer-events: auto;
-  transform: translateY(0);
 }
 @media (hover: hover) and (pointer: fine) {
   .msg:hover .rx-pop {
@@ -1235,6 +1215,13 @@ onBeforeUnmount(() => {
     pointer-events: auto;
     transform: translateY(0);
   }
+}
+/* Touch: one tap on the message opens the picker (no hover exists) */
+.rx-pop.open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 .rx-opt {
   border: none;
