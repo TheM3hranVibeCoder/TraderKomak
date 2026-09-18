@@ -420,8 +420,9 @@ onBeforeUnmount(() => {
           <span class="tg-pin-text">Join our Telegram channel</span>
           <span class="tg-pin-arrow">→</span>
         </a>
-        <!-- Admin moderation strip: muted/banned chatters with lift buttons -->
-        <div v-if="chat.isAdmin && (chat.mutes.length || chat.bans.length)" class="mod-strip">
+        <!-- Admin moderation strip: muted chatters with lift buttons.
+             Banned names live in the admin panel only — they cluttered chat. -->
+        <div v-if="chat.isAdmin && chat.mutes.length" class="mod-strip">
           <span
             v-for="m in chat.mutes"
             :key="'mu-' + m.nick"
@@ -429,13 +430,6 @@ onBeforeUnmount(() => {
             title="Click to unmute"
             @click="chat.moderate('unmute', m.nick)"
           >🔇 {{ m.nick }} ✕</span>
-          <span
-            v-for="b in chat.bans"
-            :key="'ba-' + b.nick"
-            class="mod-chip ban"
-            title="Click to unban"
-            @click="chat.moderate('unban', b.nick)"
-          >⛔ {{ b.nick }} ✕</span>
         </div>
         <div ref="listEl" class="chat-list" @scroll="onListScroll">
           <div v-for="m in chat.messages" :key="m.id" class="msg" :class="{ system: m.from === '' }" :data-ts="m.ts" :data-id="m.id">
@@ -480,7 +474,7 @@ onBeforeUnmount(() => {
                   @click.stop="toggleReactPalette(m)"
                 >＋</button>
               </div>
-              <div v-if="reactForId === m.id" class="rx-pop">
+              <div v-if="canReact" class="rx-pop" :class="{ open: reactForId === m.id }">
                 <button
                   v-for="r in REACTIONS"
                   :key="r.kind"
@@ -1220,6 +1214,27 @@ onBeforeUnmount(() => {
   background: var(--glass-bg-hover);
   backdrop-filter: blur(8px);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  /* hidden until the cursor moves over the message (Telegram-desktop
+     style) or the ＋ button pins it open (touch) */
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s;
+}
+.rx-pop.open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+@media (hover: hover) and (pointer: fine) {
+  .msg:hover .rx-pop {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
 }
 .rx-opt {
   border: none;
@@ -1242,20 +1257,19 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 2px 7px;
+  padding: 2px 8px;
+  border: none;
   border-radius: 999px;
-  border: 1px solid var(--glass-border);
   background: var(--glass-bg-hover);
   color: var(--text);
   font-size: 12px;
   line-height: 1.4;
   cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition: background 0.12s ease;
 }
-.rx-chip:hover { border-color: var(--accent); }
+.rx-chip:hover { background: rgba(59, 130, 246, 0.12); }
 .rx-chip.mine {
-  border-color: var(--accent);
-  background: rgba(59, 130, 246, 0.18);
+  background: rgba(59, 130, 246, 0.22);
 }
 .rx-count { font-size: 11px; font-weight: 700; color: var(--text-muted); }
 .rx-chip.mine .rx-count { color: var(--accent); }
