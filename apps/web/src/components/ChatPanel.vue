@@ -480,7 +480,7 @@ onBeforeUnmount(() => {
                   @click="startReply(m)"
                 >↩</button>
               </div>
-              <div v-if="canReact" class="rx-pop" :class="{ 'rx-pop-left': chat.isAdmin, open: reactForId === m.id }">
+              <div v-if="canReact" class="rx-pop" :class="{ open: reactForId === m.id }">
                 <button
                   v-for="r in REACTIONS"
                   :key="r.kind"
@@ -1224,9 +1224,7 @@ onBeforeUnmount(() => {
   pointer-events: auto;
   transform: translateY(0);
 }
-/* Admins: their mute/ban/delete buttons own the message's right edge —
-   the picker moves to the bottom-LEFT so it can never cover the ✕ */
-.rx-pop-left { right: auto; left: 8px; }
+/* Admin action buttons stay above the picker so ✕ remains clickable */
 .msg-actions { position: relative; z-index: 6; }
 .rx-opt {
   border: none;
