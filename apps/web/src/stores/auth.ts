@@ -18,8 +18,20 @@ const USERNAME_RE = /^[a-zA-Z0-9_]+$/;
 const LASTVISIT_KEY = "tk-auth-lastvisit";
 const SESSION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 /** Render hint for the app gate: "was logged in on this device" — lets the
- *  app render optimistically during session restore (no landing flash). */
+ *  app render optimistically during session restore (no landing flash).
+ *  Mirrored into a cookie so a localStorage wipe (site-data clear /
+ *  aggressive privacy settings) doesn't send returning users through the
+ *  landing + Google round-trip again. */
 const WASAUTH_KEY = "tk-was-auth";
+const WASAUTH_COOKIE = "tk-was-auth";
+
+function writeWasAuthCookie(on: boolean): void {
+  try {
+    document.cookie = on
+      ? `${WASAUTH_COOKIE}=1; Max-Age=${60 * 60 * 24 * 180}; path=/; SameSite=Lax`
+      : `${WASAUTH_COOKIE}=; Max-Age=0; path=/; SameSite=Lax`;
+  } catch {}
+}
 
 function markVisit(): void {
   try { localStorage.setItem(LASTVISIT_KEY, String(Date.now())); } catch {}
@@ -29,6 +41,7 @@ function setWasAuth(v: boolean): void {
     if (v) localStorage.setItem(WASAUTH_KEY, "1");
     else localStorage.removeItem(WASAUTH_KEY);
   } catch {}
+  writeWasAuthCookie(v);
 }
 const PROFILE_KEY = "tk-profile-cache";
 
@@ -62,8 +75,12 @@ export function wasAuthOnDevice(): boolean {
       const k = localStorage.key(i);
       if (k && k.startsWith("sb-") && k.includes("auth-token")) return true;
     }
-    return false;
-  } catch { return false; }
+  } catch {}
+  // Cookie mirror survives a full localStorage wipe
+  try {
+    if (document.cookie.includes(`${WASAUTH_COOKIE}=1`)) return true;
+  } catch {}
+  return false;
 }
 
 export function validateUsername(raw: string): string | null {
