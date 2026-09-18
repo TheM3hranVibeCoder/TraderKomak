@@ -298,7 +298,11 @@ export class ChatClient {
   private scheduleReconnect(): void {
     if (this.closedByUser || this.reconnectTimer) return;
     this.attempt++;
-    const base = 1500;
+    // 600ms base: the first dial can fail on a flaky relay (visible as
+    // "reconnecting" right after every page load — worse than the chart,
+    // which REST/cache masks). Quick early retries hide the blip; the
+    // exponential cap still protects the server under outages.
+    const base = 600;
     const cap = 20000;
     const exp = Math.min(cap, base * 2 ** (this.attempt - 1));
     const delay = Math.max(base, Math.floor(exp + (Math.random() * 2 - 1) * 0.2 * exp));
