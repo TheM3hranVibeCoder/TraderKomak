@@ -82,13 +82,18 @@ let client: ChatClient | null = null;
 let clientAdminKey: string | undefined;
 let healListenersAdded = false;
 
-/** Browsers throttle background-tab timers, so a chat socket can silently
- *  die while the user is away. On focus/visibility/online, force-close a
- *  stale socket so it reconnects before the user tries to send. */
+/** Browsers throttle background-tab timers and the OS/relay can drop idle
+ *  sockets, so a chat socket can die while the user is away. On becoming
+ *  visible/focused/online, reconnect IMMEDIATELY (skip the backoff) so the
+ *  room is live when the user looks at it — the market socket survives the
+ *  same conditions only because candles keep it continuously busy. */
 function addHealListeners(): void {
   if (healListenersAdded) return;
   healListenersAdded = true;
-  const heal = () => client?.ensureFresh();
+  const heal = () => {
+    if (document.visibilityState === "hidden") return;
+    client?.reconnectNow();
+  };
   document.addEventListener("visibilitychange", heal);
   window.addEventListener("focus", heal);
   window.addEventListener("online", heal);
@@ -358,6 +363,16 @@ function addHealListeners(): void {
     return true;
   }
 
+  /** Panel consumed the first-unseen anchor at open. Clearing it here is
+   *  what makes the NEXT open go to the bottom: a surviving stale anchor
+   *  re-jumped old messages on every reopen ("opens from the middle of
+   *  chats") even though setOpen had already marked everything seen. */
+  function consumeFirstUnseen(): number {
+    const ts = firstUnseenTs.value;
+    firstUnseenTs.value = 0;
+    return ts;
+  }
+
   function setOpen(v: boolean): void {
     open.value = v;
     localStorage.setItem(OPEN_KEY, v ? "1" : "0");
@@ -460,6 +475,7 @@ function addHealListeners(): void {
     open,
     unread,
     firstUnseenTs,
+    consumeFirstUnseen,
     error,
     mutes,
     bans,

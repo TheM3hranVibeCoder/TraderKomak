@@ -202,6 +202,27 @@ export class ChatClient {
     }
   }
 
+  /** Tab visible / window focused: chat must be live NOW, not after the
+   *  reconnect backoff. Background tabs lose the socket (relay/OS drops,
+   *  throttled timers), and the pending backoff made users stare at
+   *  "reconnecting" for seconds after returning. Dial immediately. */
+  reconnectNow(): void {
+    if (this.closedByUser) return;
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      if (Date.now() - this.lastServerMsgAt <= STALE_MS) return; // healthy
+      try { this.ws.close(4000, "stale"); } catch {}
+      this.ws = null;
+    } else if (this.ws) {
+      // half-open / CONNECTING leftover — discard and redial
+      try { this.ws.close(); } catch {}
+      this.ws = null;
+    }
+    this.joined = false;
+    this.clearTimer();
+    this.attempt = 0;
+    this.dial();
+  }
+
   private stopPing(): void {
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
@@ -248,6 +269,10 @@ export class ChatClient {
     });
     ws.addEventListener("message", (ev) => this.handle(ev.data));
     ws.addEventListener("close", (ev) => {
+      // A replaced socket's late close event must not clobber the CURRENT
+      // one (stale-socket heal dials a fresh socket before the old close
+      // fires — nulling it here leaked the new socket and re-queued a dial).
+      if (ev.target !== this.ws) return;
       this.stopPing();
       this.ws = null;
       this.joined = false;
