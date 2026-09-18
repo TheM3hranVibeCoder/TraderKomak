@@ -81,6 +81,9 @@ export const useChatStore = defineStore("chat", () => {
 let client: ChatClient | null = null;
 let clientAdminKey: string | undefined;
 let healListenersAdded = false;
+/** True after this page load's first chat dial was scheduled — later
+ *  ensureClient() calls connect immediately (no stagger twice). */
+let bootChatDialed = false;
 
 /** Browsers throttle background-tab timers and the OS/relay can drop idle
  *  sockets, so a chat socket can die while the user is away. On becoming
@@ -237,7 +240,21 @@ function addHealListeners(): void {
       },
     });
     clientAdminKey = currentKey;
-    client.connect(nick.value, currentKey);
+    // Boot-load stagger: on a cold page load the market socket and the chat
+    // socket dial the relay simultaneously, and the relay's first cold
+    // upstream handshakes are the fragile step (first-dial failures on
+    // nearly every refresh). The market socket keeps its immediate dial;
+    // the chat's FIRST dial of the page waits briefly so the relay warms
+    // up one connection at a time. Later connects (panel open, admin
+    // upgrade) stay instant.
+    if (!bootChatDialed) {
+      bootChatDialed = true;
+      setTimeout(() => {
+        if (client) client.connect(nick.value, currentKey);
+      }, 350);
+    } else {
+      client.connect(nick.value, currentKey);
+    }
     startBanProbe();
   }
 
