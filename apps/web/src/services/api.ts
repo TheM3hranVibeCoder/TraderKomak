@@ -18,8 +18,18 @@ interface ErrorBody {
 
 function httpBase(): string {
   // VITE_API_HTTP_URL: "" (same origin, proxied) or explicit market-server URL.
-  const raw = import.meta.env.VITE_API_HTTP_URL ?? "";
-  return raw.replace(/\/$/, "");
+  const raw = (import.meta.env.VITE_API_HTTP_URL as string | undefined)?.trim();
+  if (raw) return raw.replace(/\/$/, "");
+  // Production serves the SPA from Vercel with NO /api proxy, so relative
+  // REST URLs would hit the SPA rewrite and return HTML. Derive the
+  // absolute market-server origin from the WS URL instead:
+  //   wss://edge.traderkomak.ir/ws → https://edge.traderkomak.ir
+  const ws = (import.meta.env.VITE_MARKET_WS_URL as string | undefined)?.trim();
+  if (ws) {
+    const m = /^wss?:\/\/([^/]+)/i.exec(ws);
+    if (m) return `${/^wss/i.test(ws) ? "https" : "http"}://${m[1]!}`;
+  }
+  return "";
 }
 
 /** Chat photos come from the server as an id (the history frame no longer

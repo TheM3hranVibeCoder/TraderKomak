@@ -190,12 +190,17 @@ function addHealListeners(): void {
               (p.text ?? "") === (msg.text ?? "") &&
               !!(p.img ?? p.imgId) === !!(msg.img ?? msg.imgId)
           );
-          if (pIdx >= 0) {
-            const p = pendingLocal.splice(pIdx, 1)[0]!;
-            // An old server drops the reply field on the echo — merge the
-            // local quote snapshot so the reply block never flashes away.
-            const merged = p.reply && !msg.reply ? { ...msg, reply: p.reply } : msg;
-            const i = messages.value.findIndex((m) => m.id === p.localId);
+            if (pIdx >= 0) {
+              const p = pendingLocal.splice(pIdx, 1)[0]!;
+              // An old server drops the reply field on the echo — merge the
+              // local quote snapshot so the reply block never flashes away.
+              let merged = p.reply && !msg.reply ? { ...msg, reply: p.reply } : msg;
+              // Keep the LOCAL image bytes on the sender's own message:
+              // swapping the optimistic data URL for the server URL would
+              // remount the <img> and blink, re-downloading bytes the
+              // browser already has.
+              merged = { ...merged, img: p.img ?? merged.img };
+              const i = messages.value.findIndex((m) => m.id === p.localId);
             if (i >= 0) {
               const next = [...messages.value];
               next[i] = merged;
