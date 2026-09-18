@@ -522,8 +522,14 @@ function addHealListeners(): void {
       }
       setTimeout(() => {
         const i = pendingLocal.findIndex((p) => p.localId === localId);
-        if (i >= 0) pendingLocal.splice(i, 1);
-      }, 60_000);
+        if (i >= 0) {
+          // The echo never landed (server rejected silently, crashed,
+          // network died mid-send) — remove the optimistic ghost so it
+          // can't linger as an undeletable duplicate.
+          pendingLocal.splice(i, 1);
+          messages.value = messages.value.filter((m) => m.id !== localId);
+        }
+      }, 12_000);
     }
     return true;
   }
