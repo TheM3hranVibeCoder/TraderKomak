@@ -38,6 +38,7 @@ export const SUPPORTED_BINANCE = [
   "XRPUSDT",
   "ADAUSDT",
   "DOGEUSDT",
+  "UNIUSDT",
 ] as const;
 
 /** Dukascopy bank datafeed symbols (free public data, UTC-based).
@@ -87,7 +88,7 @@ export function dukasSymbolOf(instrument: string): string {
 const JPY_QUOTE = new Set(["USD_JPY", "EUR_JPY", "GBP_JPY", "AUD_JPY"]);
 const METAL = new Set(["XAU_USD", "XAG_USD"]);
 const CRYPTO_MAJOR = new Set(["BTCUSDT", "ETHUSDT", "BNBUSDT"]);
-const CRYPTO_MINOR = new Set(["SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT"]);
+const CRYPTO_MINOR = new Set(["SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "UNIUSDT"]);
 /** Explicit display precision for OANDA crypto pairs (user-facing request):
  *  BTC 1 decimal, ETH 2 decimals. */
 const OANDA_CRYPTO_PRECISION: Record<string, number> = {
