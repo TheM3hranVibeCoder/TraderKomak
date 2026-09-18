@@ -122,8 +122,8 @@ export class ChatClient {
 
   /** One message carrying an image and/or caption text, optionally
    *  replying to another message (server resolves the quote excerpt). */
-  sendChat(text: string | undefined, img: string | undefined, replyId?: string): void {
-    this.send({ type: "chat", text, img, reply: replyId ? { id: replyId } : undefined });
+  sendChat(text: string | undefined, img: string | undefined, replyId?: string, cid?: string): void {
+    this.send({ type: "chat", text, img, reply: replyId ? { id: replyId } : undefined, cid });
   }
 
   deleteMessage(id: string): void {

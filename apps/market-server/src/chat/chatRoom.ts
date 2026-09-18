@@ -288,7 +288,8 @@ export class ChatRoom {
       case "chat": {
         const r = msg.reply as Record<string, unknown> | undefined;
         const replyId = r && typeof r.id === "string" ? r.id.slice(0, 64) : undefined;
-        this.onChat(conn, String(msg.text ?? ""), typeof msg.img === "string" ? msg.img : undefined, replyId);
+        const cid = typeof msg.cid === "string" ? msg.cid.slice(0, 40) : undefined;
+        this.onChat(conn, String(msg.text ?? ""), typeof msg.img === "string" ? msg.img : undefined, replyId, cid);
         return;
       }
       case "react":
@@ -437,7 +438,7 @@ export class ChatRoom {
     this.broadcast({ type: "reactions", id: m.id, nick: conn.nick, reaction: kind });
   }
 
-  private onChat(conn: Conn, text: string, img?: string, replyId?: string): void {
+  private onChat(conn: Conn, text: string, img?: string, replyId?: string, cid?: string): void {
     if (!conn.nick) return; // must join first
     if (this.isMutedNick(conn.nick)) {
       const m = this.mod.mutes.find((x) => x.nick.toLowerCase() === conn.nick!.toLowerCase());
@@ -487,7 +488,9 @@ export class ChatRoom {
       }
     }
     this.schedulePersist();
-    this.broadcast({ type: "chat", ...this.toWire(message) });
+    // cid echoes the sender's optimistic-placeholder id so their client can
+    // swap it deterministically (never stored in history).
+    this.broadcast({ type: "chat", ...this.toWire(message), cid });
   }
 
   private onDelete(conn: Conn, id: string): void {

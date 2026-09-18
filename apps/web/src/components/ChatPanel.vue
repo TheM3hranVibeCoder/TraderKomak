@@ -480,7 +480,7 @@ onBeforeUnmount(() => {
                   @click="startReply(m)"
                 >↩</button>
               </div>
-              <div v-if="canReact" class="rx-pop" :class="{ open: reactForId === m.id }">
+              <div v-if="canReact" class="rx-pop" :class="{ 'rx-pop-left': chat.isAdmin, open: reactForId === m.id }">
                 <button
                   v-for="r in REACTIONS"
                   :key="r.kind"
@@ -559,7 +559,8 @@ onBeforeUnmount(() => {
             type="text"
             maxlength="400"
             :placeholder="pendingImg ? 'Describe the image… (optional)' : 'Message the room…'"
-            aria-label="Chat message"
+            :aria-label="cooldownLeft > 0 ? `Cooldown — wait ${cooldownLeft}s` : 'Chat message'"
+            :disabled="cooldownLeft > 0"
             @keydown="onKeydown"
             @paste="onPaste"
           />
@@ -1223,6 +1224,10 @@ onBeforeUnmount(() => {
   pointer-events: auto;
   transform: translateY(0);
 }
+/* Admins: their mute/ban/delete buttons own the message's right edge —
+   the picker moves to the bottom-LEFT so it can never cover the ✕ */
+.rx-pop-left { right: auto; left: 8px; }
+.msg-actions { position: relative; z-index: 6; }
 .rx-opt {
   border: none;
   background: transparent;

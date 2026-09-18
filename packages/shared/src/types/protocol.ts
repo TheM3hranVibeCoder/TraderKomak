@@ -128,6 +128,8 @@ export interface ChatMessage {
   /** nick → reaction kind; lives on the message so it persists with
    *  history and dies with deletions automatically. */
   reactions?: Partial<Record<string, ChatReactionKind>>;
+  /** Transient echo id on the sender's own broadcast — never persisted. */
+  cid?: string;
 }
 
 export interface ChatJoinMessage {
@@ -139,11 +141,16 @@ export interface ChatJoinMessage {
 export interface ChatSendTextMessage {
   type: "chat";
   text: string;
+  /** Client-generated id — echoed on the broadcast so the sender can swap
+   *  their optimistic placeholder deterministically (text comparison is
+   *  unreliable: the server normalizes whitespace). */
+  cid?: string;
 }
 
 export interface ChatSendImageMessage {
   type: "chat";
   img: string;
+  cid?: string;
 }
 
 export interface ChatDeleteMessage {
@@ -167,6 +174,8 @@ export interface ChatBroadcastMessage {
   owner?: boolean;
   reply?: ChatReplyRef;
   reactions?: Partial<Record<string, ChatReactionKind>>;
+  /** Echoed client id — present only on the sender's own broadcast. */
+  cid?: string;
 }
 
 /** Client → server: set / switch / clear (null) the sender's reaction. */

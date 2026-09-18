@@ -181,15 +181,17 @@ function addHealListeners(): void {
       onChat: (msg) => {
         // Own echo: swap the optimistic placeholder for the real message.
         if (msg.from === nick.value) {
-          const pIdx = pendingLocal.findIndex(
-            // The echo's image arrives as imgId (server-side URL ref) while
-            // the optimistic placeholder holds the local data URL — match on
-            // photo-presence, not the exact field.
-            (p) =>
-              p.from === msg.from &&
-              (p.text ?? "") === (msg.text ?? "") &&
-              !!(p.img ?? p.imgId) === !!(msg.img ?? msg.imgId)
-          );
+          // New servers echo the client id (deterministic); fall back to a
+          // whitespace-normalized text match for old servers.
+          const norm = (s: string | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
+          const pIdx = msg.cid
+            ? pendingLocal.findIndex((p) => p.localId === msg.cid)
+            : pendingLocal.findIndex(
+                (p) =>
+                  p.from === msg.from &&
+                  norm(p.text) === norm(msg.text) &&
+                  !!(p.img ?? p.imgId) === !!(msg.img ?? msg.imgId)
+              );
             if (pIdx >= 0) {
               const p = pendingLocal.splice(pIdx, 1)[0]!;
               // An old server drops the reply field on the echo — merge the
@@ -273,6 +275,12 @@ function addHealListeners(): void {
       },
       onRateLimit: (waitMs) => {
         rateWaitUntil.value = Date.now() + waitMs;
+        // The rejected message never happened — remove its optimistic ghost
+        // (it would otherwise sit there "sent" but invisible to everyone).
+        const rejected = pendingLocal.pop();
+        if (rejected) {
+          messages.value = messages.value.filter((m) => m.id !== rejected.localId);
+        }
       },
       onUserInfo: (info) => {
         userInfo.value = info;
@@ -477,12 +485,14 @@ function addHealListeners(): void {
   function sendChat(text: string | undefined, img: string | undefined): boolean {
     if (!client || (!text && !img)) return false;
     const reply = replyTo.value;
-    client.sendChat(text, img, reply?.id);
+    const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    // cid rides to the server and comes back on the broadcast — the echo
+    // swap then NEVER misfires into a duplicate.
+    client.sendChat(text, img, reply?.id, localId);
     replyTo.value = null;
     // Telegram-style: render the sent message (with its quote) instantly.
     // The server broadcast swaps this placeholder for the real message.
     if (nick.value) {
-      const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       messages.value = [
         ...messages.value,
         {
@@ -503,6 +513,13 @@ function addHealListeners(): void {
         img,
         reply: reply ? { id: reply.id, from: reply.from, text: reply.text?.slice(0, 80), img: reply.img ? true : undefined } : undefined,
       });
+      // Start the cooldown NOW (the server counts from the accepted send):
+      // without this, the client stayed unlocked and a second message flew
+      // into the server's 15s rejection — sent locally, seen by no one.
+      // Admins are exempt from the server-side cooldown.
+      if (!isAdmin.value) {
+        rateWaitUntil.value = Math.max(rateWaitUntil.value, Date.now() + 15_000);
+      }
       setTimeout(() => {
         const i = pendingLocal.findIndex((p) => p.localId === localId);
         if (i >= 0) pendingLocal.splice(i, 1);
