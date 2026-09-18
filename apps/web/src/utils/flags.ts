@@ -49,6 +49,7 @@ export function currencyFlagUrl(currency: string): string | null {
     DOT: "dot",
     LINK: "link",
     AVAX: "avax",
+    UNI: "uni",
     // Stablecoin quotes (Binance pairs)
     USDT: "usdt",
     USDC: "usdc",
