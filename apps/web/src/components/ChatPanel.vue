@@ -144,6 +144,9 @@ function anchorTo(ts: number | null): void {
 function onListImageLoad(e: Event): void {
   if (Date.now() > settleUntil || userScrolled) return;
   if ((e.target as HTMLElement)?.tagName !== "IMG") return;
+  // Images trickle in on slow links — every load extends the settle
+  // window so the anchor keeps asserting until they stop arriving.
+  settleUntil = Math.max(settleUntil, Date.now() + 800);
   anchorTo(anchorTs);
 }
 
@@ -435,7 +438,6 @@ onBeforeUnmount(() => {
                 :src="m.img"
                 class="msg-img"
                 alt="shared chart"
-                loading="lazy"
                 @click="openImage(m.img!)"
               />
               <div
