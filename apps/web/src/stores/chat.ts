@@ -101,9 +101,15 @@ function addHealListeners(): void {
 
   function ensureClient(): void {
     // Moderator key added mid-session (console/UI) — upgrade live instead of
-    // waiting for a page refresh.
+    // waiting for a page refresh. A socket still mid-handshake upgrades IN
+    // PLACE (the join-on-open picks up the key); killing it logged a bogus
+    // "WebSocket failed:" and added a full extra handshake on every boot.
     const currentKey = localStorage.getItem(ADMIN_KEY) ?? undefined;
     if (client && clientAdminKey !== currentKey) {
+      if (client.upgradeAdminKey(currentKey)) {
+        clientAdminKey = currentKey;
+        return;
+      }
       client.disconnect();
       client = null;
     }

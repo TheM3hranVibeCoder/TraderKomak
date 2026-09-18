@@ -74,11 +74,29 @@ export class ChatClient {
     this.dial();
   }
 
+  /** Mid-session moderator-key upgrade, WITHOUT killing an in-flight
+   *  handshake: a CONNECTING socket hasn't joined yet, so just updating the
+   *  key makes the join-on-open carry it (aborting it logged a bogus
+   *  "WebSocket ... failed:" and added a whole extra handshake to every
+   *  admin's boot). Returns true when applied without a reconnect. */
+  upgradeAdminKey(key: string | undefined): boolean {
+    if (!this.ws) return false;
+    if (this.ws.readyState === WebSocket.CONNECTING) {
+      this.adminKey = key;
+      return true;
+    }
+    if (this.ws.readyState === WebSocket.OPEN) {
+      this.adminKey = key;
+      this.rejoin();
+      return true;
+    }
+    return false;
+  }
+
   disconnect(): void {
     this.closedByUser = true;
     this.clearTimer();
-    this.stopPing();
-    if (this.ws) {
+    this.stopPing();    if (this.ws) {
       try {
         this.ws.close(1000, "client left");
       } catch {}
@@ -212,15 +230,23 @@ export class ChatClient {
       if (Date.now() - this.lastServerMsgAt <= STALE_MS) return; // healthy
       try { this.ws.close(4000, "stale"); } catch {}
       this.ws = null;
-    } else if (this.ws) {
-      // half-open / CONNECTING leftover — discard and redial
-      try { this.ws.close(); } catch {}
-      this.ws = null;
+      this.joined = false;
+      this.clearTimer();
+      this.attempt = 0;
+      this.dial();
+      return;
     }
-    this.joined = false;
-    this.clearTimer();
-    this.attempt = 0;
-    this.dial();
+    // CONNECTING = a handshake is IN FLIGHT — aborting it (the old
+    // behavior) logged a bogus "WebSocket ... failed:" line and restarted
+    // the handshake from zero on every heal event during page load,
+    // adding seconds. Leave it alone.
+    if (this.ws && this.ws.readyState === WebSocket.CONNECTING) return;
+    if (!this.ws) {
+      // Fully down — dial now instead of waiting out the backoff timer.
+      this.clearTimer();
+      this.attempt = 0;
+      this.dial();
+    }
   }
 
   private stopPing(): void {
