@@ -2,7 +2,7 @@
 import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from "vue";
 import { useChatStore } from "@/stores/chat";
 import { useAuthStore } from "@/stores/auth";
-import type { ChatMessage } from "@traderkomak/shared";
+import type { ChatMessage, ChatReactionKind } from "@traderkomak/shared";
 import { compressImage } from "@/utils/image";
 import { chatImgUrl } from "@/services/api";
 
@@ -28,6 +28,39 @@ let tickTimer: ReturnType<typeof setInterval> | null = null;
 const cooldownLeft = computed(() => Math.max(0, Math.ceil((chat.rateWaitUntil - nowTick.value) / 1000)));
 const mutedLeft = computed(() => Math.max(0, Math.ceil((chat.mutedUntil - nowTick.value) / 60000)));
 const isMuted = computed(() => chat.mutedUntil > nowTick.value);
+
+/* ── Message reactions (Telegram-style: one per user, toggle to clear) ── */
+const REACTIONS: { kind: ChatReactionKind; emoji: string }[] = [
+  { kind: "like", emoji: "👍" },
+  { kind: "dislike", emoji: "👎" },
+  { kind: "heart", emoji: "❤️" },
+];
+const canReact = computed(() => !!chat.nick && !isMuted.value);
+const reactForId = ref<string | null>(null);
+function toggleReactPalette(m: ChatMessage): void {
+  reactForId.value = reactForId.value === m.id ? null : m.id;
+}
+function onReact(m: ChatMessage, kind: ChatReactionKind): void {
+  chat.react(m.id, kind);
+  reactForId.value = null;
+}
+function reactionChips(m: ChatMessage): { kind: ChatReactionKind; emoji: string; count: number; mine: boolean }[] {
+  const rx = chat.reactions[m.id];
+  if (!rx) return [];
+  const myNick = chat.nick?.toLowerCase();
+  const out: { kind: ChatReactionKind; emoji: string; count: number; mine: boolean }[] = [];
+  for (const { kind, emoji } of REACTIONS) {
+    let count = 0;
+    let mine = false;
+    for (const [n, k] of Object.entries(rx)) {
+      if (k !== kind) continue;
+      count++;
+      if (myNick && n.toLowerCase() === myNick) mine = true;
+    }
+    if (count > 0) out.push({ kind, emoji, count, mine });
+  }
+  return out;
+}
 const nickDraft = ref("");
 const lightbox = ref<string | null>(null);
 const listEl = ref<HTMLElement | null>(null);
@@ -84,6 +117,9 @@ function onDocClick(e: MouseEvent): void {
   const t = e.target as HTMLElement;
   if (showMembers.value && !t.closest(".chat-online") && !t.closest(".members-pop")) {
     showMembers.value = false;
+  }
+  if (reactForId.value && !t.closest(".rx-pop") && !t.closest(".rx-add")) {
+    reactForId.value = null;
   }
 }
 onMounted(() => {
@@ -435,6 +471,24 @@ onBeforeUnmount(() => {
                   aria-label="Reply to this message"
                   @click="startReply(m)"
                 >↩</button>
+                <button
+                  v-if="canReact"
+                  class="rx-add"
+                  :class="{ open: reactForId === m.id }"
+                  title="Add reaction"
+                  aria-label="Add reaction"
+                  @click.stop="toggleReactPalette(m)"
+                >＋</button>
+              </div>
+              <div v-if="reactForId === m.id" class="rx-pop">
+                <button
+                  v-for="r in REACTIONS"
+                  :key="r.kind"
+                  class="rx-opt"
+                  :title="r.kind"
+                  :aria-label="'React ' + r.kind"
+                  @click.stop="onReact(m, r.kind)"
+                >{{ r.emoji }}</button>
               </div>
               <div v-if="m.reply" class="msg-quote" role="button" tabindex="0" title="Jump to the original message" @click="jumpTo(m.reply.id)" @keydown.enter="jumpTo(m.reply.id)">
                 <span class="q-from">↩ {{ m.reply.from }}</span>
@@ -452,6 +506,16 @@ onBeforeUnmount(() => {
                 class="msg-text msg-caption"
                 :class="{ sticker: m.text.startsWith('sticker:') }"
               >{{ m.text.startsWith('sticker:') ? m.text.slice(8) : m.text }}</div>
+              <div v-if="reactionChips(m).length" class="msg-reactions">
+                <button
+                  v-for="c in reactionChips(m)"
+                  :key="c.kind"
+                  class="rx-chip"
+                  :class="{ mine: c.mine }"
+                  :title="c.mine ? 'Remove your reaction' : 'React ' + c.kind"
+                  @click="canReact && onReact(m, c.kind)"
+                >{{ c.emoji }}<span v-if="c.count > 1" class="rx-count">{{ c.count }}</span></button>
+              </div>
             </template>
           </div>
         </div>
@@ -1120,6 +1184,81 @@ onBeforeUnmount(() => {
 .msg-actions .msg-reply-btn { grid-column: 3; }
 .msg-reply-btn:hover { background: rgba(59, 130, 246, 0.15); }
 .msg:hover .msg-reply-btn { opacity: 1; }
+
+/* ── Reactions (Telegram-style: ＋ opens 👍👎❤️, chips show counts) ── */
+.msg { position: relative; }
+.rx-add {
+  width: 22px;
+  height: 20px;
+  margin-left: 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+  vertical-align: middle;
+}
+.rx-add:hover, .rx-add.open { background: rgba(59, 130, 246, 0.15); color: var(--accent); }
+.msg:hover .rx-add, .rx-add.open { opacity: 1; }
+@media (pointer: coarse) {
+  .rx-add { opacity: 1; } /* touch has no hover — keep it reachable */
+}
+.rx-pop {
+  position: absolute;
+  z-index: 5;
+  top: 26px;
+  right: 6px;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg-hover);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+.rx-opt {
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px 6px;
+  cursor: pointer;
+  transition: transform 0.1s ease, background 0.1s ease;
+}
+.rx-opt:hover { background: rgba(59, 130, 246, 0.18); transform: scale(1.15); }
+.msg-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.rx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg-hover);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.rx-chip:hover { border-color: var(--accent); }
+.rx-chip.mine {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.18);
+}
+.rx-count { font-size: 11px; font-weight: 700; color: var(--text-muted); }
+.rx-chip.mine .rx-count { color: var(--accent); }
 .msg-quote {
   display: flex;
   flex-direction: column;

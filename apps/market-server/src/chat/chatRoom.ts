@@ -39,6 +39,8 @@ interface Conn {
   admin: boolean;
   ip: string;
   lastChatAt: number;
+  /** Last reaction-toggle timestamp (flood guard). */
+  lastReactAt: number;
   /** Telegram popup ids delivered to THIS connection — receipts accepted
    *  only from sockets that saw the popup (anti-spoof). */
   tgPopups: Set<string>;
@@ -225,7 +227,7 @@ export class ChatRoom {
         .send(img.buffer);
     });
     app.get("/chat", { websocket: true }, (socket, req) => {
-      const conn: Conn = { socket, nick: null, admin: false, ip: req.ip ?? "", lastChatAt: 0, tgPopups: new Set(), alive: true };
+      const conn: Conn = { socket, nick: null, admin: false, ip: req.ip ?? "", lastChatAt: 0, lastReactAt: 0, tgPopups: new Set(), alive: true };
       // IP bans are enforced before anything else — banned means banned.
       if (this.isBannedIp(conn.ip)) {
         this.safeSend(conn, { type: "error", message: "You are banned from this room" });
@@ -289,6 +291,9 @@ export class ChatRoom {
         this.onChat(conn, String(msg.text ?? ""), typeof msg.img === "string" ? msg.img : undefined, replyId);
         return;
       }
+      case "react":
+        this.onReact(conn, String(msg.id ?? ""), msg.reaction);
+        return;
       case "delete":
         this.onDelete(conn, String(msg.id ?? ""));
         return;
@@ -401,6 +406,35 @@ export class ChatRoom {
     } catch {
       return null;
     }
+  }
+
+  /** Telegram-style reactions: one per user per message, same kind again
+   *  clears it. Stored ON the history message, so persistence (file +
+   *  redis), history frames and deletion cleanup all come for free. */
+  private onReact(conn: Conn, rawId: string, rawReaction: unknown): void {
+    if (!conn.nick) return; // observers can't react
+    if (this.isMutedNick(conn.nick)) return; // muted = read-only
+    // Flood guard: reaction toggles are cheap but must not be spammable
+    const now = Date.now();
+    if (conn.lastReactAt && now - conn.lastReactAt < 150) return;
+    conn.lastReactAt = now;
+
+    const kind =
+      rawReaction === "like" || rawReaction === "dislike" || rawReaction === "heart" ? rawReaction : null;
+    const m = this.history.find((x) => x.id === rawId.slice(0, 64));
+    if (!m) return;
+
+    if (kind === null) {
+      if (!m.reactions || !(conn.nick in m.reactions)) return; // nothing to clear
+      delete m.reactions[conn.nick];
+      if (Object.keys(m.reactions).length === 0) delete m.reactions;
+    } else {
+      if (m.reactions?.[conn.nick] === kind) return; // idempotent re-set
+      if (!m.reactions) m.reactions = {};
+      m.reactions[conn.nick] = kind;
+    }
+    this.schedulePersist();
+    this.broadcast({ type: "reactions", id: m.id, nick: conn.nick, reaction: kind });
   }
 
   private onChat(conn: Conn, text: string, img?: string, replyId?: string): void {

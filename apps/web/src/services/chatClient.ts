@@ -3,7 +3,7 @@
  * market server). Mirrors MarketWsClient's reconnect/backoff behavior but
  * with the chat protocol. Messages are plain JSON frames.
  */
-import type { ChatMessage, ChatServerMessage } from "@traderkomak/shared";
+import type { ChatMessage, ChatReactionKind, ChatServerMessage } from "@traderkomak/shared";
 
 export type ChatStatus = "connected" | "connecting" | "reconnecting" | "offline";
 
@@ -33,6 +33,8 @@ export interface ChatClientHandlers {
   onTgPopup?: (id: string) => void;
   /** Admin: who joined / closed the Telegram popup. */
   onTgResult?: (r: { nick: string; action: "join" | "close" }) => void;
+  /** Any user: a reaction changed on a message (null = cleared). */
+  onReaction?: (id: string, nick: string, reaction: ChatReactionKind | null) => void;
 }
 
 function chatUrl(): string {
@@ -107,6 +109,11 @@ export class ChatClient {
 
   sendText(text: string): void {
     this.send({ type: "chat", text });
+  }
+
+  /** Set / switch / clear (null) this user's reaction on a message. */
+  sendReaction(id: string, reaction: ChatReactionKind | null): void {
+    this.send({ type: "react", id, reaction });
   }
 
   sendImage(dataUrl: string): void {
@@ -412,6 +419,15 @@ export class ChatClient {
       case "tg_result":
         this.handlers.onTgResult?.({ nick: msg.nick, action: msg.action });
         break;
+      case "reactions": {
+        const kind = msg.reaction;
+        this.handlers.onReaction?.(
+          String(msg.id ?? ""),
+          String(msg.nick ?? ""),
+          kind === "like" || kind === "dislike" || kind === "heart" ? kind : null
+        );
+        break;
+      }
     }
   }
 }

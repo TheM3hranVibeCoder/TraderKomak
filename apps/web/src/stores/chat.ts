@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import type { ChatMessage } from "@traderkomak/shared";
+import type { ChatMessage, ChatReactionKind } from "@traderkomak/shared";
 import { ChatClient, type ChatStatus } from "@/services/chatClient";
 import { supabase, supabaseReady } from "@/services/supabase";
 
@@ -68,6 +68,32 @@ export const useChatStore = defineStore("chat", () => {
    *  (opening the panel jumps straight to it). */
   const unread = ref<number>(0);
   const firstUnseenTs = ref<number>(0);
+  /** Message reactions: messageId → { nick → kind }. Server echoes are the
+   *  authority; the sender applies optimistically for instant feedback. */
+  const reactions = ref<Record<string, Record<string, ChatReactionKind>>>({});
+
+  function applyReaction(id: string, reactionNick: string, kind: ChatReactionKind | null): void {
+    const cur = { ...(reactions.value[id] ?? {}) };
+    if (kind) cur[reactionNick] = kind;
+    else delete cur[reactionNick];
+    if (Object.keys(cur).length === 0) {
+      if (!(id in reactions.value)) return;
+      const next = { ...reactions.value };
+      delete next[id];
+      reactions.value = next;
+      return;
+    }
+    reactions.value = { ...reactions.value, [id]: cur };
+  }
+
+  /** Telegram toggle: same kind again clears, otherwise set/switch. */
+  function react(id: string, kind: ChatReactionKind): void {
+    if (!nick.value || !client) return;
+    const mine = reactions.value[id]?.[nick.value];
+    const next = mine === kind ? null : kind;
+    applyReaction(id, nick.value, next); // optimistic; server echo is idempotent
+    client.sendReaction(id, next);
+  }
   /** Last message ts this user has seen (persisted, so history loaded at
    *  page-open can be split into seen vs unseen). */
   let lastSeenTs = Number(localStorage.getItem(LASTSEEN_KEY)) || 0;
@@ -127,6 +153,18 @@ function addHealListeners(): void {
           try { localStorage.removeItem(BANNED_KEY); localStorage.removeItem("tk-chat-banned-at"); } catch {}
         }
         messages.value = list;
+        // History carries each message's reactions — rebuild the map wholesale
+        const rx: Record<string, Record<string, ChatReactionKind>> = {};
+        for (const m of list) {
+          if (m.reactions && Object.keys(m.reactions).length > 0) {
+            const rec: Record<string, ChatReactionKind> = {};
+            for (const [n, k] of Object.entries(m.reactions)) {
+              if (k === "like" || k === "dislike" || k === "heart") rec[n] = k;
+            }
+            if (Object.keys(rec).length > 0) rx[m.id] = rec;
+          }
+        }
+        reactions.value = rx;
         if (open.value && nick.value) {
           // Panel open with a nick = the user can actually read the list.
           const last = list[list.length - 1];
@@ -181,6 +219,7 @@ function addHealListeners(): void {
       },
       onDeleted: (id) => {
         messages.value = messages.value.filter((m) => m.id !== id);
+        applyReaction(id, "", null); // reactions die with the message
       },
       onSystem: (text, ts) => {
         if (!open.value || !nick.value) {
@@ -246,6 +285,9 @@ function addHealListeners(): void {
         // Latest result per user, shown as a badge on their row; the panel
         // clears them when it closes (ready for the next broadcast).
         tgFlags.value = { ...tgFlags.value, [r.nick]: r.action };
+      },
+      onReaction: (id, reactionNick, kind) => {
+        applyReaction(id, reactionNick, kind);
       },
     });
     clientAdminKey = currentKey;
@@ -488,6 +530,8 @@ function addHealListeners(): void {
     unread,
     firstUnseenTs,
     consumeFirstUnseen,
+    reactions,
+    react,
     error,
     mutes,
     bans,

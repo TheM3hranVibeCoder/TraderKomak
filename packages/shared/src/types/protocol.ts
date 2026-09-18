@@ -105,6 +105,10 @@ export interface ChatReplyRef {
   img?: boolean;
 }
 
+/** Telegram-style message reactions. One reaction per user per message;
+ *  sending the same kind again clears it. */
+export type ChatReactionKind = "like" | "dislike" | "heart";
+
 export interface ChatMessage {
   id: string;
   from: string;
@@ -121,6 +125,9 @@ export interface ChatMessage {
   owner?: boolean;
   /** The message this one replies to, if any. */
   reply?: ChatReplyRef;
+  /** nick → reaction kind; lives on the message so it persists with
+   *  history and dies with deletions automatically. */
+  reactions?: Partial<Record<string, ChatReactionKind>>;
 }
 
 export interface ChatJoinMessage {
@@ -159,6 +166,22 @@ export interface ChatBroadcastMessage {
   ts: number;
   owner?: boolean;
   reply?: ChatReplyRef;
+  reactions?: Partial<Record<string, ChatReactionKind>>;
+}
+
+/** Client → server: set / switch / clear (null) the sender's reaction. */
+export interface ChatReactMessage {
+  type: "react";
+  id: string;
+  reaction: ChatReactionKind | null;
+}
+
+/** Server → all clients: one user's reaction changed on a message. */
+export interface ChatReactionEventMessage {
+  type: "reactions";
+  id: string;
+  nick: string;
+  reaction: ChatReactionKind | null;
 }
 
 export interface ChatOnlineMessage {
@@ -245,6 +268,7 @@ export type ChatServerMessage =
   | ChatDmStatusMessage
   | ChatTgPopupMessage
   | ChatTgResultMessage
+  | ChatReactionEventMessage
   | PongMessage
   | ErrorMessage;
 
