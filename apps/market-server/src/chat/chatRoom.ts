@@ -25,6 +25,21 @@ import type { Log } from "../logger.js";
 
 const HISTORY_CAP = 200;
 const HISTORY_FILE = "chat-history.json";
+
+/** Per-IP fixed-window limiter for the unauthenticated photo route. */
+const IMG_RATE_WINDOW_MS = 60_000;
+const IMG_RATE_MAX = 240;
+const imgRateMap = new Map<string, { n: number; resetAt: number }>();
+function imgRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const e = imgRateMap.get(ip);
+  if (!e || e.resetAt < now) {
+    imgRateMap.set(ip, { n: 1, resetAt: now + IMG_RATE_WINDOW_MS });
+    return false;
+  }
+  e.n++;
+  return e.n > IMG_RATE_MAX;
+}
 const MOD_FILE = "chat-mod.json";
 const KNOWN_FILE = "chat-known.json";
 const TEXT_MAX = 400;
@@ -218,12 +233,20 @@ export class ChatRoom {
     // Chat photos: the history/broadcast frames carry only the message id —
     // the actual bytes are fetched here once and then served from the
     // browser's immutable cache (ids never repeat), so joins stay light.
+    // Per-IP fixed-window rate limit: ids are visible in the public chat,
+    // so without a cap the route is an unauthenticated bandwidth amplifier.
+    // (Behind the relay all conns share one source IP, so this acts as a
+    // global cap — same tradeoff as the candles limiter.)
     app.get<{ Params: { id: string } }>("/api/chat-img/:id", (request, reply) => {
+      if (imgRateLimited(request.ip ?? "unknown")) {
+        return reply.code(429).send({ error: { code: "RATE_LIMITED", message: "Too many requests — slow down" } });
+      }
       const img = this.getChatImg(String(request.params.id ?? "").slice(0, 64));
       if (!img) return reply.code(404).send({ error: { code: "NOT_FOUND" } });
       reply
         .header("Content-Type", img.type)
         .header("Cache-Control", "public, max-age=31536000, immutable")
+        .header("X-Content-Type-Options", "nosniff")
         .send(img.buffer);
     });
     app.get("/chat", { websocket: true }, (socket, req) => {

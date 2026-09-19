@@ -4,5 +4,19 @@
   "outputDirectory": "apps/web/dist",
   "installCommand": "npm install",
   "framework": null,
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self' 'sha256-olzUQo1QulreG4nXUFjtK6bAcblN0Hr9lu8EUUIDrHc='; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://flagcdn.com https://cdn.jsdelivr.net https://assets.coincap.io https://edge.traderkomak.ir; connect-src 'self' wss://edge.traderkomak.ir https://edge.traderkomak.ir https://hfamizhujmalwiumsfet.supabase.co; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+        },
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" }
+      ]
+    }
+  ]
 }
