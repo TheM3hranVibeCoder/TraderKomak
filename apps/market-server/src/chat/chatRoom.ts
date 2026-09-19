@@ -489,8 +489,12 @@ export class ChatRoom {
     }
     this.schedulePersist();
     // cid echoes the sender's optimistic-placeholder id so their client can
-    // swap it deterministically (never stored in history).
-    this.broadcast({ type: "chat", ...this.toWire(message), cid });
+    // swap it deterministically (never stored in history). The broadcast
+    // carries the photo BYTES inline (img) alongside imgId: live viewers
+    // render instantly over the reliable WS connection — a separate HTTP
+    // fetch through a flaky relay frequently resets and blanks the photo —
+    // while HISTORY stays light (imgId only), preserving the fast joins.
+    this.broadcast({ type: "chat", ...this.toWire(message), img: message.img, cid });
   }
 
   private onDelete(conn: Conn, id: string): void {
