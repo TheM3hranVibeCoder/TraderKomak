@@ -8,6 +8,8 @@ import type {
   SubscribeMessage,
   UnsubscribeMessage,
   PingMessage,
+  PauseMessage,
+  ResumeMessage,
   WatchMessage,
 } from "./types/protocol.js";
 
@@ -56,6 +58,10 @@ export function parseClientMessage(
       return parseWatch(parsed);
     case "ping":
       return ok({ type: "ping" } satisfies PingMessage);
+    case "pause":
+      return ok({ type: "pause" } satisfies PauseMessage);
+    case "resume":
+      return ok({ type: "resume" } satisfies ResumeMessage);
     default:
       return { ok: false, error: `Unknown message type "${String(parsed.type)}"` };
   }

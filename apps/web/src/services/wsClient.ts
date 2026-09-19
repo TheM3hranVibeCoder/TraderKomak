@@ -63,6 +63,7 @@ export class MarketWsClient {
   private closedByUser = false;
   private pending: { instrument: string; timeframe: Timeframe } | null = null;
   private current: { instrument: string; timeframe: Timeframe } | null = null;
+  private paused = false;
 
   constructor(handlers: WsHandlers) {
     this.handlers = handlers;
@@ -92,6 +93,7 @@ export class MarketWsClient {
   subscribe(instrument: string, timeframe: Timeframe): void {
     this.pending = { instrument, timeframe };
     this.current = { instrument, timeframe };
+    this.paused = false; // a fresh subscribe always streams
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.sendSubscribe(instrument, timeframe);
     } else if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
@@ -100,9 +102,23 @@ export class MarketWsClient {
     }
   }
 
+  /** Hidden-tab bandwidth saver: the server stops streaming ticks to a
+   *  paused connection. Ephemeral — NOT queued when offline (a reconnect
+   *  starts unpaused; the store re-pauses if the tab is still hidden). */
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    try {
+      this.ws.send(JSON.stringify({ type: paused ? "pause" : "resume" }));
+    } catch {
+      // ignore — the connection is going away anyway
+    }
+  }
+
   unsubscribe(): void {
     this.current = null;
     this.pending = null;
+    this.paused = false;
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       try {
         this.ws.send(JSON.stringify({ type: "unsubscribe" }));
@@ -135,6 +151,13 @@ export class MarketWsClient {
       // If we have a pending subscription, send it immediately.
       if (this.pending) {
         this.sendSubscribe(this.pending.instrument, this.pending.timeframe);
+      }
+      // A reconnect starts unpaused on the server — re-pause if the tab
+      // was hidden when the drop happened.
+      if (this.paused) {
+        try {
+          ws.send(JSON.stringify({ type: "pause" }));
+        } catch {}
       }
       // Also send a ping to verify liveness.
       try {

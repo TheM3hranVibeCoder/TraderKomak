@@ -41,6 +41,10 @@ interface ProviderStream {
 export class MarketHub {
   private readonly connections = new Map<WebSocket, Set<string>>();
   private readonly watchSubs = new Map<WebSocket, Set<string>>();
+  /** Hidden-tab bandwidth saver: paused connections receive no candle or
+   *  price ticks until they resume. Per-connection state — a reconnect
+   *  always starts unpaused. */
+  private readonly paused = new Set<WebSocket>();
   /** Connections awaiting a pong since their last ping. */
   private readonly awaitingPong = new Set<WebSocket>();
   private pingTimer: NodeJS.Timeout | null = null;
@@ -121,6 +125,7 @@ export class MarketHub {
     const text = JSON.stringify(payload);
     for (const [socket, subs] of this.connections) {
       if (!subs.has(key)) continue;
+      if (this.paused.has(socket)) continue;
       this.sendRaw(socket, text);
     }
   }
@@ -137,6 +142,7 @@ export class MarketHub {
     const text = JSON.stringify(payload);
     for (const [socket, watchSet] of this.watchSubs) {
       if (!watchSet.has(tick.instrument)) continue;
+      if (this.paused.has(socket)) continue;
       this.sendRaw(socket, text);
     }
   }
@@ -155,6 +161,7 @@ export class MarketHub {
     socket.on("error", () => {});
     socket.on("close", () => {
       this.awaitingPong.delete(socket);
+      this.paused.delete(socket);
       this.releaseAll(subs);
       this.connections.delete(socket);
       this.watchSubs.delete(socket);
@@ -182,6 +189,12 @@ export class MarketHub {
     switch (msg.type) {
       case "ping":
         this.send(socket, { type: "pong" });
+        return;
+      case "pause":
+        this.paused.add(socket);
+        return;
+      case "resume":
+        this.paused.delete(socket);
         return;
       case "unsubscribe":
         this.releaseAll(subs);

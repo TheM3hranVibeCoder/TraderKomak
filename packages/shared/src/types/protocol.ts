@@ -42,7 +42,24 @@ export interface PingMessage {
   type: "ping";
 }
 
-export type ClientMessage = SubscribeMessage | UnsubscribeMessage | WatchMessage | PingMessage;
+/** Hidden-tab bandwidth saver: the server stops streaming candle/price
+ *  ticks to a paused connection; resume restores ticks. State is per
+ *  connection — a reconnect always starts unpaused. */
+export interface PauseMessage {
+  type: "pause";
+}
+
+export interface ResumeMessage {
+  type: "resume";
+}
+
+export type ClientMessage =
+  | SubscribeMessage
+  | UnsubscribeMessage
+  | WatchMessage
+  | PingMessage
+  | PauseMessage
+  | ResumeMessage;
 
 export interface SnapshotMessage {
   type: "snapshot";

@@ -499,6 +499,10 @@ export const useMarketStore = defineStore("market", () => {
   }
 
   function onVisibility(): void {
+    // Hidden-tab bandwidth saver: stop the server streaming ticks into a
+    // tab nobody is watching (the dominant traffic on the free tier).
+    // Only an EXISTING connection — never dial one just to pause it.
+    if (ws) ws.setPaused(document.visibilityState === "hidden");
     if (document.visibilityState !== "visible") return;
     const replay = useReplayStore();
     if (replay.active) return; // replay manages its own window

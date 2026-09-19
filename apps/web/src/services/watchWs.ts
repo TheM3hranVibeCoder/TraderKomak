@@ -17,8 +17,25 @@ export class WatchWsClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closedByUser = false;
   private attempt = 0;
+  /** Hidden-tab bandwidth saver: paused = server skips price ticks. */
+  private paused = false;
+  private visibilityCb: () => void;
 
-  constructor(private onPrice: (tick: MarketTick) => void) {}
+  constructor(private onPrice: (tick: MarketTick) => void) {
+    this.visibilityCb = () => {
+      this.paused = document.visibilityState === "hidden";
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      try {
+        this.ws.send(JSON.stringify({ type: this.paused ? "pause" : "resume" }));
+      } catch {}
+    };
+    document.addEventListener("visibilitychange", this.visibilityCb);
+  }
+
+  destroy(): void {
+    document.removeEventListener("visibilitychange", this.visibilityCb);
+    this.disconnect();
+  }
 
   setInstruments(instruments: string[]) {
     this.instruments = [...instruments];
@@ -61,6 +78,12 @@ export class WatchWsClient {
     ws.addEventListener("open", () => {
       this.attempt = 0;
       this.sendWatch();
+      // A reconnect starts unpaused on the server — re-pause if hidden.
+      if (this.paused) {
+        try {
+          ws.send(JSON.stringify({ type: "pause" }));
+        } catch {}
+      }
     });
     ws.addEventListener("message", (ev) => {
       try {
