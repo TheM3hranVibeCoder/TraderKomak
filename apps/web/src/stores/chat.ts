@@ -179,11 +179,11 @@ function addHealListeners(): void {
         }
       },
       onChat: (msg) => {
+        const norm = (s: string | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
         // Own echo: swap the optimistic placeholder for the real message.
         if (msg.from === nick.value) {
           // New servers echo the client id (deterministic); fall back to a
           // whitespace-normalized text match for old servers.
-          const norm = (s: string | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
           const pIdx = msg.cid
             ? pendingLocal.findIndex((p) => p.localId === msg.cid)
             : pendingLocal.findIndex(
@@ -192,17 +192,17 @@ function addHealListeners(): void {
                   norm(p.text) === norm(msg.text) &&
                   !!(p.img ?? p.imgId) === !!(msg.img ?? msg.imgId)
               );
-            if (pIdx >= 0) {
-              const p = pendingLocal.splice(pIdx, 1)[0]!;
-              // An old server drops the reply field on the echo — merge the
-              // local quote snapshot so the reply block never flashes away.
-              let merged = p.reply && !msg.reply ? { ...msg, reply: p.reply } : msg;
-              // Keep the LOCAL image bytes on the sender's own message:
-              // swapping the optimistic data URL for the server URL would
-              // remount the <img> and blink, re-downloading bytes the
-              // browser already has.
-              merged = { ...merged, img: p.img ?? merged.img };
-              const i = messages.value.findIndex((m) => m.id === p.localId);
+          if (pIdx >= 0) {
+            const p = pendingLocal.splice(pIdx, 1)[0]!;
+            // An old server drops the reply field on the echo — merge the
+            // local quote snapshot so the reply block never flashes away.
+            let merged = p.reply && !msg.reply ? { ...msg, reply: p.reply } : msg;
+            // Keep the LOCAL image bytes on the sender's own message:
+            // swapping the optimistic data URL for the server URL would
+            // remount the <img> and blink, re-downloading bytes the
+            // browser already has.
+            merged = { ...merged, img: p.img ?? merged.img };
+            const i = messages.value.findIndex((m) => m.id === p.localId);
             if (i >= 0) {
               const next = [...messages.value];
               next[i] = merged;
@@ -210,6 +210,28 @@ function addHealListeners(): void {
             } else {
               messages.value = [...messages.value, msg];
             }
+            if (open.value) markSeen(msg.ts);
+            return;
+          }
+          // Last line of defense: the echo arrived without a pending match
+          // (12s sweep already fired, or the match layers both missed).
+          // If an optimistic placeholder with the same signature is still
+          // on screen, REPLACE it — never append a duplicate beside it.
+          const dupIdx = messages.value.findIndex(
+            (m) =>
+              m.id.startsWith("local-") &&
+              m.from === msg.from &&
+              norm(m.text) === norm(msg.text) &&
+              !!(m.img ?? m.imgId) === !!(msg.img ?? msg.imgId)
+          );
+          if (dupIdx >= 0) {
+            const ghost = messages.value[dupIdx]!;
+            const merged = { ...msg, img: ghost.img ?? msg.img };
+            const next = [...messages.value];
+            next[dupIdx] = merged;
+            messages.value = next;
+            const stale = pendingLocal.findIndex((p) => p.localId === ghost.id);
+            if (stale >= 0) pendingLocal.splice(stale, 1);
             if (open.value) markSeen(msg.ts);
             return;
           }
