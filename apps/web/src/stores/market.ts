@@ -340,10 +340,8 @@ export const useMarketStore = defineStore("market", () => {
         // (lazy loading re-fetches that range from the provider instead).
         const tfSec = TIMEFRAME_SECONDS[wantTimeframe as keyof typeof TIMEFRAME_SECONDS] ?? 60;
         const maxGapSec = Math.max(120 * tfSec, 1800); // lulls + short breaks pass; overnights cut
-        const cachedRaw =
-          data.length > 0
-            ? loadCache(wantInstrument, wantTimeframe).filter((c) => c.time < data[0]!.time)
-            : [];
+        const cachedAll = data.length > 0 ? loadCache(wantInstrument, wantTimeframe) : [];
+        const cachedRaw = cachedAll.filter((c) => c.time < data[0]!.time);
         let keepFrom = cachedRaw.length;
         while (keepFrom > 0) {
           const nextTime = keepFrom < cachedRaw.length ? cachedRaw[keepFrom]!.time : data[0]!.time;
@@ -351,7 +349,16 @@ export const useMarketStore = defineStore("market", () => {
           else break;
         }
         const cached = cachedRaw.slice(keepFrom);
-        candles.value = cached.length > 0 ? mergeCandles(data, cached) : data;
+        // NEWER side: cached candles beyond the fetched tail are the
+        // LIVE-ACCURATE tail. Right after a server restart the freshly
+        // rebuilt history can lag the live tail by a few buckets — dropping
+        // these erased the last candles on every refresh (they only
+        // rebuilt tick-by-tick afterwards).
+        const newerLocal =
+          data.length > 0 ? cachedAll.filter((c) => c.time > data[data.length - 1]!.time) : [];
+        let merged = cached.length > 0 ? mergeCandles(data, cached) : data;
+        if (newerLocal.length > 0) merged = mergeCandles(merged, newerLocal);
+        candles.value = merged;
         rebuildTimeIndex();
         hasMore.value = data.length >= HISTORY_COUNT;
         awaitingHistory.value = false; // history landed → accept live frames
