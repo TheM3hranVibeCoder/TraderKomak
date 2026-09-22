@@ -716,7 +716,7 @@ export class ChatRoom {
       const known = [...this.known.entries()]
         .map(([nick, v]) => ({ nick, lastSeen: v.lastSeen, online: onlineSet.has(nick) }))
         .sort((a, b) => b.lastSeen - a.lastSeen)
-        .slice(0, 100);
+        .slice(0, 1000);
       payload.known = known;
     }
     return payload;
