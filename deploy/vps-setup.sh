@@ -67,13 +67,23 @@ mkdir -p /opt/traderkomak/data
 
 echo "==> 5/7 Start under pm2"
 cd "$APP_DIR/apps/market-server"
-if pm2 describe traderkomak-server >/dev/null 2>&1; then
-  pm2 restart traderkomak-server --update-env
-else
-  pm2 start dist/index.js --name traderkomak-server --time
+# pm2's global bin can land outside sudo's secure PATH — resolve it
+PM2_BIN="$(command -v pm2 || true)"
+if [ -z "$PM2_BIN" ] && command -v npm >/dev/null 2>&1; then
+  PM2_BIN="$(npm prefix -g 2>/dev/null)/bin/pm2"
 fi
-pm2 save
-pm2 startup systemd -u root --hp /root >/dev/null 2>&1 || true
+if [ -z "$PM2_BIN" ] || [ ! -x "$PM2_BIN" ]; then
+  npm install -g --no-silent pm2 || npm install -g pm2
+  PM2_BIN="$(command -v pm2 || echo "$(npm prefix -g)/bin/pm2")"
+fi
+echo "pm2: $PM2_BIN"
+if "$PM2_BIN" describe traderkomak-server >/dev/null 2>&1; then
+  "$PM2_BIN" restart traderkomak-server --update-env
+else
+  "$PM2_BIN" start dist/index.js --name traderkomak-server --time
+fi
+"$PM2_BIN" save
+"$PM2_BIN" startup systemd -u root --hp /root >/dev/null 2>&1 || true
 
 echo "==> 6/7 Caddy (automatic HTTPS for $DOMAIN)"
 apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https >/dev/null
