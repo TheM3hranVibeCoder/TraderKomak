@@ -12,8 +12,17 @@ set -euo pipefail
 
 DOMAIN="edge.traderkomak.ir"           # the hostname browsers connect to
 APP_DIR="/opt/traderkomak/app"
-REPO="https://github.com/TheM3hranVibeCoder/TraderKomak.git"
+REPO_BASE="https://github.com/TheM3hranVibeCoder/TraderKomak.git"
 PORT=8080
+
+# The repo is PRIVATE — pass a GitHub token (classic, "repo" scope) as the
+# first argument so the script can download it:
+#   bash vps-setup.sh ghp_xxxxxxxxxxxx
+GH_TOKEN="${1:-}"
+REPO_URL="$REPO_BASE"
+if [ -n "$GH_TOKEN" ]; then
+  REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/TheM3hranVibeCoder/TraderKomak.git"
+fi
 
 echo "==> 1/7 Base packages"
 apt-get update -qq
@@ -31,7 +40,9 @@ echo "==> 3/7 Code"
 if [ -d "$APP_DIR/.git" ]; then
   cd "$APP_DIR" && git pull --ff-only
 else
-  git clone "$REPO" "$APP_DIR" && cd "$APP_DIR"
+  git clone "$REPO_URL" "$APP_DIR" && cd "$APP_DIR"
+  # keep the token in the remote so future re-runs can pull updates
+  git remote set-url origin "$REPO_URL"
 fi
 npm ci --silent
 npm run build:shared --silent
