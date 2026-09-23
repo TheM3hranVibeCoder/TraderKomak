@@ -4904,36 +4904,6 @@ onBeforeUnmount(() => {
           />
         </g>
       </svg>
-      <!-- Measure tool lives in its OWN layer above the candle canvases:
-           the drawing layer is deliberately z-ordered behind the candles
-           (TradingView-style rectangles), but the measure must be readable
-           on top of them. -->
-    </div>
-    <div class="measure-layer drawing-clip" :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }">
-      <div
-        v-if="measureView"
-        class="measure-box"
-        :class="measureView.dir"
-        :style="{
-          left: measureView.left + 'px',
-          top: measureView.top + 'px',
-          width: measureView.width + 'px',
-          height: measureView.height + 'px',
-        }"
-      >
-        <span class="measure-arrow" aria-hidden="true"></span>
-        <span class="measure-tip" aria-hidden="true"></span>
-      </div>
-      <div
-        v-if="measureView"
-        class="measure-label"
-        :class="measureView.dir"
-        :style="{ left: measureView.labelLeft + 'px', top: measureView.labelTop + 'px' }"
-      >
-        <div class="measure-l1">{{ measureView.row1 }}</div>
-        <div class="measure-l2">{{ measureView.row2 }}</div>
-      </div>
-    </div>
       <!-- Long/Short positions: green profit box (entry↔TP) + red loss box
            (entry↔SL) at 20% opacity, level lines, and 1R..NR reward lines. -->
       <svg class="trend-svg pos-svg">
@@ -4971,6 +4941,35 @@ onBeforeUnmount(() => {
             : { top: s.y + 'px', left: s.kind === 'hray' ? s.x + 'px' : '0px', borderColor: s.color }
         "
       ></div>
+    </div>
+
+    <!-- Measure tool layer: ABOVE the candle canvases — the drawing layer
+         is deliberately behind them, but the measure must stay readable
+         when drawn over candle bodies. -->
+    <div class="measure-layer drawing-clip" :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }">
+      <div
+        v-if="measureView"
+        class="measure-box"
+        :class="measureView.dir"
+        :style="{
+          left: measureView.left + 'px',
+          top: measureView.top + 'px',
+          width: measureView.width + 'px',
+          height: measureView.height + 'px',
+        }"
+      >
+        <span class="measure-arrow" aria-hidden="true"></span>
+        <span class="measure-tip" aria-hidden="true"></span>
+      </div>
+      <div
+        v-if="measureView"
+        class="measure-label"
+        :class="measureView.dir"
+        :style="{ left: measureView.labelLeft + 'px', top: measureView.labelTop + 'px' }"
+      >
+        <div class="measure-l1">{{ measureView.row1 }}</div>
+        <div class="measure-l2">{{ measureView.row2 }}</div>
+      </div>
     </div>
 
     <!-- Interaction layer: invisible duplicates of the same geometry sitting
