@@ -1562,6 +1562,13 @@ watch(
     polyPaletteOpen.value = false;
     // Switching away from a drawing tool aborts any in-progress drawing
     cancelDraw();
+    // Switching tools aborts a PENDING measure; a finished one stays until
+    // the next chart press or drawing
+    if (tool !== "measure" && measure.value && !measure.value.done) {
+      measure.value = null;
+      stopMeasureFollow();
+      recalcRects();
+    }
   }
 );
 
@@ -1792,6 +1799,36 @@ const rectPixels = ref<RectPixel[]>([]);
  *  real (stored) rectangles. */
 const hitRects = computed(() => rectPixels.value.filter((r) => r.id !== "__preview"));
 const drawingState = ref<{ time1: number; price1: number; time2: number; price2: number } | null>(null);
+/** Measure tool (TradingView-style): two clicks — start, end. Ephemeral:
+ *  never persisted, disappears on the third chart press / new drawing. */
+const measure = ref<{ t1: number; p1: number; t2: number; p2: number; done: boolean } | null>(null);
+const measureView = ref<{
+  left: number; top: number; width: number; height: number;
+  dir: "up" | "down"; row1: string; row2: string;
+} | null>(null);
+let measureFollow: ((ev: MouseEvent) => void) | null = null;
+function stopMeasureFollow(): void {
+  if (measureFollow) {
+    window.removeEventListener("pointermove", measureFollow);
+    measureFollow = null;
+  }
+}
+function startMeasureFollow(): void {
+  stopMeasureFollow();
+  const move = (ev: MouseEvent) => {
+    if (!measure.value || measure.value.done || !adapter || !containerRef.value) return;
+    const r = containerRef.value.getBoundingClientRect();
+    const t = adapter.xToTime(ev.clientX - r.left);
+    const p = adapter.yToPrice(ev.clientY - r.top);
+    if (t !== null && p !== null) {
+      measure.value.t2 = t;
+      measure.value.p2 = p;
+      recalcRects();
+    }
+  };
+  window.addEventListener("pointermove", move);
+  measureFollow = move;
+}
 const drawingPreview = ref<RectPixel | null>(null);
 const selectedRect = ref<DrawingRect | null>(null);
 const editPanelPos = ref<{ x: number; y: number } | null>(null);
@@ -2141,10 +2178,51 @@ function isInChartArea(e: MouseEvent): boolean {
 function recalcRects(): void {
   if (!adapter) {
     rectPixels.value = [];
+    measureView.value = null;
     return;
   }
   const rects = drawingsStore.getFor(market.instrument);
   const out: RectPixel[] = [];
+
+  // Measure tool: project the box and build its stat rows
+  const mv = measure.value;
+  if (mv) {
+    const mx1 = adapter.timeToX(mv.t1);
+    const my1 = adapter.getPriceY(mv.p1);
+    const mx2 = adapter.timeToX(mv.t2);
+    const my2 = adapter.getPriceY(mv.p2);
+    if (mx1 !== null && my1 !== null && mx2 !== null && my2 !== null) {
+      const up = mv.p2 >= mv.p1;
+      const pct = ((mv.p2 - mv.p1) / mv.p1) * 100;
+      const diff = Math.abs(mv.p2 - mv.p1);
+      const pipSize = instrumentPipSize(market.instrument);
+      const pipStr = pipSize < 1 ? `${(diff / pipSize).toFixed(1)} pips` : `${+diff.toFixed(instrumentPrecision(market.instrument))} pts`;
+      const totalSec = Math.abs(mv.t2 - mv.t1);
+      const dd = Math.floor(totalSec / 86400);
+      const hh = Math.floor((totalSec % 86400) / 3600);
+      const mm = Math.floor((totalSec % 3600) / 60);
+      const ss = Math.floor(totalSec % 60);
+      const durStr =
+        [dd ? `${dd}d` : "", hh ? `${hh}h` : "", mm ? `${mm}m` : "", !dd && ss ? `${ss}s` : ""]
+          .filter(Boolean)
+          .slice(0, 2)
+          .join(" ") || "0s";
+      const bars = Math.round(Math.abs(mv.t2 - mv.t1) / (TIMEFRAME_SECONDS[market.timeframe as keyof typeof TIMEFRAME_SECONDS] ?? 60));
+      measureView.value = {
+        left: Math.min(mx1, mx2),
+        top: Math.min(my1, my2),
+        width: Math.max(1, Math.abs(mx2 - mx1)),
+        height: Math.max(1, Math.abs(my2 - my1)),
+        dir: up ? "up" : "down",
+        row1: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%  ·  ${pipStr}`,
+        row2: `${bars} bars · ${durStr}`,
+      };
+    } else {
+      measureView.value = null;
+    }
+  } else {
+    measureView.value = null;
+  }
 
   const project = (x1: number, y1: number, x2: number, y2: number) => ({
     left: Math.min(x1, x2),
@@ -2563,6 +2641,9 @@ function extendRecalcFrames(ms: number): void {
 /** Begin a rectangle: corner 1 at the pointer, preview follows the mouse. */
 function beginDraw(e: MouseEvent): void {
   if (!adapter || !containerRef.value) return;
+  // Starting another drawing dismisses a finished measure
+  measure.value = null;
+  stopMeasureFollow();
   const crect = containerRef.value.getBoundingClientRect();
   const x = e.clientX - crect.left;
   const y = e.clientY - crect.top;
@@ -4112,6 +4193,39 @@ onMounted(async () => {
     }
     // The price/time scales are not drawing surfaces — ignore presses there
     if (!isInChartArea(e)) return;
+    // ── Measure tool (or Shift+click from any tool): two clicks — start,
+    //    end. Third press dismisses; a new measure replaces a finished one.
+    const wantMeasure = (drawingsStore.activeTool === "measure" || e.shiftKey) && e.button === 0 && !drawingState.value && !posState.value;
+    if (wantMeasure) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!adapter || !containerRef.value) return;
+      const r = containerRef.value.getBoundingClientRect();
+      const mt = adapter.xToTime(e.clientX - r.left);
+      const mp = adapter.yToPrice(e.clientY - r.top);
+      if (mt === null || mp === null) return;
+      const m = measure.value;
+      if (m && !m.done) {
+        // Second click: end — the measure stays on the chart
+        measure.value = { ...m, t2: mt, p2: mp, done: true };
+        stopMeasureFollow();
+      } else if (m && m.done && !e.shiftKey) {
+        // Third press: dismiss
+        measure.value = null;
+        stopMeasureFollow();
+      } else {
+        // First click (or Shift-replace): start, preview follows cursor
+        measure.value = { t1: mt, p1: mp, t2: mt, p2: mp, done: false };
+        startMeasureFollow();
+      }
+      recalcRects();
+      return;
+    }
+    // A finished measure disappears on the next chart press / new drawing
+    if (measure.value?.done) {
+      measure.value = null;
+      stopMeasureFollow();
+    }
     const tool = drawingsStore.activeTool;
     if (tool === "hline" || tool === "hray" || tool === "vline") {
       if (e.button !== 0) return;
@@ -4489,6 +4603,7 @@ onBeforeUnmount(() => {
     document.removeEventListener("visibilitychange", visibilityRecalcCb);
     visibilityRecalcCb = null;
   }
+  stopMeasureFollow();
   if (onMouseMoveRef) {
     window.removeEventListener("pointermove", onMouseMoveRef);
   }
@@ -4752,6 +4867,23 @@ onBeforeUnmount(() => {
           />
         </g>
       </svg>
+      <!-- Measure tool: blue/red box with % + pips inside and a bars/days
+           strip along the bottom edge. Rendered last so it sits above all
+           other drawings while it is on screen. -->
+      <div
+        v-if="measureView"
+        class="measure-box"
+        :class="measureView.dir"
+        :style="{
+          left: measureView.left + 'px',
+          top: measureView.top + 'px',
+          width: measureView.width + 'px',
+          height: measureView.height + 'px',
+        }"
+      >
+        <div class="measure-r1">{{ measureView.row1 }}</div>
+        <div class="measure-r2">{{ measureView.row2 }}</div>
+      </div>
       <!-- Long/Short positions: green profit box (entry↔TP) + red loss box
            (entry↔SL) at 20% opacity, level lines, and 1R..NR reward lines. -->
       <svg class="trend-svg pos-svg">
@@ -6748,6 +6880,55 @@ onBeforeUnmount(() => {
   border-radius: 2px;
   pointer-events: none;
   transition: box-shadow 150ms;
+}
+/* Measure tool (TradingView-style): blue/red box, % + pips centered,
+   bars/days strip pinned to the bottom edge. */
+.measure-box {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  border-radius: 4px;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 4;
+  min-width: 90px;
+  min-height: 34px;
+}
+.measure-box.up {
+  background: rgba(41, 98, 255, 0.2);
+  border: 1px solid rgba(41, 98, 255, 0.95);
+}
+.measure-box.down {
+  background: rgba(239, 83, 80, 0.18);
+  border: 1px solid rgba(239, 83, 80, 0.95);
+}
+.measure-r1 {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+  white-space: nowrap;
+  padding: 0 6px;
+}
+.measure-box.up .measure-r1 {
+  color: #dbe7ff;
+}
+.measure-box.down .measure-r1 {
+  color: #ffd9d6;
+}
+.measure-r2 {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  white-space: nowrap;
+  padding: 1px 6px 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.25);
+  align-self: stretch;
+  text-align: center;
 }
 .drawing-hit-rect {
   position: absolute;

@@ -278,7 +278,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
   const polys = ref<Record<string, DrawingPoly[]>>(loadPolys());
   const positions = ref<Record<string, DrawingPosition[]>>(loadPositions());
   const singles = ref<Record<SingleKind, Record<string, SingleDrawing[]>>>(loadSingles());
-  const activeTool = ref<"cursor" | "position" | "rectangle" | "trendline" | "polyline" | "hline" | "hray" | "vline">("cursor");
+  const activeTool = ref<"cursor" | "position" | "rectangle" | "trendline" | "polyline" | "hline" | "hray" | "vline" | "measure">("cursor");
   /** Magnet mode: snap drawing points to the nearest candle's high/low.
    *  Latched by the toolbar button; Ctrl temporarily forces it either way. */
   const magnet = ref(localStorage.getItem("tk-magnet") === "1");
