@@ -2205,6 +2205,8 @@ function recalcRects(): void {
     const my2 = adapter.getPriceY(mv.p2);
     if (mx1 !== null && my1 !== null && mx2 !== null && my2 !== null) {
       const up = mv.p2 >= mv.p1;
+      const w = Math.abs(mx2 - mx1);
+      const h = Math.abs(my2 - my1);
       const pct = ((mv.p2 - mv.p1) / mv.p1) * 100;
       const diff = Math.abs(mv.p2 - mv.p1);
       const pipSize = instrumentPipSize(market.instrument);
@@ -2228,16 +2230,22 @@ function recalcRects(): void {
           .slice(0, 2)
           .join(" ") || "0s";
       const bars = Math.round(Math.abs(mv.t2 - mv.t1) / (TIMEFRAME_SECONDS[market.timeframe as keyof typeof TIMEFRAME_SECONDS] ?? 60));
+      // Pending preview collapses to guide lines near the start point
+      // (TradingView-style): a horizontal line at the start price when
+      // moving sideways, a vertical line at the start time when moving
+      // up/down — not a stubby rectangle.
+      const thinH = !mv.done && h < 10;
+      const thinV = !mv.done && w < 10 && !thinH;
       measureView.value = {
-        left: Math.min(mx1, mx2),
-        top: Math.min(my1, my2),
-        width: Math.max(1, Math.abs(mx2 - mx1)),
-        height: Math.max(1, Math.abs(my2 - my1)),
+        left: thinV ? mx1 - 1 : Math.min(mx1, mx2),
+        top: thinH ? my1 - 1 : Math.min(my1, my2),
+        width: thinV ? 2 : Math.max(1, w),
+        height: thinH ? 2 : Math.max(1, h),
         dir: up ? "up" : "down",
         row1: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%  ·  ${valStr}`,
         row2: `${bars} bars · ${durStr}`,
-        labelLeft: (Math.min(mx1, mx2) + Math.max(1, Math.abs(mx2 - mx1)) / 2),
-        labelTop: up ? Math.min(my1, my2) : Math.min(my1, my2) + Math.max(1, Math.abs(my2 - my1)),
+        labelLeft: thinV ? mx1 : Math.min(mx1, mx2) + w / 2,
+        labelTop: thinH ? my1 - 1 : up ? Math.min(my1, my2) : Math.min(my1, my2) + h,
       };
     } else {
       measureView.value = null;
@@ -4217,7 +4225,11 @@ onMounted(async () => {
     if (!isInChartArea(e)) return;
     // ── Measure tool (or Shift+click from any tool): two clicks — start,
     //    end. Third press dismisses; a new measure replaces a finished one.
-    const wantMeasure = (drawingsStore.activeTool === "measure" || e.shiftKey) && e.button === 0 && !drawingState.value && !posState.value;
+    //    A PENDING measure ends on the next click even without Shift held
+    //    (the user may release Shift between the two clicks).
+    const wantMeasure =
+      (drawingsStore.activeTool === "measure" || e.shiftKey || (measure.value && !measure.value.done)) &&
+      e.button === 0 && !drawingState.value && !posState.value;
     if (wantMeasure) {
       e.preventDefault();
       e.stopPropagation();
@@ -6921,8 +6933,6 @@ onBeforeUnmount(() => {
   pointer-events: none;
   overflow: hidden;
   z-index: 4;
-  min-width: 26px;
-  min-height: 30px;
 }
 .measure-box.up {
   background: rgba(41, 98, 255, 0.18);
