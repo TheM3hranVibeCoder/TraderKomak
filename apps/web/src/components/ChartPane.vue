@@ -10,7 +10,7 @@ import { useIndicatorsStore, sessionKindAt, nextBoundaryAfter, boundaryEpoch, CH
 import DemoPanel from "./DemoPanel.vue";
 import type { Candle } from "@traderkomak/shared";
 import { currencyFlagUrl, commodityIcon, generatedCoinIcon, symbolParts } from "@/utils/flags";
-import { TIMEFRAME_SECONDS, instrumentPrecision, instrumentPipSize, usesPips, providerOf, binanceBucketStart, oandaDailyBucketStart, oandaH4BucketStart, oandaWeeklyBucketStart, oandaMonthlyBucketStart } from "@traderkomak/shared";
+import { TIMEFRAME_SECONDS, instrumentPrecision, instrumentPipSize, instrumentPipUnit, providerOf, binanceBucketStart, oandaDailyBucketStart, oandaH4BucketStart, oandaWeeklyBucketStart, oandaMonthlyBucketStart } from "@traderkomak/shared";
 
 const props = defineProps<{
   candles: Candle[];
@@ -2209,18 +2209,9 @@ function recalcRects(): void {
       const h = Math.abs(my2 - my1);
       const pct = ((mv.p2 - mv.p1) / mv.p1) * 100;
       const diff = Math.abs(mv.p2 - mv.p1);
-      // MT5-style pip value per instrument class: forex uses the classic
-      // pip (0.0001; 0.01 for JPY quotes), gold's pip is 0.1, silver's
-      // 0.01, crypto/indices count whole points (pip = 1).
-      const instU = market.instrument.toUpperCase();
-      const pipSizeM = usesPips(instU)
-        ? instrumentPipSize(instU)
-        : instU.startsWith("XAU")
-          ? 0.1
-          : instU.startsWith("XAG")
-            ? 0.01
-            : 1;
-      const valStr = `${(diff / pipSizeM).toFixed(pipSizeM < 1 ? 1 : 0)} pips`;
+      // MT5-style pip value per instrument class (see instrumentPipUnit):
+      // forex 0.0001 (0.01 JPY), gold 0.1, silver 0.01, crypto/indices 1.
+      const valStr = `${(diff / instrumentPipUnit(market.instrument)).toFixed(instrumentPipUnit(market.instrument) < 1 ? 1 : 0)} pips`;
       const totalSec = Math.abs(mv.t2 - mv.t1);
       const dd = Math.floor(totalSec / 86400);
       const hh = Math.floor((totalSec % 86400) / 3600);
@@ -2482,7 +2473,9 @@ const buildPolyPixel = (
   // Long/Short positions
   const posOut: PositionPixel[] = [];
   const precision = instrumentPrecision(market.instrument);
-  const pipSize = instrumentPipSize(market.instrument);
+  // MT5-style pip unit (gold 0.1, forex 0.0001/0.01, crypto 1) so the
+  // position readout matches the Measure tool's convention.
+  const pipSize = instrumentPipUnit(market.instrument);
   const buildPosPixel = (
     ps: {
       id: string;

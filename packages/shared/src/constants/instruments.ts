@@ -215,6 +215,18 @@ export function usesPips(instrument: string): boolean {
   return PIP_INSTRUMENTS.has(normalizeInstrument(instrument).replace(/^D_/, ""));
 }
 
+/** MT5-style pip unit for measurement readouts: forex uses the classic pip
+ *  (0.0001; 0.01 for JPY quotes), gold 0.1, silver 0.01, crypto/indices
+ *  count whole points (1.0). Distinct from instrumentPipSize, which keeps
+ *  the raw instrument precision (gold 0.01) for trading math. */
+export function instrumentPipUnit(instrument: string): number {
+  const norm = normalizeInstrument(instrument).replace(/^D_/, "");
+  if (PIP_INSTRUMENTS.has(norm)) return instrumentPipSize(norm);
+  if (norm === "XAU_USD") return 0.1;
+  if (norm === "XAG_USD") return 0.01;
+  return 1;
+}
+
 /**
  * Normalizes user/provider input to canonical form:
  *   "eur/usd" → EUR_USD      "xauusd" → XAU_USD
