@@ -203,6 +203,18 @@ export function instrumentPipSize(instrument: string): number {
   return 0.0001;
 }
 
+/** Instruments with a real pip convention (forex pairs only). Gold, silver,
+ *  crypto and indices quote in price points — a measure tool on them must
+ *  show the raw price difference, not a (huge, meaningless) pip count. */
+const PIP_INSTRUMENTS: ReadonlySet<string> = new Set([
+  "EUR_USD", "GBP_USD", "USD_JPY", "USD_CHF", "AUD_USD", "USD_CAD",
+  "NZD_USD", "EUR_GBP", "GBP_JPY", "EUR_JPY", "AUD_JPY",
+]);
+
+export function usesPips(instrument: string): boolean {
+  return PIP_INSTRUMENTS.has(normalizeInstrument(instrument).replace(/^D_/, ""));
+}
+
 /**
  * Normalizes user/provider input to canonical form:
  *   "eur/usd" → EUR_USD      "xauusd" → XAU_USD

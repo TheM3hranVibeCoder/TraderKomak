@@ -14,7 +14,7 @@ const ICONS: Record<string, string> = {
   position: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="12" x2="21" y2="12"/><path d="M12 9V3.5M12 3.5L9.5 6M12 3.5L14.5 6"/><path d="M12 15v5.5M12 20.5L9.5 18M12 20.5l2.5-2.5"/></svg>`,
   polyline: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-10 5 6 7-9"/></svg>`,
   rectangle: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="6.5" width="18" height="11" rx="2"/></svg>`,
-  measure: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M3 17L17 3"/><path d="M14 3h3v3" /><path d="M3 14v3h3"/><path d="M10 21l11-11" stroke-dasharray="2 2.4"/></svg>`,
+  measure: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 16.2L16.2 3.5l4.3 4.3L7.8 20.5a1.6 1.6 0 0 1-2.3 0l-2-2a1.6 1.6 0 0 1 0-2.3z"/><path d="M7.1 12.6l1.6 1.6M10.4 9.3l1.6 1.6M13.7 6l1.6 1.6" stroke-width="1.4"/></svg>`,
   magnet: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h4v8a2 2 0 0 0 4 0V3h4v8a6 6 0 0 1-12 0V3z"/><path d="M6 3h4v4.5H6z" fill="currentColor" stroke="none"/><path d="M14 3h4v4.5h-4z" fill="currentColor" stroke="none"/><path d="M9.5 20.5l2.5-2 2.5 2" stroke-width="1.4"/></svg>`,
 };
 
@@ -22,7 +22,6 @@ const tools: Array<{ id: string; title: string }> = [
   { id: "position", title: "Long / Short Positions" },
   { id: "polyline", title: "Polyline" },
   { id: "rectangle", title: "Rectangle" },
-  { id: "measure", title: "Measure — two clicks (or hold Shift and click twice)" },
 ];
 
 const LINE_TOOL_IDS = ["trendline", "hline", "hray", "vline"];
@@ -39,6 +38,24 @@ const lastLineTool = ref(localStorage.getItem("tk-last-line-tool") ?? "trendline
 const flyoutOpen = ref(false);
 const flyoutEl = ref<HTMLElement | null>(null);
 const flyoutTop = ref(80);
+
+/** Holding Shift arms the Measure tool — the button lights up (like a
+ *  selected tool) so the user can see Shift+click is ready. */
+const shiftHeld = ref(false);
+const onShiftKeyDown = (e: KeyboardEvent) => {
+  if (e.key === "Shift") shiftHeld.value = true;
+};
+const onShiftKeyUp = (e: KeyboardEvent) => {
+  if (e.key === "Shift") shiftHeld.value = false;
+};
+onMounted(() => {
+  window.addEventListener("keydown", onShiftKeyDown);
+  window.addEventListener("keyup", onShiftKeyUp);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onShiftKeyDown);
+  window.removeEventListener("keyup", onShiftKeyUp);
+});
 
 const lineToolActive = computed(() => LINE_TOOL_IDS.includes(drawings.activeTool));
 
@@ -114,6 +131,18 @@ onBeforeUnmount(() => {
       @click="drawings.activeTool = tool.id as any"
     >
       <span class="tool-ic" v-html="ICONS[tool.id]"></span>
+    </button>
+
+    <!-- Measure (right above the magnet): selected via click, or lit up
+         while Shift is held — Shift+click twice measures. -->
+    <button
+      class="tool-btn"
+      :class="{ active: drawings.activeTool === 'measure' || shiftHeld }"
+      title="Measure — two clicks (or hold Shift and click twice)"
+      aria-label="Measure"
+      @click="drawings.activeTool = drawings.activeTool === 'measure' ? 'cursor' : 'measure'"
+    >
+      <span class="tool-ic" v-html="ICONS.measure"></span>
     </button>
 
     <!-- Magnet mode (below the shape tools): latched on/off; Ctrl

@@ -10,7 +10,7 @@ import { useIndicatorsStore, sessionKindAt, nextBoundaryAfter, boundaryEpoch, CH
 import DemoPanel from "./DemoPanel.vue";
 import type { Candle } from "@traderkomak/shared";
 import { currencyFlagUrl, commodityIcon, generatedCoinIcon, symbolParts } from "@/utils/flags";
-import { TIMEFRAME_SECONDS, instrumentPrecision, instrumentPipSize, providerOf, binanceBucketStart, oandaDailyBucketStart, oandaH4BucketStart, oandaWeeklyBucketStart, oandaMonthlyBucketStart } from "@traderkomak/shared";
+import { TIMEFRAME_SECONDS, instrumentPrecision, instrumentPipSize, usesPips, providerOf, binanceBucketStart, oandaDailyBucketStart, oandaH4BucketStart, oandaWeeklyBucketStart, oandaMonthlyBucketStart } from "@traderkomak/shared";
 
 const props = defineProps<{
   candles: Candle[];
@@ -1816,16 +1816,27 @@ function stopMeasureFollow(): void {
 }
 function startMeasureFollow(): void {
   stopMeasureFollow();
+  // High-report-rate mice fire far more pointermove events than frames —
+  // coalesce to one projection per frame or the preview stutters.
+  let pendingEv: MouseEvent | null = null;
+  let raf = 0;
   const move = (ev: MouseEvent) => {
-    if (!measure.value || measure.value.done || !adapter || !containerRef.value) return;
-    const r = containerRef.value.getBoundingClientRect();
-    const t = adapter.xToTime(ev.clientX - r.left);
-    const p = adapter.yToPrice(ev.clientY - r.top);
-    if (t !== null && p !== null) {
-      measure.value.t2 = t;
-      measure.value.p2 = p;
-      recalcRects();
-    }
+    pendingEv = ev;
+    if (raf) return;
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      const ev2 = pendingEv;
+      pendingEv = null;
+      if (!ev2 || !measure.value || measure.value.done || !adapter || !containerRef.value) return;
+      const r = containerRef.value.getBoundingClientRect();
+      const t = adapter.xToTime(ev2.clientX - r.left);
+      const p = adapter.yToPrice(ev2.clientY - r.top);
+      if (t !== null && p !== null) {
+        measure.value.t2 = t;
+        measure.value.p2 = p;
+        recalcRects();
+      }
+    });
   };
   window.addEventListener("pointermove", move);
   measureFollow = move;
@@ -2197,7 +2208,15 @@ function recalcRects(): void {
       const pct = ((mv.p2 - mv.p1) / mv.p1) * 100;
       const diff = Math.abs(mv.p2 - mv.p1);
       const pipSize = instrumentPipSize(market.instrument);
-      const pipStr = pipSize < 1 ? `${(diff / pipSize).toFixed(1)} pips` : `${+diff.toFixed(instrumentPrecision(market.instrument))} pts`;
+      // Forex pairs quote in pips; metals/crypto/indices quote in price
+      // points (a $20 gold move is "20.00", not "2000 pips").
+      const valStr = usesPips(market.instrument)
+        ? `${(diff / pipSize).toFixed(1)} pips`
+        : (() => {
+            const inst = market.instrument.toUpperCase();
+            const prefix = inst.endsWith("_USD") || inst.endsWith("USDT") ? "$" : "";
+            return prefix + (+diff.toFixed(instrumentPrecision(market.instrument)));
+          })();
       const totalSec = Math.abs(mv.t2 - mv.t1);
       const dd = Math.floor(totalSec / 86400);
       const hh = Math.floor((totalSec % 86400) / 3600);
@@ -2215,7 +2234,7 @@ function recalcRects(): void {
         width: Math.max(1, Math.abs(mx2 - mx1)),
         height: Math.max(1, Math.abs(my2 - my1)),
         dir: up ? "up" : "down",
-        row1: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%  ·  ${pipStr}`,
+        row1: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%  ·  ${valStr}`,
         row2: `${bars} bars · ${durStr}`,
         labelLeft: (Math.min(mx1, mx2) + Math.max(1, Math.abs(mx2 - mx1)) / 2),
         labelTop: up ? Math.min(my1, my2) : Math.min(my1, my2) + Math.max(1, Math.abs(my2 - my1)),
@@ -6918,15 +6937,16 @@ onBeforeUnmount(() => {
   left: 50%;
   transform: translateX(-50%);
   width: 2px;
-  background: rgba(255, 255, 255, 0.92);
 }
 .measure-box.up .measure-arrow {
   top: 12px;
   bottom: 3px;
+  background: rgba(41, 98, 255, 0.95);
 }
 .measure-box.down .measure-arrow {
   top: 3px;
   bottom: 12px;
+  background: rgba(239, 83, 80, 0.95);
 }
 .measure-tip {
   position: absolute;
@@ -6939,11 +6959,11 @@ onBeforeUnmount(() => {
 }
 .measure-box.up .measure-tip {
   top: 2px;
-  border-bottom: 10px solid rgba(255, 255, 255, 0.92);
+  border-bottom: 10px solid rgba(41, 98, 255, 0.95);
 }
 .measure-box.down .measure-tip {
   bottom: 2px;
-  border-top: 10px solid rgba(255, 255, 255, 0.92);
+  border-top: 10px solid rgba(239, 83, 80, 0.95);
 }
 .measure-label {
   position: absolute;
