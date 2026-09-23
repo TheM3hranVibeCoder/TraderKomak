@@ -1567,6 +1567,7 @@ watch(
 
 let visibleCb: ((range: { from: number; to: number } | null) => void) | null = null;
 let dataCb: (() => void) | null = null;
+let visibilityRecalcCb: (() => void) | null = null;
 let lazyThrottled = false;
 let interactionEl: HTMLElement | null = null;
 let interactCb: (() => void) | null = null;
@@ -3959,7 +3960,7 @@ onMounted(async () => {
   let dataRecalcRaf = 0;
   dataCb = () => {
     loadSettleDeadline = performance.now() + 5000;
-    extendRecalcFrames(400);
+    extendRecalcFrames(1500);
     updateAxisSizes();
     // Defer the re-projection to AFTER Lightweight-Charts' own render pass:
     // this callback fires synchronously inside setData, while LWC's
@@ -3976,6 +3977,17 @@ onMounted(async () => {
     });
   };
   adapter.subscribeDataChanged(dataCb);
+
+  // Tab return after a long absence: the resync merges many candles and
+  // the chart engine settles over several frames — keep re-projecting the
+  // drawing overlay every frame for 2s so it lands on the SETTLED state
+  // (future-extending drawings otherwise held a shrunken projection until
+  // the next unrelated event).
+  const onVisRecalc = () => {
+    if (document.visibilityState === "visible") extendRecalcFrames(2000);
+  };
+  document.addEventListener("visibilitychange", onVisRecalc);
+  visibilityRecalcCb = onVisRecalc;
 
   // Vertical drags & pinch-zoom change the PRICE scale without firing the
   // time-range callback — track pointer/wheel directly for instant reposition.
@@ -4472,6 +4484,10 @@ onBeforeUnmount(() => {
   if (windowLostCb) {
     window.removeEventListener("blur", windowLostCb);
     window.removeEventListener("pointercancel", windowLostCb as AnyListener);
+  }
+  if (visibilityRecalcCb) {
+    document.removeEventListener("visibilitychange", visibilityRecalcCb);
+    visibilityRecalcCb = null;
   }
   if (onMouseMoveRef) {
     window.removeEventListener("pointermove", onMouseMoveRef);
