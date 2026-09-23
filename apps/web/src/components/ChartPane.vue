@@ -2209,16 +2209,18 @@ function recalcRects(): void {
       const h = Math.abs(my2 - my1);
       const pct = ((mv.p2 - mv.p1) / mv.p1) * 100;
       const diff = Math.abs(mv.p2 - mv.p1);
-      const pipSize = instrumentPipSize(market.instrument);
-      // Forex pairs quote in pips; metals/crypto/indices quote in price
-      // points (a $20 gold move is "20.00", not "2000 pips").
-      const valStr = usesPips(market.instrument)
-        ? `${(diff / pipSize).toFixed(1)} pips`
-        : (() => {
-            const inst = market.instrument.toUpperCase();
-            const prefix = inst.endsWith("_USD") || inst.endsWith("USDT") ? "$" : "";
-            return prefix + (+diff.toFixed(instrumentPrecision(market.instrument)));
-          })();
+      // MT5-style pip value per instrument class: forex uses the classic
+      // pip (0.0001; 0.01 for JPY quotes), gold's pip is 0.1, silver's
+      // 0.01, crypto/indices count whole points (pip = 1).
+      const instU = market.instrument.toUpperCase();
+      const pipSizeM = usesPips(instU)
+        ? instrumentPipSize(instU)
+        : instU.startsWith("XAU")
+          ? 0.1
+          : instU.startsWith("XAG")
+            ? 0.01
+            : 1;
+      const valStr = `${(diff / pipSizeM).toFixed(pipSizeM < 1 ? 1 : 0)} pips`;
       const totalSec = Math.abs(mv.t2 - mv.t1);
       const dd = Math.floor(totalSec / 86400);
       const hh = Math.floor((totalSec % 86400) / 3600);
