@@ -1805,6 +1805,7 @@ const measure = ref<{ t1: number; p1: number; t2: number; p2: number; done: bool
 const measureView = ref<{
   left: number; top: number; width: number; height: number;
   dir: "up" | "down"; row1: string; row2: string;
+  labelLeft: number; labelTop: number;
 } | null>(null);
 let measureFollow: ((ev: MouseEvent) => void) | null = null;
 function stopMeasureFollow(): void {
@@ -2216,6 +2217,8 @@ function recalcRects(): void {
         dir: up ? "up" : "down",
         row1: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%  ·  ${pipStr}`,
         row2: `${bars} bars · ${durStr}`,
+        labelLeft: (Math.min(mx1, mx2) + Math.max(1, Math.abs(mx2 - mx1)) / 2),
+        labelTop: up ? Math.min(my1, my2) : Math.min(my1, my2) + Math.max(1, Math.abs(my2 - my1)),
       };
     } else {
       measureView.value = null;
@@ -4206,9 +4209,10 @@ onMounted(async () => {
       if (mt === null || mp === null) return;
       const m = measure.value;
       if (m && !m.done) {
-        // Second click: end — the measure stays on the chart
+        // Second click: end — the measure stays on the chart, tool deselects
         measure.value = { ...m, t2: mt, p2: mp, done: true };
         stopMeasureFollow();
+        drawingsStore.activeTool = "cursor";
       } else if (m && m.done && !e.shiftKey) {
         // Third press: dismiss
         measure.value = null;
@@ -4867,9 +4871,9 @@ onBeforeUnmount(() => {
           />
         </g>
       </svg>
-      <!-- Measure tool: blue/red box with % + pips inside and a bars/days
-           strip along the bottom edge. Rendered last so it sits above all
-           other drawings while it is on screen. -->
+      <!-- Measure tool: direction box (arrow through the middle) + a solid
+           blue stats label at the end side. Rendered last so it sits above
+           all other drawings while it is on screen. -->
       <div
         v-if="measureView"
         class="measure-box"
@@ -4881,8 +4885,17 @@ onBeforeUnmount(() => {
           height: measureView.height + 'px',
         }"
       >
-        <div class="measure-r1">{{ measureView.row1 }}</div>
-        <div class="measure-r2">{{ measureView.row2 }}</div>
+        <span class="measure-arrow" aria-hidden="true"></span>
+        <span class="measure-tip" aria-hidden="true"></span>
+      </div>
+      <div
+        v-if="measureView"
+        class="measure-label"
+        :class="measureView.dir"
+        :style="{ left: measureView.labelLeft + 'px', top: measureView.labelTop + 'px' }"
+      >
+        <div class="measure-l1">{{ measureView.row1 }}</div>
+        <div class="measure-l2">{{ measureView.row2 }}</div>
       </div>
       <!-- Long/Short positions: green profit box (entry↔TP) + red loss box
            (entry↔SL) at 20% opacity, level lines, and 1R..NR reward lines. -->
@@ -6881,54 +6894,85 @@ onBeforeUnmount(() => {
   pointer-events: none;
   transition: box-shadow 150ms;
 }
-/* Measure tool (TradingView-style): blue/red box, % + pips centered,
-   bars/days strip pinned to the bottom edge. */
+/* Measure tool (TradingView-style): direction-colored translucent box with
+   an arrow through the middle pointing at the change, and a solid blue
+   stats label at the end side (above for +, below for −). */
 .measure-box {
   position: absolute;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
-  border-radius: 4px;
   pointer-events: none;
   overflow: hidden;
   z-index: 4;
-  min-width: 90px;
-  min-height: 34px;
+  min-width: 26px;
+  min-height: 30px;
 }
 .measure-box.up {
-  background: rgba(41, 98, 255, 0.2);
-  border: 1px solid rgba(41, 98, 255, 0.95);
+  background: rgba(41, 98, 255, 0.18);
+  border: 1px solid rgba(41, 98, 255, 0.9);
 }
 .measure-box.down {
-  background: rgba(239, 83, 80, 0.18);
-  border: 1px solid rgba(239, 83, 80, 0.95);
+  background: rgba(239, 83, 80, 0.16);
+  border: 1px solid rgba(239, 83, 80, 0.9);
 }
-.measure-r1 {
-  font-size: 12.5px;
+.measure-arrow {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  background: rgba(255, 255, 255, 0.92);
+}
+.measure-box.up .measure-arrow {
+  top: 12px;
+  bottom: 3px;
+}
+.measure-box.down .measure-arrow {
+  top: 3px;
+  bottom: 12px;
+}
+.measure-tip {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+}
+.measure-box.up .measure-tip {
+  top: 2px;
+  border-bottom: 10px solid rgba(255, 255, 255, 0.92);
+}
+.measure-box.down .measure-tip {
+  bottom: 2px;
+  border-top: 10px solid rgba(255, 255, 255, 0.92);
+}
+.measure-label {
+  position: absolute;
+  z-index: 5;
+  background: #2962ff;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 6px;
+  padding: 4px 10px;
+  text-align: center;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+.measure-label.up {
+  transform: translate(-50%, calc(-100% - 5px));
+}
+.measure-label.down {
+  transform: translate(-50%, 5px);
+}
+.measure-l1 {
+  font-size: 13px;
   font-weight: 700;
   color: #fff;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
-  white-space: nowrap;
-  padding: 0 6px;
 }
-.measure-box.up .measure-r1 {
-  color: #dbe7ff;
-}
-.measure-box.down .measure-r1 {
-  color: #ffd9d6;
-}
-.measure-r2 {
-  font-size: 10.5px;
+.measure-l2 {
+  font-size: 11px;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.92);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
-  white-space: nowrap;
-  padding: 1px 6px 2px;
-  border-top: 1px solid rgba(255, 255, 255, 0.25);
-  align-self: stretch;
-  text-align: center;
+  margin-top: 1px;
 }
 .drawing-hit-rect {
   position: absolute;
