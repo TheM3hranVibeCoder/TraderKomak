@@ -3956,12 +3956,24 @@ onMounted(async () => {
   // autoScale refits the price scale after load / live ticks / corrections,
   // which shifts every pixel position — without this, rectangles sit at a
   // stale height for a moment after refresh before the next interaction.
+  let dataRecalcRaf = 0;
   dataCb = () => {
-    updateBadgePosition();
-    recalcRects();
-    updateAxisSizes();
     loadSettleDeadline = performance.now() + 5000;
-    extendRecalcFrames(120);
+    extendRecalcFrames(400);
+    updateAxisSizes();
+    // Defer the re-projection to AFTER Lightweight-Charts' own render pass:
+    // this callback fires synchronously inside setData, while LWC's
+    // coordinate mapping is still mid-update. Projecting here calibrated
+    // the drawing grid against mixed old/new state, and drawings extending
+    // into the future visibly shrank from the right until a later recalc
+    // corrected them.
+    if (dataRecalcRaf) cancelAnimationFrame(dataRecalcRaf);
+    dataRecalcRaf = requestAnimationFrame(() => {
+      dataRecalcRaf = 0;
+      if (!adapter) return;
+      updateBadgePosition();
+      recalcRects();
+    });
   };
   adapter.subscribeDataChanged(dataCb);
 
