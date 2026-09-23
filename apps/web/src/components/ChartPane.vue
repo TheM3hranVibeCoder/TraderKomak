@@ -4904,9 +4904,12 @@ onBeforeUnmount(() => {
           />
         </g>
       </svg>
-      <!-- Measure tool: direction box (arrow through the middle) + a solid
-           blue stats label at the end side. Rendered last so it sits above
-           all other drawings while it is on screen. -->
+      <!-- Measure tool lives in its OWN layer above the candle canvases:
+           the drawing layer is deliberately z-ordered behind the candles
+           (TradingView-style rectangles), but the measure must be readable
+           on top of them. -->
+    </div>
+    <div class="measure-layer drawing-clip" :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }">
       <div
         v-if="measureView"
         class="measure-box"
@@ -4930,6 +4933,7 @@ onBeforeUnmount(() => {
         <div class="measure-l1">{{ measureView.row1 }}</div>
         <div class="measure-l2">{{ measureView.row2 }}</div>
       </div>
+    </div>
       <!-- Long/Short positions: green profit box (entry↔TP) + red loss box
            (entry↔SL) at 20% opacity, level lines, and 1R..NR reward lines. -->
       <svg class="trend-svg pos-svg">
@@ -6835,6 +6839,14 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
   z-index: 0;
+  pointer-events: none;
+}
+/* Measure tool layer: ABOVE the candle canvases so the box and its stats
+   label stay readable when drawn over candle bodies. */
+.measure-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
   pointer-events: none;
 }
 /* Sessions indicator background boxes — behind the drawings layer. */
