@@ -82,6 +82,11 @@ interface SessionRun {
 }
 let runsCache: { key: string; runs: SessionRun[] } | null = null;
 let lastBoxesJson = "";
+/** Rescan throttle: the run scan is O(candles × sessions) and the cache key
+ *  changes with EVERY live tick (last candle high/low) — without a throttle
+ *  it saturated the main thread on big charts (laggy pans after lazy
+ *  loads). Session boxes are wide, slow shading: a 400ms rescans is ample. */
+let lastScanAt = 0;
 
 function computeSessionBoxes(): void {
   if (!indicators.sessionsAdded || !indicators.sessionsVisible || !adapter) {
@@ -118,7 +123,8 @@ function computeSessionBoxes(): void {
     c[n - 1]!.low,
     cfgKey,
   ].join("|");
-  if (!runsCache || runsCache.key !== cacheKey) {
+  if ((!runsCache || runsCache.key !== cacheKey) && performance.now() - (lastScanAt ?? 0) > 400) {
+    lastScanAt = performance.now();
     const runs: SessionRun[] = [];
 
     /** End time of the run that contains the LAST candle: its scheduled
