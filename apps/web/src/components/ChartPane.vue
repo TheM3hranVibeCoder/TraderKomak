@@ -216,7 +216,8 @@ function computeSessionBoxes(): void {
 
   // ── Projection (cheap: ~40 runs → pixels) ────────────────────────────
   const out: SessionBoxPx[] = [];
-  for (const run of runsCache.runs) {
+  const activeRuns = runsCache?.runs ?? [];
+  for (const run of activeRuns) {
     const x1 = adapter.timeToX(run.t1);
     const x2 = adapter.timeToX(run.extendTo ?? run.t2);
     const top = adapter.getPriceY(run.high);
