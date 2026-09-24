@@ -4108,9 +4108,14 @@ onMounted(async () => {
   (window as unknown as Record<string, unknown>).__tkChartAdapter = adapter;
 
   visibleCb = (range) => {
-    // Track the price marker + redraw rectangles on every pan/zoom
+    // Track the price marker + redraw rectangles on every pan/zoom.
+    // SYNCHRONOUS projection: LWC fires this callback during its own
+    // render with the final coordinates, so updating the overlay DOM here
+    // lands in the SAME paint as the moved candles — on weak iGPU laptops
+    // a deferred (next-frame) projection made overlays visibly detach
+    // from the chart while panning.
     updateBadgePosition();
-    recalcRects();
+    recalcRectsNow();
     if (!range) return;
     if (lazyThrottled) return;
     if (range.from > 15) return;
