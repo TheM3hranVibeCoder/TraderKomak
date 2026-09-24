@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onBeforeUnmount, nextTick, computed, onUnmounted } from "vue";
+import { ref, watch, onMounted, onBeforeUnmount, nextTick, computed, onUnmounted, type Ref } from "vue";
 import { createChartAdapter, type ChartAdapter } from "@/chart/chartAdapter";
 import { useThemeStore } from "@/stores/theme";
 import { useMarketStore, sanitizeCandles, isSaneCandle } from "@/stores/market";
@@ -85,14 +85,14 @@ let lastBoxesJson = "";
 
 function computeSessionBoxes(): void {
   if (!indicators.sessionsAdded || !indicators.sessionsVisible || !adapter) {
-    if (sessionPixels.value.length) sessionPixels.value = [];
+    if (sessionPixels.value.length) setPixels(sessionPixels, []);
     lastBoxesJson = "";
     return;
   }
   const c = props.candles;
   const n = c.length;
   if (n < 2) {
-    if (sessionPixels.value.length) sessionPixels.value = [];
+    if (sessionPixels.value.length) setPixels(sessionPixels, []);
     lastBoxesJson = "";
     return;
   }
@@ -260,7 +260,7 @@ function computeSessionBoxes(): void {
   const j = JSON.stringify(out);
   if (j !== lastBoxesJson) {
     lastBoxesJson = j;
-    sessionPixels.value = out;
+    setPixels(sessionPixels, out);
   }
 }
 
@@ -514,7 +514,7 @@ function demoLevelY(price: number): number | null {
 
 function rebuildDemoLines(): void {
   const out: DemoLinePx[] = [];
-  if (!demo.active) { demoLines.value = out; return; }
+  if (!demo.active) { setPixels(demoLines, out); return; }
   const prec = instrumentPrecision(market.instrument);
   const vppOf = (p: { symbol: string; entry: number }) => demoValuePerPrice(p.symbol, p.entry);
   for (const p of demo.openPositions) {
@@ -584,7 +584,7 @@ function rebuildDemoLines(): void {
     if (ySl !== null) out.push({ id: "__draft", level: "sl", y: ySl, price: d.sl, color: "#ef5350", dashed: false, direction: d.side, status: "pending", lot: lotEff, money: +risk.toFixed(2), rr: null });
     if (yTp !== null) out.push({ id: "__draft", level: "tp", y: yTp, price: d.tp, color: "#26a69a", dashed: false, direction: d.side, status: "pending", lot: lotEff, money: +reward.toFixed(2), rr });
   }
-  demoLines.value = out;
+  setPixels(demoLines, out);
 }
 
 function onDemoLineDragStart(e: MouseEvent, id: string, level: "entry" | "sl" | "tp"): void {
@@ -1419,6 +1419,10 @@ function commitChartDataInner(candles: Candle[], freshMount = false): void {
   if (indicators.smaAdded) adapter.setMaData("sma", pts.sma);
   if (indicators.emaAdded) adapter.setMaData("ema", pts.ema);
   if (indicators.rsiAdded) adapter.setRsiData(pts.rsi);
+  // Full history commits are the only thing that extends the settle
+  // window: the chart layout needs a few frames after a big setData, but
+  // routine tail ticks must not keep the per-frame projection loop alive.
+  loadSettleDeadline = performance.now() + 5000;
   if (freshMount && !replay.active) {
     // Fresh history after a refresh / symbol / timeframe switch: the MA/RSI
     // series just (re)entered the chart, and their pane recalcs can re-anchor
@@ -2187,9 +2191,56 @@ function isInChartArea(e: MouseEvent): boolean {
   return lx <= c.clientWidth - axisRightW.value && ly <= c.clientHeight - axisBottomH.value;
 }
 
+/** Replace a pixel-array ref only when a value actually changed — keeps the
+ *  array identity stable so Vue skips re-patching identical overlay frames
+ *  (the projection runs every frame during pans/streams). */
+function setPixels<T>(slot: Ref<T[]>, next: T[]): void {
+  const cur = slot.value;
+  if (cur && cur.length === next.length) {
+    let same = true;
+    for (let i = 0; i < next.length && same; i++) {
+      const a = cur[i] as unknown as Record<string, unknown> | null;
+      const b = next[i] as unknown as Record<string, unknown> | null;
+      if (a === b) continue;
+      if (!a || !b) {
+        same = false;
+        break;
+      }
+      for (const k in b) {
+        if (a[k] !== b[k]) {
+          same = false;
+          break;
+        }
+      }
+      if (same) {
+        for (const k in a) {
+          if (!(k in b)) {
+            same = false;
+            break;
+          }
+        }
+      }
+    }
+    if (same) return;
+  }
+  slot.value = next;
+}
+
+/** Coalesced re-projection: every trigger funnels into ONE rAF, so multiple
+ *  same-frame events (data change + range change + drag) cost a single
+ *  projection pass and a single Vue overlay patch. */
+let recalcRectRaf = 0;
 function recalcRects(): void {
+  if (recalcRectRaf) return;
+  recalcRectRaf = requestAnimationFrame(() => {
+    recalcRectRaf = 0;
+    if (!adapter) return;
+    recalcRectsNow();
+  });
+}
+function recalcRectsNow(): void {
   if (!adapter) {
-    rectPixels.value = [];
+    setPixels(rectPixels, []);
     measureView.value = null;
     return;
   }
@@ -2229,17 +2280,29 @@ function recalcRects(): void {
       // up/down — not a stubby rectangle.
       const thinH = !mv.done && h < 10;
       const thinV = !mv.done && w < 10 && !thinH;
-      measureView.value = {
+      const mvNext = {
         left: thinV ? mx1 - 1 : Math.min(mx1, mx2),
         top: thinH ? my1 - 1 : Math.min(my1, my2),
         width: thinV ? 2 : Math.max(1, w),
         height: thinH ? 2 : Math.max(1, h),
-        dir: up ? "up" : "down",
+        dir: (up ? "up" : "down") as "up" | "down",
         row1: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%  ·  ${valStr}`,
         row2: `${bars} bars · ${durStr}`,
         labelLeft: thinV ? mx1 : Math.min(mx1, mx2) + w / 2,
         labelTop: thinH ? my1 - 1 : up ? Math.min(my1, my2) : Math.min(my1, my2) + h,
       };
+      // Identity-stable assignment: identical frames skip the Vue patch
+      const curMv = measureView.value;
+      if (
+        !curMv ||
+        curMv.left !== mvNext.left || curMv.top !== mvNext.top ||
+        curMv.width !== mvNext.width || curMv.height !== mvNext.height ||
+        curMv.dir !== mvNext.dir || curMv.row1 !== mvNext.row1 ||
+        curMv.row2 !== mvNext.row2 || curMv.labelLeft !== mvNext.labelLeft ||
+        curMv.labelTop !== mvNext.labelTop
+      ) {
+        measureView.value = mvNext;
+      }
     } else {
       measureView.value = null;
     }
@@ -2288,7 +2351,7 @@ function recalcRects(): void {
     }
   }
 
-  rectPixels.value = out;
+  setPixels(rectPixels, out);
 
   // Sessions indicator background boxes (same triggers as drawings)
   computeSessionBoxes();
@@ -2334,7 +2397,7 @@ function recalcRects(): void {
       });
     }
   }
-  trendPixels.value = trendsOut;
+  setPixels(trendPixels, trendsOut);
 
   // Polylines: each vertex projects independently; skip a poly if any vertex
   // is unprojectable (chart not laid out yet / symbol mismatch).
@@ -2468,7 +2531,7 @@ const buildPolyPixel = (
       polysOut.push(buildPolyPixel("__preview", pts, "#2962ff", 2, "solid", false, false));
     }
   }
-  polyPixels.value = polysOut;
+  setPixels(polyPixels, polysOut);
 
   // Long/Short positions
   const posOut: PositionPixel[] = [];
@@ -2554,7 +2617,7 @@ const buildPolyPixel = (
     });
     if (px) posOut.push(px);
   }
-  posPixels.value = posOut;
+  setPixels(posPixels, posOut);
 
   // One-click lines (hline / hray / vline)
   const sel1 = drawingsStore.selectedSingle;
@@ -2577,7 +2640,7 @@ const buildPolyPixel = (
       }
     }
   }
-  singlePixels.value = singleOut;
+  setPixels(singlePixels, singleOut);
 
   rebuildDemoLines();
   // Visible chart height for the demo tag visibility check
@@ -2622,7 +2685,7 @@ const buildPolyPixel = (
 function recalcFrame(): void {
   recalcRaf = 0;
   updateBadgePosition();
-  recalcRects();
+  recalcRectsNow();
   // After a fresh load the chart layout (time/price scales) may not be
   // settled when the first re-projection runs — some drawings then fail to
   // project (null coordinates) and would only render on the NEXT unrelated
@@ -4063,24 +4126,15 @@ onMounted(async () => {
   // autoScale refits the price scale after load / live ticks / corrections,
   // which shifts every pixel position — without this, rectangles sit at a
   // stale height for a moment after refresh before the next interaction.
-  let dataRecalcRaf = 0;
   dataCb = () => {
-    loadSettleDeadline = performance.now() + 5000;
-    extendRecalcFrames(1500);
+    updateBadgePosition();
     updateAxisSizes();
-    // Defer the re-projection to AFTER Lightweight-Charts' own render pass:
-    // this callback fires synchronously inside setData, while LWC's
-    // coordinate mapping is still mid-update. Projecting here calibrated
-    // the drawing grid against mixed old/new state, and drawings extending
-    // into the future visibly shrank from the right until a later recalc
-    // corrected them.
-    if (dataRecalcRaf) cancelAnimationFrame(dataRecalcRaf);
-    dataRecalcRaf = requestAnimationFrame(() => {
-      dataRecalcRaf = 0;
-      if (!adapter) return;
-      updateBadgePosition();
-      recalcRects();
-    });
+    // Coalesced through recalcRects' rAF. NOTE: no settle-deadline
+    // extension here — routine tail ticks must not keep the per-frame
+    // settle loop alive; only full history commits extend it (a
+    // perpetually-unprojectable drawing otherwise spun the loop at 60fps
+    // and panning lagged as data grew).
+    recalcRects();
   };
   adapter.subscribeDataChanged(dataCb);
 
