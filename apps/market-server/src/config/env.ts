@@ -64,6 +64,8 @@ export interface AppConfig {
   logLevel: string;
   /** Directory for disk-persisted candle history (buffer-fed timeframes). */
   dataDir: string;
+  /** Secret gating the Binance relay routes (empty = relay disabled). */
+  binanceRelaySecret: string;
   oanda: {
     /** Never exposed anywhere — only used inside Authorization headers. */
     apiToken: string;
@@ -157,6 +159,10 @@ export function loadConfig(): AppConfig {
       apiUrl: optionalEnv("BINANCE_API_URL", "https://api.binance.com").replace(/\/$/, ""),
       streamUrl: optionalEnv("BINANCE_STREAM_URL", "wss://stream.binance.com:9443").replace(/\/$/, ""),
     },
+    /** Secret gating the Binance relay routes (see routes/binance-relay.ts).
+     *  Empty = relay disabled. Set it on deployments that must serve other
+     *  servers located where Binance is geo-blocked. */
+    binanceRelaySecret: optionalEnv("BINANCE_RELAY_SECRET", ""),
     persistentAggregations: persistentAggregationsRaw,
     chatAdminKey: optionalEnv("CHAT_ADMIN_KEY", ""),
     chatOwnerNick: optionalEnv("CHAT_OWNER_NICK", "mehran"),
