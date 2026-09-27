@@ -25,6 +25,7 @@ import { DukascopyStream } from "./dukascopy/stream.js";
 import { getHistory as dukascopyHistory } from "./dukascopy/client.js";
 import { registerNewsRoute } from "./routes/news.js";
 import { registerBinanceRelayRoute } from "./routes/binance-relay.js";
+import compress from "@fastify/compress";
 import { providerOf } from "@traderkomak/shared";
 
 export interface MarketServer {
@@ -48,6 +49,14 @@ export async function createMarketServer(config: AppConfig): Promise<MarketServe
   await app.register(cors, {
     origin: config.corsOrigin.includes("*") ? true : config.corsOrigin,
     methods: ["GET"],
+  });
+
+  // gzip/br for REST responses — candle history (~200KB JSON) shrinks 5-10x
+  // over the wire, which matters enormously on high-latency lossy paths.
+  await app.register(compress, {
+    global: true,
+    encodings: ["gzip", "br"],
+    threshold: 1024,
   });
 
   await app.register(websocket, {

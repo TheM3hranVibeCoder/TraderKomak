@@ -39,5 +39,17 @@ export default defineConfig({
   build: {
     outDir: "dist",
     sourcemap: false,
+    // Split the heavy vendor libraries into their own cached chunks: the
+    // app-code chunk stays small and re-downloads alone on every deploy,
+    // while the charting/supabase chunks load in parallel (HTTP/2) and
+    // stay cached across releases.
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "lightweight-charts": ["lightweight-charts"],
+          supabase: ["@supabase/supabase-js"],
+        },
+      },
+    },
   },
 });
