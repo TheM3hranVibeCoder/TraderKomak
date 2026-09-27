@@ -66,6 +66,13 @@ function onResize(): void {
 onMounted(() => {
   onResize();
   window.addEventListener("resize", onResize);
+  // If the market server was never reachable this session, surface the
+  // Telegram popup (free self-hosted Windows app) — dismissed per session.
+  setTimeout(() => {
+    if (!everConnected.value && !sessionStorage.getItem("tk-down-popup-dismissed")) {
+      serverDownPopup.value = true;
+    }
+  }, 10_000);
 });
 
 /** Collapsing the rail on phones must also close whichever panel is open,
@@ -132,6 +139,27 @@ watch(
   }
 );
 
+// ── Server-down popup: when the market server is unreachable, surface the
+// Telegram channel (free self-hosted Windows app) instead of a silent chart.
+const everConnected = ref(false);
+const serverDownPopup = ref(false);
+watch(
+  () => market.status,
+  (s) => {
+    if (s === "connected") {
+      everConnected.value = true;
+      serverDownPopup.value = false;
+    }
+  }
+);
+function dismissServerDownPopup(): void {
+  serverDownPopup.value = false;
+  try { sessionStorage.setItem("tk-down-popup-dismissed", "1"); } catch {}
+}
+function openTelegramChannel(): void {
+  window.open("https://t.me/TraderKomak_ir", "_blank", "noopener");
+}
+
 function toggleChat(): void {
   chat.setOpen(!chat.open);
 }
@@ -175,6 +203,24 @@ function onTimeframeChange(next: Timeframe): void {
     <AuthModal v-if="auth.authModalOpen" />
     <BannedPage v-if="chat.banned" />
     <UserPopups />
+    <!-- Server-down popup: Telegram channel push (free self-hosted app) -->
+    <div v-if="serverDownPopup" class="server-down-pop" role="dialog" aria-modal="true" aria-label="Server unavailable">
+      <button class="sdp-close" type="button" aria-label="Close" @click="dismissServerDownPopup">✕</button>
+      <img src="/favicon.png" alt="" width="56" height="56" />
+      <h2>Server temporarily unavailable</h2>
+      <p class="sdp-fa" dir="rtl">سرور موقتاً در دسترس نیست</p>
+      <p class="sdp-text">
+        Get the <b>FREE self-hosted TraderKomak app for Windows</b> from our
+        Telegram channel — and keep the charts running on your own PC!
+      </p>
+      <a class="sdp-tg" href="https://t.me/TraderKomak_ir" target="_blank" rel="noopener" @click="dismissServerDownPopup">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+          <path d="M21.9 4.6c.2-1-.7-1.7-1.6-1.4L2.7 9.9c-1 .4-1 1.9.1 2.2l4.6 1.4 1.8 5.6c.3.9 1.4 1.1 2 .4l2.6-2.7 4.5 3.3c.8.6 1.9.2 2.1-.8l2.5-14.7z" transform="scale(.92) translate(1 1)"/>
+        </svg>
+        Join our Telegram channel
+      </a>
+      <button class="sdp-continue" type="button" @click="dismissServerDownPopup">Continue to the site</button>
+    </div>
     <template v-if="!gate">
     <TopToolbar
       :instrument="market.instrument"
@@ -454,5 +500,89 @@ nav.right-rail {
 }
 .rail-half.active:hover .rail-lines span {
   background: var(--accent-hover);
+}
+
+/* ── Server-down popup (Telegram push) ───────────────────────────────── */
+.server-down-pop {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(400px, calc(100vw - 32px));
+  height: fit-content;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 26px 22px 20px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--panel-bg, #14162b);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  text-align: center;
+}
+.server-down-pop img {
+  border-radius: 12px;
+}
+.server-down-pop h2 {
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--text);
+  margin: 2px 0 0;
+}
+.sdp-fa {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.sdp-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+.sdp-text b {
+  color: var(--accent);
+}
+.sdp-tg {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 10px 18px;
+  border-radius: 10px;
+  background: #29a9eb;
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: filter 120ms, transform 120ms;
+}
+.sdp-tg:hover {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+}
+.sdp-continue {
+  margin-top: 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.sdp-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 15px;
+  cursor: pointer;
+  padding: 4px;
+}
+.sdp-close:hover {
+  color: var(--text);
 }
 </style>
