@@ -2,6 +2,8 @@
 
 **Vue 3 + Lightweight Charts on the frontend · persistent Node.js market-data service · OANDA REST + Pricing Stream on the backend.**
 
+> **Acknowledgements** — This project's charts are powered by [TradingView **Lightweight Charts**](https://www.tradingview.com/) — the excellent open-source charting library by TradingView ([GitHub](https://github.com/tradingview/lightweight-charts)). The attribution logo in the bottom-left corner of the chart links to their site, as the library's license requires.
+
 This is the first working foundation of TraderKomak. It is intentionally **not** a full TradingView clone — it implements only the market-data and charting core so future phases can add indicators, drawing tools, replay, watchlists, authentication and backtesting without rewriting the engine.
 
 ---
