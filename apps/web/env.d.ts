@@ -12,6 +12,9 @@ interface ImportMetaEnv {
   readonly VITE_BINANCE_PROXY_URL?: string;
   /** oanda-proxy Cloudflare Worker base URL (holds the OANDA token). */
   readonly VITE_OANDA_PROXY_URL?: string;
+  /** Dedicated news-proxy base; defaults to VITE_OANDA_PROXY_URL (the
+   *  worker also serves the ForexFactory /news feed). */
+  readonly VITE_NEWS_PROXY_URL?: string;
 }
 
 interface ImportMeta {
