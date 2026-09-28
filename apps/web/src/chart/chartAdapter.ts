@@ -203,7 +203,7 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       // drawing layer can render between the background and the candles.
       background: { type: ColorType.Solid, color: "transparent" },
       textColor: colors.text,
-      attributionLogo: true,
+      attributionLogo: false, // TradingView badge replaced by the TK badge below
     },
     grid: {
       vertLines: { visible: false },
@@ -250,6 +250,40 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       pinch: true,
     },
   });
+
+  /* ── TK brand badge (replaces the TradingView attribution logo) ────────
+   *  Same artwork as the site favicon: white TK strokes on the brand
+   *  blue→purple gradient — no white/black box. Pure decoration: it must
+   *  never intercept clicks, drags or crosshair moves on the chart. */
+  const gradId = `tk-badge-grad-${Math.random().toString(36).slice(2, 8)}`;
+  const badge = document.createElement("div");
+  badge.setAttribute("aria-hidden", "true");
+  badge.style.cssText = [
+    "position:absolute",
+    "left:10px",
+    `bottom:${(chart.timeScale().height() || 26) + 8}px`,
+    "width:26px",
+    "height:26px",
+    "border-radius:7px",
+    "box-shadow:0 1px 4px rgba(0,0,0,0.35)",
+    "pointer-events:none",
+    "user-select:none",
+    "z-index:10",
+  ].join(";");
+  badge.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="26" height="26">` +
+    `<defs><linearGradient id="${gradId}" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">` +
+    `<stop offset="0" stop-color="#2962ff"/><stop offset="0.5" stop-color="#6a5cff"/><stop offset="1" stop-color="#8b5cf6"/>` +
+    `</linearGradient></defs>` +
+    `<rect width="64" height="64" rx="14" fill="url(#${gradId})"/>` +
+    `<ellipse cx="32" cy="9" rx="30" ry="13" fill="#ffffff" opacity="0.1"/>` +
+    `<g stroke="#ffffff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none">` +
+    `<path d="M13 19h20"/><path d="M23 19v27"/>` +
+    `<path d="M37 18v28"/><path d="M37 32l13-14"/><path d="M37 32l13 14"/>` +
+    `</g></svg>`;
+  // The badge anchors to the chart container — make sure it's a positioning
+  // context (the host element may rely on the default `static`).
+  if (getComputedStyle(container).position === "static") container.style.position = "relative";
+  container.appendChild(badge);
 
   const series: ISeriesApi<"Candlestick"> = chart.addSeries(CandlestickSeries, {
     upColor: "#26a69a",
@@ -806,6 +840,11 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
 
     destroy(): void {
       dead = true;
+      try {
+        badge.remove(); // detach the TK badge — chart.remove() wipes its own DOM only
+      } catch {
+        // never let badge cleanup break chart teardown
+      }
       try {
         chart.remove();
       } catch (err) {
