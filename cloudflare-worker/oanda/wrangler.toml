@@ -1,0 +1,14 @@
+name = "oanda-proxy"
+main = "oanda-proxy.js"
+compatibility_date = "2024-09-01"
+
+# workers.dev is blocked in Iran — bind the worker to the main domain:
+routes = [
+  { pattern = "oanda.traderkomak.ir", custom_domain = true }
+]
+
+# Non-secret config (practice vs live). Secrets go in via
+#   npx wrangler secret put OANDA_API_TOKEN / OANDA_ACCOUNT_ID
+# [vars]
+# OANDA_API_URL = "https://api-fxpractice.oanda.com"
+# OANDA_STREAM_URL = "https://stream-fxpractice.oanda.com"

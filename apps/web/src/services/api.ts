@@ -1,10 +1,17 @@
 /**
  * Historical candles HTTP client.
  *
- * Talks only to TraderKomak's own backend — never to OANDA directly.
- * Handles validation, error mapping, and prevents secret leakage.
+ * Routing (candle delivery off the market server):
+ *   - Binance symbols → fetched DIRECTLY from Binance by the browser
+ *     (binanceDirect.ts, public endpoints; server fallback on geo-block —
+ *     a Cloudflare relay is not viable, Binance blocks datacenter IPs).
+ *   - OANDA symbols   → via the oanda-proxy Cloudflare Worker when
+ *     VITE_OANDA_PROXY_URL is configured (the token stays in the worker).
+ *   - Everything else → the market-server REST API (as before).
  */
-import type { Candle } from "@traderkomak/shared";
+import { isTimeframe, providerOf, type Candle } from "@traderkomak/shared";
+import { fetchBinanceCandles } from "./binanceDirect";
+import { fetchOandaCandles, oandaProxyConfigured } from "./oandaDirect";
 
 interface CandlesResponse {
   instrument: string;
@@ -40,6 +47,33 @@ export function chatImgUrl(imgId: string): string {
 }
 
 export async function fetchCandles(
+  instrument: string,
+  timeframe: string,
+  count: number,
+  to?: number
+): Promise<Candle[]> {
+  const provider = providerOf(instrument);
+  if (isTimeframe(timeframe)) {
+    if (provider === "binance") {
+      try {
+        return await fetchBinanceCandles(instrument, timeframe, count, to);
+      } catch {
+        // Direct Binance is unreachable for this visitor (geo-block / reset)
+        // and no Cloudflare relay can help — Binance blocks datacenter IPs.
+        // The market server still serves Binance candles from the VPS, so
+        // use it as the last-resort fallback before giving up.
+        return fetchServerCandles(instrument, timeframe, count, to);
+      }
+    }
+    if (provider === "oanda" && oandaProxyConfigured()) {
+      return fetchOandaCandles(instrument, timeframe, count, to);
+    }
+  }
+  return fetchServerCandles(instrument, timeframe, count, to);
+}
+
+/** Market-server REST fallback (dukascopy symbols; OANDA without a proxy). */
+export async function fetchServerCandles(
   instrument: string,
   timeframe: string,
   count: number,

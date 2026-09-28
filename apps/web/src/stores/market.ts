@@ -20,7 +20,12 @@ import {
 } from "@traderkomak/shared";
 import { fetchCandles } from "@/services/api";
 import { useReplayStore } from "@/stores/replay";
-import { MarketWsClient, type WsStatus } from "@/services/wsClient";
+import { MarketWsClient, type WsHandlers, type WsStatus } from "@/services/wsClient";
+import {
+  BinanceDirectStream,
+  binanceDirectBlocked,
+} from "@/services/binanceDirect";
+import { OandaDirectStream, oandaProxyConfigured } from "@/services/oandaDirect";
 
 // Progressive history: paint a screenful fast (~1 fetch to OANDA), then
 // lazy-load older candles in batches as the user scrolls back. Loading the
@@ -111,6 +116,36 @@ export function sanitizeCandles(list: Candle[]): Candle[] {
   return [...byTime.values()].sort((a, b) => a.time - b.time);
 }
 
+/** Provider-agnostic live-stream surface shared by the market-server client
+ *  and the direct (browser → provider / CF-worker) clients. */
+interface MarketStream {
+  connect(): void;
+  disconnect(): void;
+  subscribe(instrument: string, timeframe: Timeframe): void;
+  unsubscribe(): void;
+  setPaused(paused: boolean): void;
+  /** Optional: prime a client-side aggregator with the last history candle
+   *  so the live candle starts from the real partial OHLC. */
+  seed?(candle: Candle): void;
+}
+
+type StreamKind = "server" | "binance" | "oanda-proxy";
+
+/** Which live-stream implementation should serve a pair: Binance symbols
+ *  stream straight from Binance (or the binance-proxy relay), OANDA pairs
+ *  go through the oanda-proxy worker when configured, everything else
+ *  keeps using the market server. Binance pairs also drop to the server
+ *  stream once a direct fetch proved blocked for this visitor (451/reset)
+ *  with no relay configured — the server fetches Binance from the VPS. */
+function desiredStreamKind(instrument: string): StreamKind {
+  const provider = providerOf(instrument);
+  if (provider === "binance") {
+    return binanceDirectBlocked() ? "server" : "binance";
+  }
+  if (provider === "oanda" && oandaProxyConfigured()) return "oanda-proxy";
+  return "server";
+}
+
 export const useMarketStore = defineStore("market", () => {
   const instrument = ref<string>(loadPersistedInstrument());
   const timeframe = ref<Timeframe>(loadPersistedTimeframe());
@@ -132,7 +167,8 @@ export const useMarketStore = defineStore("market", () => {
     candles.value.forEach((c, i) => timeIndexMap.set(c.time, i));
   }
 
-  let ws: MarketWsClient | null = null;
+  let ws: MarketStream | null = null;
+  let wsKind: StreamKind = "server";
   let loadSeq = 0;
   /** While true, WS snapshots are ignored so a slow history fetch can never
    *  be overwritten by the (short) server buffer of the previous view. */
@@ -157,9 +193,17 @@ export const useMarketStore = defineStore("market", () => {
   );
 
   let lastWsStatus: WsStatus = "offline";
-  function ensureWs(): MarketWsClient {
-    if (ws) return ws;
-    ws = new MarketWsClient({
+  function ensureWs(): MarketStream {
+    // The direct clients are provider-specific, so the stream instance is
+    // recreated whenever the desired kind changes (e.g. XAU_USD → BTCUSDT).
+    const kind = desiredStreamKind(instrument.value);
+    if (ws && wsKind === kind) return ws;
+    if (ws) {
+      ws.disconnect();
+      ws = null;
+    }
+    wsKind = kind;
+    const handlers: WsHandlers = {
       onStatus: (s) => {
         status.value = s;
         if (s === "connected" || s === "reconnecting") error.value = null;
@@ -193,7 +237,13 @@ export const useMarketStore = defineStore("market", () => {
       onError: (msg) => {
         error.value = msg;
       },
-    });
+    };
+    ws =
+      kind === "binance"
+        ? new BinanceDirectStream(handlers)
+        : kind === "oanda-proxy"
+          ? new OandaDirectStream(handlers)
+          : new MarketWsClient(handlers);
     ws.connect();
     return ws;
   }
@@ -425,7 +475,19 @@ export const useMarketStore = defineStore("market", () => {
     rebuildTimeIndex();
     error.value = null;
     await loadHistory();
-    ensureWs().subscribe(instrument.value, timeframe.value);
+    subscribeCurrent();
+  }
+
+  /** Subscribes the active stream to the current pair, seeding client-side
+   *  aggregators (direct feeds) with the freshest history candle so the
+   *  live candle continues the real partial OHLC instead of rebuilding
+   *  from zero (which would visibly shrink the current bucket until the
+   *  incoming ticks catch up). */
+  function subscribeCurrent(): void {
+    const client = ensureWs();
+    const last = candles.value[candles.value.length - 1];
+    if (last && client.seed) client.seed(last);
+    client.subscribe(instrument.value, timeframe.value);
   }
 
   async function setTimeframe(next: Timeframe): Promise<void> {
@@ -438,15 +500,13 @@ export const useMarketStore = defineStore("market", () => {
     rebuildTimeIndex();
     error.value = null;
     await loadHistory();
-    ensureWs().subscribe(instrument.value, timeframe.value);
+    subscribeCurrent();
   }
 
   function init(): void {
-    const client = ensureWs();
-    // Kick off history load + subscription; subscription also happens inside ws open.
-    void loadHistory().then(() => {
-      client.subscribe(instrument.value, timeframe.value);
-    });
+    // Kick off history load + subscription; the seeding in subscribeCurrent
+    // uses the freshly loaded history (server feed also subscribes on open).
+    void loadHistory().then(subscribeCurrent);
     // Background tabs: while hidden, streamed candles can arrive wrong
     // (dojis/flat fillers from upstream hiccups) and corrections can be
     // missed. When the tab becomes visible again, re-sync the recent window

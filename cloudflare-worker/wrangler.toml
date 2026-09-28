@@ -1,3 +1,11 @@
 name = "binance-proxy"
 main = "binance-proxy.js"
 compatibility_date = "2024-09-01"
+
+# ⚠️ NOT DEPLOYED (2026-09): Binance geo-blocks datacenter IPs, so a Cloudflare
+# Worker relay gets 403 on both api.binance.com (CloudFront WAF) and
+# data-api.binance.vision (CF-challenge). Browser-direct access to
+# binance.vision is the primary path; the fallback for blocked visitors is the
+# market server (api.ts falls back to fetchServerCandles automatically).
+# Only rebind a custom domain if you ever host this relay on a Binance-friendly
+# non-datacenter origin.
