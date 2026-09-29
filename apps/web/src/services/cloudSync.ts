@@ -154,6 +154,32 @@ function schedulePush(userId: string): void {
   }, PUSH_DEBOUNCE_MS);
 }
 
+/** Phase 1 — the account's LOOK: light/dark + chart colors and templates.
+ *  This only recolors the existing series and restyles chart options; it
+ *  never adds/removes a series nor rebuilds the pane, so it is SAFE to run
+ *  the moment the row arrives. The heavy restore in applyLocal below is what
+ *  crashed Lightweight Charts' render loop when it landed inside the chart's
+ *  initial layout window — hence its settle wait, which no longer delays the
+ *  saved colors. Theme first: the chart-style write below then overwrites any
+ *  theme-baked defaults instead of mixing the two. */
+function applyLook(cloud: CloudData): void {
+  if (cloud.theme === "dark" || cloud.theme === "light") {
+    try { useThemeStore().setTheme(cloud.theme); } catch {}
+  }
+  if (cloud.chart && typeof cloud.chart === "object") {
+    if (cloud.chart.style && typeof cloud.chart.style === "object") {
+      try {
+        localStorage.setItem("tk-chart-style", JSON.stringify(cloud.chart.style));
+        // ChartPane reloads its style/templates on this event.
+        window.dispatchEvent(new CustomEvent("tk-chart-style"));
+      } catch {}
+    }
+    if (Array.isArray(cloud.chart.templates)) {
+      try { localStorage.setItem("tk-chart-templates", JSON.stringify(cloud.chart.templates)); } catch {}
+    }
+  }
+}
+
 function applyLocal(cloud: CloudData): void {
   applying = true;
   try {
@@ -168,24 +194,9 @@ function applyLocal(cloud: CloudData): void {
     if (cloud.indicatorSettings && typeof cloud.indicatorSettings === "object") {
       ind.applySettings(cloud.indicatorSettings);
     }
-    // Light/dark travels with the account too, so a returning account gets
-    // its saved look on any device.
-    if (cloud.theme === "dark" || cloud.theme === "light") {
-      try { useThemeStore().setTheme(cloud.theme); } catch {}
-    }
-
-    if (cloud.chart && typeof cloud.chart === "object") {
-      if (cloud.chart.style && typeof cloud.chart.style === "object") {
-        try {
-          localStorage.setItem("tk-chart-style", JSON.stringify(cloud.chart.style));
-          // ChartPane reloads its style/templates on this event.
-          window.dispatchEvent(new CustomEvent("tk-chart-style"));
-        } catch {}
-      }
-      if (Array.isArray(cloud.chart.templates)) {
-        try { localStorage.setItem("tk-chart-templates", JSON.stringify(cloud.chart.templates)); } catch {}
-      }
-    }
+    // The look (theme + chart colors/templates) already landed in applyLook
+    // the moment the row arrived; only the heavy data waits for the chart to
+    // settle.
 
     if (cloud.drawings && typeof cloud.drawings === "object") {
       const src = cloud.drawings;
@@ -331,12 +342,25 @@ export function startCloudSync(): void {
         // rebuilds, drawings replaced). Landing it during the chart's
         // initial layout/resize window crashed LWC's render loop ("Value
         // is null") — defer until the chart has fully settled.
+        // Colors and light/dark land NOW (recolour only, never a pane
+        // rebuild), so the account's saved look appears as soon as its row
+        // arrives instead of after the settle delay. The change-guard is held
+        // across both phases so nothing pushes half-restored state upstream.
+        let changesBefore = 0;
+        try { changesBefore = Number(localStorage.getItem(LOCAL_CHANGE_KEY)) || 0; } catch {}
+        applying = true;
+        applyLook(data.data as CloudData);
         await new Promise((r) => setTimeout(r, 1500));
         if (auth.status !== "ready" || activeUserId !== userId) {
           applying = false;
           return;
         }
         applyLocal(data.data as CloudData);
+        // Anything the user touched while the restore was landing never made
+        // it into the cloud row: push it once the guard releases.
+        let changesAfter = 0;
+        try { changesAfter = Number(localStorage.getItem(LOCAL_CHANGE_KEY)) || 0; } catch {}
+        if (changesAfter !== changesBefore) schedulePush(userId);
       } else {
         // First login for this account — seed the cloud with local state.
         await push(userId);
