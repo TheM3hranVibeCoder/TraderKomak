@@ -113,6 +113,11 @@ export class ChatRoom {
    *  wipe the ephemeral disk. Without them, a local file is used. */
   private readonly redisUrl = process.env.UPSTASH_REDIS_REST_URL ?? "";
   private readonly redisToken = process.env.UPSTASH_REDIS_REST_TOKEN ?? "";
+  /** Roster backfill: every Supabase profile is merged into `known` so the
+   *  admin panel lists registered users who never opened the chat on this
+   *  instance. Uses the same public anon creds as the browser; empty = off. */
+  private readonly sbUrl = (process.env.VITE_SUPABASE_URL ?? "").replace(/\/+$/, "");
+  private readonly sbKey = process.env.VITE_SUPABASE_ANON_KEY ?? "";
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private modSaveTimer: ReturnType<typeof setTimeout> | null = null;
   private dirty = false;
@@ -171,10 +176,61 @@ export class ChatRoom {
         }
       });
     }
+    // Registered users (offline included) appear in the admin roster from
+    // the very first boot — refreshed hourly (on a best-effort basis) so
+    // new signups show up without waiting for them to open the chat.
+    void this.syncSupabaseMembers();
+    const rosterTimer = setInterval(() => void this.syncSupabaseMembers(), 60 * 60_000);
+    rosterTimer.unref?.();
   }
 
   private get useRedis(): boolean {
     return this.redisUrl !== "" && this.redisToken !== "";
+  }
+
+  /** Merge every Supabase profile into the roster. Existing entries win —
+   *  they carry real last-seen/IP history; imported rows only fill gaps
+   *  (lastSeen = account creation). Without this, a fresh server instance
+   *  lists only users who opened the chat, so the admin panel misses every
+   *  registered-but-never-chatted account. Best-effort: failures are logged
+   *  and never break boot. */
+  private async syncSupabaseMembers(): Promise<void> {
+    if (!this.sbUrl || !this.sbKey) return;
+    try {
+      let added = 0;
+      for (let from = 0; ; from += 1000) {
+        const res = await fetch(
+          `${this.sbUrl}/rest/v1/profiles?select=username,created_at&order=created_at.asc.nullslast`,
+          {
+            headers: {
+              apikey: this.sbKey,
+              Authorization: `Bearer ${this.sbKey}`,
+              Range: `${from}-${from + 999}`,
+              "Range-Unit": "items",
+            },
+          }
+        );
+        if (!res.ok) {
+          this.log.warn({ status: res.status }, "chat roster sync failed");
+          return;
+        }
+        const rows = (await res.json()) as { username?: unknown; created_at?: unknown }[];
+        for (const r of rows) {
+          const nick = String(r.username ?? "").trim().toLowerCase();
+          if (!nick || this.known.has(nick)) continue;
+          const ms = typeof r.created_at === "string" ? new Date(r.created_at).getTime() : NaN;
+          this.known.set(nick, { lastSeen: Number.isFinite(ms) ? Math.floor(ms / 1000) : 0 });
+          added += 1;
+        }
+        if (rows.length < 1000) break;
+      }
+      if (added > 0) {
+        this.schedulePersist();
+        this.log.info({ added, members: this.known.size }, "chat roster synced from supabase");
+      }
+    } catch (err) {
+      this.log.warn({ err: err instanceof Error ? err.message : "unknown" }, "chat roster sync failed");
+    }
   }
 
   private async redisSet(key: string, value: string): Promise<void> {
