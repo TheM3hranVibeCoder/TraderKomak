@@ -353,6 +353,19 @@ function addHealListeners(): void {
     ensureClient();
   }
 
+  /** Drop the moderator key: the signed-in account is NOT an admin (or is
+   *  signed out). Without this the key stored by a previous admin account
+   *  kept `isAdmin` true on every reload — the admin panel and every chat
+   *  moderation power (delete, mute, ban, user info, DM-all) followed it
+   *  into the next sign-in on this browser. */
+  function clearAdminKey(): void {
+    try { localStorage.removeItem(ADMIN_KEY); } catch {}
+    isAdmin.value = false;
+    // Re-join an ALREADY connected room without the key; never open a
+    // connection just to downgrade one (the chat panel connects on demand).
+    if (client) ensureClient();
+  }
+
   /* ── Admin tools state ── */
   const userInfo = ref<{ nick: string; lastIp: string | null; online: boolean; country: string | null } | null>(null);
   const dmStatuses = ref<Record<string, { nick: string; read: boolean; offline: boolean }>>({});
@@ -609,6 +622,7 @@ function addHealListeners(): void {
     ensureClient,
     setNick,
     setAdminKey,
+    clearAdminKey,
     setOpen,
     sendText,
     sendImage,

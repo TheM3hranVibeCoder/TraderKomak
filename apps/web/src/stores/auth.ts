@@ -45,12 +45,23 @@ function setWasAuth(v: boolean): void {
 }
 const PROFILE_KEY = "tk-profile-cache";
 
-function loadCachedProfile(): Profile | null {
+/** The cache is stored WITH the user id it belongs to. The browser cache is
+ *  shared by every account that signs in on this device, so trusting an
+ *  unverified one handed the next sign-in a stranger's username AND its
+ *  isAdmin flag (the admin panel showed up for non-admin accounts). */
+interface CachedProfile {
+  userId: string;
+  profile: Profile;
+}
+function loadCachedProfile(): CachedProfile | null {
   try {
     const raw = localStorage.getItem(PROFILE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as Profile;
-      if (parsed && typeof parsed.username === "string") return parsed;
+      const parsed = JSON.parse(raw) as Partial<CachedProfile>;
+      const p = parsed?.profile as Profile | undefined;
+      if (typeof parsed?.userId === "string" && p && typeof p.username === "string") {
+        return { userId: parsed.userId, profile: p };
+      }
     }
   } catch {}
   return null;
@@ -95,7 +106,10 @@ export const useAuthStore = defineStore("auth", () => {
   const status = ref<AuthStatus>(supabaseReady ? "loading" : "guest");
   const userId = ref<string | null>(null);
   const email = ref<string | null>(null);
-  const profile = ref<Profile | null>(loadCachedProfile());
+  const cachedProfile = loadCachedProfile();
+  // Applied only once the session proves the cache belongs to THIS sign-in
+  // (see applySession) — never blindly at construction.
+  const profile = ref<Profile | null>(null);
   const authModalOpen = ref(false);
   /** Error message shown inside the username step. */
   const claimError = ref<string | null>(null);
@@ -142,12 +156,20 @@ export const useAuthStore = defineStore("auth", () => {
       profile.value = null;
       status.value = "guest";
       setWasAuth(false);
+      // No session = no admin: a key left by a signed-out account must not
+      // keep its chat admin powers alive for the next visitor.
+      try { useChatStore().clearAdminKey(); } catch {}
       return;
     }
     userId.value = session.user.id;
     email.value = session.user.email ?? null;
     setWasAuth(true);
     markVisit();
+    // Fast path ONLY for THIS account's cached profile: a different account
+    // signing in on this browser must never inherit its identity or isAdmin.
+    if (!profile.value && cachedProfile && cachedProfile.userId === session.user.id) {
+      profile.value = cachedProfile.profile;
+    }
     // Optimistic fast-path ONLY for returning users (profile cached on this
     // device) — a brand-new Google account must wait for the profile check,
     // otherwise the chart flashes for a second before the username picker.
@@ -185,7 +207,7 @@ export const useAuthStore = defineStore("auth", () => {
     }
     if (row) {
       profile.value = { username: row.username, avatarUrl: row.avatar_url ?? null, isAdmin: !!row.is_admin };
-      try { localStorage.setItem(PROFILE_KEY, JSON.stringify(profile.value)); } catch {}
+      try { localStorage.setItem(PROFILE_KEY, JSON.stringify({ userId: session.user.id, profile: profile.value })); } catch {}
       status.value = "ready";
       // Keep the email table fresh (readable only by admins) so the admin
       // panel can show which Google account a username belongs to.
@@ -203,6 +225,13 @@ export const useAuthStore = defineStore("auth", () => {
           .eq("id", 1)
           .maybeSingle();
         if (keyRow?.admin_key) useChatStore().setAdminKey(String(keyRow.admin_key));
+        // Flagged admin but no key in admin_settings: drop anything stale.
+        else useChatStore().clearAdminKey();
+      } else {
+        // This account is NOT an admin. A moderator key left in localStorage
+        // by a previous admin account would otherwise keep the admin panel
+        // and every chat moderation power for this sign-in.
+        useChatStore().clearAdminKey();
       }
     } else {
       status.value = "needs-username";
@@ -230,7 +259,12 @@ export const useAuthStore = defineStore("auth", () => {
       // Never leak the previous account's chat identity into the next one.
       localStorage.removeItem("tk-chat-nick");
     } catch {}
-    try { useChatStore().nick = ""; } catch {}
+    try {
+      const chatStore = useChatStore();
+      chatStore.nick = "";
+      // Never leak the previous account's moderator powers either.
+      chatStore.clearAdminKey();
+    } catch {}
     authModalOpen.value = false;
   }
 

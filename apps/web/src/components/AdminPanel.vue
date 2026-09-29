@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useChatStore } from "@/stores/chat";
+import { useAuthStore } from "@/stores/auth";
 import { supabase } from "@/services/supabase";
 import { onlineMembers } from "@/services/presence";
 import { compressImage } from "@/utils/image";
 
 const chat = useChatStore();
+const auth = useAuthStore();
+/** Defense in depth: the panel renders only for a viewer whose ACCOUNT is
+ *  flagged admin in Supabase — a leftover moderator key alone is not enough. */
+const viewerIsAdmin = computed(() => chat.isAdmin && !!auth.profile?.isAdmin);
 const emit = defineEmits<{ (e: "close"): void }>();
 
 function close(): void {
@@ -228,7 +233,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 
 <template>
   <Teleport to="body">
-    <div class="admin-backdrop" @click.self="emit('close')">
+    <div v-if="viewerIsAdmin" class="admin-backdrop" @click.self="emit('close')">
       <div class="admin-panel" role="dialog" aria-modal="true" aria-label="Admin panel">
         <header class="admin-head">
           <div class="admin-head-text">

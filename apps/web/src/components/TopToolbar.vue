@@ -134,7 +134,7 @@ function toggleReplay(): void {
             <div class="profile-pop-name">{{ auth.profile?.username }}</div>
             <div class="profile-pop-mail">{{ auth.email }}</div>
           </div>
-          <button v-if="chat.isAdmin" class="profile-act admin" type="button" role="menuitem" @click="adminOpen = true; profileOpen = false">
+          <button v-if="chat.isAdmin && auth.profile?.isAdmin" class="profile-act admin" type="button" role="menuitem" @click="adminOpen = true; profileOpen = false">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z" />
               <path d="M12 8v4M12 15.5h.01" />
@@ -300,7 +300,7 @@ function toggleReplay(): void {
       </button>
     </div>
   </header>
-  <AdminPanel v-if="adminOpen" @close="adminOpen = false" />
+  <AdminPanel v-if="adminOpen && chat.isAdmin && auth.profile?.isAdmin" @close="adminOpen = false" />
 </template>
 
 <style scoped>
