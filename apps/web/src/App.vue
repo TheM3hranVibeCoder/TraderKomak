@@ -66,14 +66,31 @@ function onResize(): void {
 onMounted(() => {
   onResize();
   window.addEventListener("resize", onResize);
-  // If the market server was never reachable this session, surface the
-  // Telegram popup (free self-hosted Windows app) — dismissed per session.
-  setTimeout(() => {
-    if (!everConnected.value && !sessionStorage.getItem("tk-down-popup-dismissed")) {
-      serverDownPopup.value = true;
+  // Server-down watchdog (see the popup state below): a SLOW first load is
+  // not a failure — on flaky links the TLS handshake + first snapshot can
+  // take well over 10s while the server is perfectly fine. Instead of one
+  // fixed timer, poll and wait for real evidence: failing dials (status
+  // flips to "reconnecting" before the session ever connected and stays
+  // unconnected) or a very generous no-connection window.
+  const mountedAt = Date.now();
+  downTimer = setInterval(() => {
+    const stop = (): void => {
+      if (downTimer) clearInterval(downTimer);
+      downTimer = undefined;
+    };
+    if (everConnected.value || sessionStorage.getItem("tk-down-popup-dismissed")) {
+      stop();
+      return;
     }
-  }, 10_000);
+    const failing = firstFailureAt !== 0 && Date.now() - firstFailureAt >= FAILED_FOR_MS;
+    if (failing || Date.now() - mountedAt >= NEVER_CONNECTED_MS) {
+      serverDownPopup.value = true;
+      stop();
+    }
+  }, 2_000);
 });
+/** Watchdog handle (cleared on unmount / once the popup state settles). */
+let downTimer: ReturnType<typeof setInterval> | undefined;
 
 /** Collapsing the rail on phones must also close whichever panel is open,
  *  otherwise it would hang there over the chart with its rail gone. */
@@ -85,7 +102,10 @@ function toggleRail(): void {
     news.setOpen(false);
   }
 }
-onBeforeUnmount(() => window.removeEventListener("resize", onResize));
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", onResize);
+  if (downTimer) clearInterval(downTimer);
+});
 const gate = computed(() => auth.status !== "ready");
 /** OAuth just redirected back — show a neutral splash while the session +
  *  profile are confirmed (never the chart: the user may still be new). */
@@ -141,14 +161,28 @@ watch(
 
 // ── Server-down popup: when the market server is unreachable, surface the
 // Telegram channel (free self-hosted Windows app) instead of a silent chart.
+// Triggered by real evidence of failure, never by a slow first load: dials
+// that FAILED (socket dropped before the session ever connected) and stayed
+// failing for FAILED_FOR_MS, or no connection at all after
+// NEVER_CONNECTED_MS (hung sockets that never fire close).
 const everConnected = ref(false);
 const serverDownPopup = ref(false);
+/** When the first failed dial happened (0 = none). "reconnecting" before the
+ *  session ever connected means the socket keeps dropping — the server is
+ *  down/unreachable — as opposed to a dial still in progress ("connecting"),
+ *  which is just slow. */
+let firstFailureAt = 0;
+const FAILED_FOR_MS = 15_000;
+const NEVER_CONNECTED_MS = 35_000;
 watch(
   () => market.status,
   (s) => {
     if (s === "connected") {
       everConnected.value = true;
       serverDownPopup.value = false;
+      firstFailureAt = 0;
+    } else if (!everConnected.value && firstFailureAt === 0 && s === "reconnecting") {
+      firstFailureAt = Date.now();
     }
   }
 );
