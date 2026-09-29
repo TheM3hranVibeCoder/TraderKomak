@@ -10,9 +10,10 @@ const FAV_KEY = "tk-fav-timeframes";
 function getInitialTheme(): Theme {
   const saved = localStorage.getItem(STORAGE_KEY) as Theme | null;
   if (saved === "dark" || saved === "light") return saved;
-  // Prefer dark for trading, but respect system
-  if (window.matchMedia?.("(prefers-color-scheme: light)").matches) return "light";
-  return "dark";
+  // LIGHT is the default for brand-new visitors — dark is strictly the
+  // user's own choice via the toggle. (Auto-dark from the OS made first-time
+  // sign-ins land on a black chart on dark-mode machines.)
+  return "light";
 }
 
 export const useThemeStore = defineStore("theme", () => {

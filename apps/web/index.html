@@ -3,11 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <!-- Apply the saved theme BEFORE first paint — otherwise the CSS dark
-         default flashes black for light-theme users on every refresh. -->
+         default flashes black for light-theme users on every refresh. New
+         visitors get the store's light default here too, so a first-time
+         sign-in never paints a black chart while Vue boots. -->
     <script>
       try {
         var t = localStorage.getItem("tk-theme");
-        if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+        document.documentElement.setAttribute("data-theme", t === "dark" || t === "light" ? t : "light");
       } catch (e) {}
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
