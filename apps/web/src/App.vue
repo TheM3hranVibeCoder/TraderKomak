@@ -7,6 +7,7 @@ import { useChatStore } from "@/stores/chat";
 import { useAuthStore } from "@/stores/auth";
 import { startCloudSync } from "@/services/cloudSync";
 import { wasAuthOnDevice, authInFlight } from "@/stores/auth";
+import { startMemberPresence, stopMemberPresence } from "@/services/presence";
 import { useNewsStore } from "@/stores/news";
 import NewsPanel from "@/components/NewsPanel.vue";
 import TopToolbar from "@/components/TopToolbar.vue";
@@ -130,8 +131,14 @@ watch(
   ([s, uname]) => {
     if (s === "ready" && uname) {
       if (chat.nick !== uname) chat.setNick(uname);
+      // Server-less online list: every signed-in client marks itself present
+      // in Supabase, so the admin panel shows who is online even when the
+      // market server (chat WebSocket) is not running.
+      if (auth.userId) startMemberPresence(auth.userId, uname);
     } else if (s === "needs-username") {
       auth.authModalOpen = true;
+    } else if (s === "guest") {
+      stopMemberPresence();
     }
   }
 );
