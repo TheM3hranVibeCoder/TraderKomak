@@ -112,6 +112,18 @@ body {
   transition: background 600ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* While an account's saved look is being restored the chart would paint in the
+   default colors and then repaint itself (colors, then drawings) a beat later.
+   It hides for that moment so the user sees ONE clean chart. The gate is capped
+   in cloudSync (chartRestorePending), so a slow or blocked cloud can never keep
+   the chart hidden. */
+.chart-container {
+  transition: opacity 140ms ease;
+}
+.chart-container.restoring {
+  opacity: 0;
+}
+
 /* Smooth theme transition for all themed surfaces */
 .toolbar,
 .chart-pane,

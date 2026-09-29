@@ -3,7 +3,7 @@
  *  last instrument/timeframe. Local storage stays the offline cache; the
  *  cloud copy wins on login if it exists, otherwise the local one is
  *  pushed up. Changes are debounced-upserted while the user works. */
-import { watch } from "vue";
+import { ref, watch } from "vue";
 import { isInstrument, isTimeframe } from "@traderkomak/shared";
 import type { Timeframe } from "@traderkomak/shared";
 import { supabase, supabaseReady } from "./supabase";
@@ -39,6 +39,53 @@ const PUSH_DEBOUNCE_MS = 1500;
 let started = false;
 let pushTimer: ReturnType<typeof setTimeout> | null = null;
 let applying = false;
+
+/** True while an account's saved look is being restored into a chart that is
+ *  already on screen. The chart hides itself for that moment, so the user sees
+ *  ONE clean paint (saved colors + drawings) instead of a default-colored chart
+ *  that repaints itself a beat later. Capped, so a slow or blocked cloud can
+ *  never leave the chart hidden. */
+export const chartRestorePending = ref(false);
+const RESTORE_CAP_MS = 2500;
+let restoreCapTimer: ReturnType<typeof setTimeout> | null = null;
+
+function beginRestore(): void {
+  if (restoreCapTimer) clearTimeout(restoreCapTimer);
+  chartRestorePending.value = true;
+  restoreCapTimer = setTimeout(endRestore, RESTORE_CAP_MS);
+  restoreCapTimer.unref?.();
+}
+
+function endRestore(): void {
+  if (restoreCapTimer) {
+    clearTimeout(restoreCapTimer);
+    restoreCapTimer = null;
+  }
+  chartRestorePending.value = false;
+}
+
+/** Would applying this row visibly change the chart's look? Compared field by
+ *  field (JSON key order would differ) and treating an absent theme as the
+ *  light default. A same-account boot with identical settings must NOT pay
+ *  for the gate. */
+function lookDiffers(cloud: CloudData): boolean {
+  const style = cloud.chart?.style as Record<string, unknown> | null | undefined;
+  if (style && typeof style === "object") {
+    let local: Record<string, unknown> = {};
+    try { local = JSON.parse(localStorage.getItem("tk-chart-style") ?? "{}") as Record<string, unknown>; } catch {}
+    for (const k of ["bgSolid", "bgTop", "bgBottom", "up", "down", "borderUp", "borderDown", "wickUp", "wickDown", "axisText", "axisBorder", "crossVert", "crossHorz"]) {
+      if ((style[k] ?? null) !== (local[k] ?? null)) return true;
+    }
+    const mode = style.bgMode ?? "gradient";
+    if (mode !== (local.bgMode ?? "gradient")) return true;
+  }
+  if (cloud.theme === "dark" || cloud.theme === "light") {
+    let cur: string | null = null;
+    try { cur = localStorage.getItem("tk-theme"); } catch {}
+    if (cloud.theme !== (cur === "dark" || cur === "light" ? cur : "light")) return true;
+  }
+  return false;
+}
 /** App boot time — symbol/timeframe restore is a BOOT-ONLY convenience.
  *  On flaky links the user_settings fetch lands minutes late and applying
  *  it then yanks the user off whatever they're watching (reported as "the
@@ -257,6 +304,7 @@ export function startCloudSync(): void {
       clearTimeout(pushTimer);
       pushTimer = null;
     }
+    endRestore();
     activeUserId = null;
   }
 
@@ -315,6 +363,7 @@ export function startCloudSync(): void {
       if (error) {
         console.error("cloud load failed", error);
         applying = false;
+        endRestore();
         return;
       }
       if (data?.data && typeof data.data === "object") {
@@ -348,11 +397,15 @@ export function startCloudSync(): void {
         // across both phases so nothing pushes half-restored state upstream.
         let changesBefore = 0;
         try { changesBefore = Number(localStorage.getItem(LOCAL_CHANGE_KEY)) || 0; } catch {}
+        // Only hide the chart when its look is really about to change: a
+        // same-account boot with identical settings must stay instant.
+        if (lookDiffers(data.data as CloudData)) beginRestore();
         applying = true;
         applyLook(data.data as CloudData);
         await new Promise((r) => setTimeout(r, 1500));
         if (auth.status !== "ready" || activeUserId !== userId) {
           applying = false;
+          endRestore();
           return;
         }
         applyLocal(data.data as CloudData);
@@ -361,6 +414,7 @@ export function startCloudSync(): void {
         let changesAfter = 0;
         try { changesAfter = Number(localStorage.getItem(LOCAL_CHANGE_KEY)) || 0; } catch {}
         if (changesAfter !== changesBefore) schedulePush(userId);
+        endRestore();
       } else {
         // First login for this account — seed the cloud with local state.
         await push(userId);

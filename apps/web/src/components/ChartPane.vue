@@ -2,6 +2,7 @@
 import { ref, watch, onMounted, onBeforeUnmount, nextTick, computed, onUnmounted, type Ref } from "vue";
 import { createChartAdapter, type ChartAdapter } from "@/chart/chartAdapter";
 import { useThemeStore } from "@/stores/theme";
+import { chartRestorePending } from "@/services/cloudSync";
 import { useMarketStore, sanitizeCandles, isSaneCandle } from "@/stores/market";
 import { useDrawingsStore, type DrawingRect, type DrawingTrend, type DrawingPoly, type DrawingPosition, type DrawingHLine, type DrawingHRay, type DrawingVLine, type SingleKind, type SingleDrawing, type DashStyle } from "@/stores/drawings";
 import { useReplayStore } from "@/stores/replay";
@@ -5894,7 +5895,7 @@ onBeforeUnmount(() => {
     <div
       ref="containerRef"
       class="chart-container"
-      :class="{ 'rect-mode': drawingToolActive }"
+      :class="{ 'rect-mode': drawingToolActive, restoring: chartRestorePending }"
       @click="onChartClick"
     />
 
