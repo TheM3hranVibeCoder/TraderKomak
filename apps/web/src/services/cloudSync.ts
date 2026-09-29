@@ -68,6 +68,13 @@ function endRestore(): void {
  *  field (JSON key order would differ) and treating an absent theme as the
  *  light default. A same-account boot with identical settings must NOT pay
  *  for the gate. */
+/** Is this browser's account cache empty? An account switch wipes it before
+ *  the reload, so an empty cache means the chart is about to be restored with
+ *  a different account's look. */
+function accountCacheIsEmpty(): boolean {
+  try { return localStorage.getItem("tk-chart-style") === null; } catch { return false; }
+}
+
 function lookDiffers(cloud: CloudData): boolean {
   const style = cloud.chart?.style as Record<string, unknown> | null | undefined;
   if (style && typeof style === "object") {
@@ -354,6 +361,11 @@ export function startCloudSync(): void {
         applying = true;
       }
       activeUserId = userId;
+      // Arm the restore gate HERE, synchronously, before the chart mounts on
+      // the render that follows this status change. Otherwise the chart paints
+      // in the default colors and only then hides when the row lands — the
+      // "chart appears, disappears, appears again" flicker.
+      if (accountCacheIsEmpty()) beginRestore();
       const sb = supabase();
       const { data, error } = await sb
         .from("user_settings")
@@ -384,6 +396,8 @@ export function startCloudSync(): void {
           syncedAt = Date.parse(data.updated_at) || 0;
         }
         if (!forceApply && localAt > syncedAt) {
+          // Local wins and is already on screen: nothing to wait for.
+          endRestore();
           await push(userId);
           return;
         }
@@ -397,9 +411,9 @@ export function startCloudSync(): void {
         // across both phases so nothing pushes half-restored state upstream.
         let changesBefore = 0;
         try { changesBefore = Number(localStorage.getItem(LOCAL_CHANGE_KEY)) || 0; } catch {}
-        // Only hide the chart when its look is really about to change: a
-        // same-account boot with identical settings must stay instant.
-        if (lookDiffers(data.data as CloudData)) beginRestore();
+        // Nothing to change visually (e.g. a brand-new account whose setup is
+        // all defaults): the chart already on screen is correct — show it now.
+        if (!lookDiffers(data.data as CloudData)) endRestore();
         applying = true;
         applyLook(data.data as CloudData);
         await new Promise((r) => setTimeout(r, 1500));
@@ -421,6 +435,9 @@ export function startCloudSync(): void {
         // A forced switch holds the change-guard while the cloud row lands;
         // the seed push above already stored the defaults, so release it or
         // every later edit of this account would be blocked from syncing.
+        // A brand-new account has nothing to restore: the defaults already on
+        // screen ARE its setup. Reveal before the seed push finishes.
+        endRestore();
         if (forceApply) applying = false;
       }
 
