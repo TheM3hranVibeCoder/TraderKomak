@@ -14,7 +14,7 @@ function close(): void {
   emit("close");
 }
 
-const tab = ref<"members" | "users" | "muted" | "banned">("members");
+const tab = ref<"online" | "members" | "users" | "muted" | "banned">("members");
 
 const onlineSet = computed(() => new Set(chat.onlineNicks));
 const mutedNicks = computed(() => chat.mutes.map((m) => m.nick));
@@ -102,6 +102,8 @@ const membersList = computed(() => {
   return q ? list.filter((m) => m.username.toLowerCase().includes(q)) : list;
 });
 const onlineCount = computed(() => members.value.filter((m) => onlineMembers.value.has(m.userId)).length);
+/** Online-only view — reuses the members list (search already applied). */
+const onlineList = computed(() => membersList.value.filter((m) => m.online));
 function fmtJoined(iso: string): string {
   const d = new Date(iso);
   return Number.isFinite(d.getTime())
@@ -279,13 +281,35 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         </div>
 
         <div class="admin-tabs" role="tablist">
+          <button class="tab" :class="{ on: tab === 'online' }" role="tab" :aria-selected="tab === 'online'" @click="tab = 'online'">Online ({{ onlineCount }})</button>
           <button class="tab" :class="{ on: tab === 'members' }" role="tab" :aria-selected="tab === 'members'" @click="tab = 'members'">Members ({{ members.length }})</button>
           <button class="tab" :class="{ on: tab === 'users' }" role="tab" :aria-selected="tab === 'users'" @click="tab = 'users'">Chat users</button>
           <button class="tab" :class="{ on: tab === 'muted' }" role="tab" :aria-selected="tab === 'muted'" @click="tab = 'muted'">Muted ({{ chat.mutes.length }})</button>
           <button class="tab" :class="{ on: tab === 'banned' }" role="tab" :aria-selected="tab === 'banned'" @click="tab = 'banned'">Banned ({{ chat.bans.length }})</button>
         </div>
 
-        <div v-if="tab === 'members'" class="admin-body">
+        <div v-if="tab === 'online'" class="admin-body">
+          <input
+            v-model="filter"
+            class="admin-search"
+            type="text"
+            placeholder="Search online members…"
+            aria-label="Search online members"
+          />
+          <div v-if="membersLoading" class="admin-empty">Loading members…</div>
+          <div v-else-if="!onlineList.length" class="admin-empty">No one is online right now.</div>
+          <div v-for="m in onlineList" :key="m.userId" class="user-row">
+            <button class="nick-btn" type="button" title="Show details (email, IP, country)" @click="openDetails(m.username)">
+              <span class="dot on"></span>
+              <span class="user-nick">{{ m.username }}</span>
+            </button>
+            <span v-if="isSelf(m.username)" class="user-flag you">you</span>
+            <span v-else class="user-flag live">online</span>
+            <span v-if="m.isAdmin" class="user-flag admin">admin</span>
+          </div>
+        </div>
+
+        <div v-else-if="tab === 'members'" class="admin-body">
           <input
             v-model="filter"
             class="admin-search"

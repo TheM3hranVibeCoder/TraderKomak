@@ -67,6 +67,12 @@ function onResize(): void {
 onMounted(() => {
   onResize();
   window.addEventListener("resize", onResize);
+  // Already signed in when this mounts (e.g. a remount after a deploy or
+  // HMR): the auth watch further down only fires on CHANGES, so kick the
+  // presence off right away — otherwise the member list shows nobody online.
+  if (auth.status === "ready" && auth.profile?.username && auth.userId) {
+    startMemberPresence(auth.userId, auth.profile.username);
+  }
   // Server-down watchdog (see the popup state below): a SLOW first load is
   // not a failure — on flaky links the TLS handshake + first snapshot can
   // take well over 10s while the server is perfectly fine. Instead of one
