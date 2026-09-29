@@ -4721,7 +4721,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="paneRef" class="chart-pane">
+  <div ref="paneRef" class="chart-pane" :class="{ restoring: chartRestorePending }">
     <!-- Top-left symbol label like TradingView — transparent, only letters with flags -->
     <div v-if="instrument" class="chart-symbol-label">
       <span class="label-text" :style="{ color: autoInkColor }">
@@ -5895,7 +5895,7 @@ onBeforeUnmount(() => {
     <div
       ref="containerRef"
       class="chart-container"
-      :class="{ 'rect-mode': drawingToolActive, restoring: chartRestorePending }"
+      :class="{ 'rect-mode': drawingToolActive }"
       @click="onChartClick"
     />
 

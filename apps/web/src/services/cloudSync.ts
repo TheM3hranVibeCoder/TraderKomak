@@ -1,4 +1,4 @@
-/** Per-account cloud sync of chart state via the Supabase `user_settings`
+ /** Per-account cloud sync of chart state via the Supabase `user_settings`
  *  table (one JSONB row per user): drawings, watchlist symbols and the
  *  last instrument/timeframe. Local storage stays the offline cache; the
  *  cloud copy wins on login if it exists, otherwise the local one is
@@ -46,7 +46,7 @@ let applying = false;
  *  that repaints itself a beat later. Capped, so a slow or blocked cloud can
  *  never leave the chart hidden. */
 export const chartRestorePending = ref(false);
-const RESTORE_CAP_MS = 2500;
+const RESTORE_CAP_MS = 5000;
 let restoreCapTimer: ReturnType<typeof setTimeout> | null = null;
 
 function beginRestore(): void {
