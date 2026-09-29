@@ -14,7 +14,7 @@ function close(): void {
   emit("close");
 }
 
-const tab = ref<"online" | "members" | "users" | "muted" | "banned">("members");
+const tab = ref<"users" | "muted" | "banned">("users");
 
 const onlineSet = computed(() => new Set(chat.onlineNicks));
 const mutedNicks = computed(() => chat.mutes.map((m) => m.nick));
@@ -22,7 +22,34 @@ const bannedNicks = computed(() => chat.bans.map((b) => b.nick));
 const mutedSet = computed(() => new Set(mutedNicks.value));
 const bannedSet = computed(() => new Set(bannedNicks.value));
 
-/** Everyone the room knows: online first, then the rest by recency. */
+/* ── Registered members (Supabase) — the chat room's own roster misses users
+   who never opened the chat on this server, and "online" must not depend on
+   the market server: people with the site open are marked via realtime
+   presence. Both merge into the list below; the table itself is unchanged. ── */
+const members = ref<{ user_id: string; username: string }[]>([]);
+onMounted(async () => {
+  try {
+    const out: { user_id: string; username: string }[] = [];
+    const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase()
+        .from("profiles")
+        .select("user_id, username, created_at")
+        .order("created_at", { ascending: false })
+        .range(from, from + PAGE - 1);
+      if (error) break;
+      const rows = (data ?? []) as { user_id: string; username: string }[];
+      out.push(...rows);
+      if (rows.length < PAGE) break;
+    }
+    members.value = out;
+  } catch {
+    /* failed load leaves the chat-roster view exactly as before */
+  }
+});
+
+/** Everyone the room knows + every registered member: online first (chat
+ *  WebSocket and/or Supabase presence), then the rest by recency. */
 const allUsers = computed(() => {
   const seen = new Set<string>();
   const list: { nick: string; online: boolean; lastSeen: number }[] = [];
@@ -30,13 +57,27 @@ const allUsers = computed(() => {
     seen.add(n.toLowerCase());
     list.push({ nick: n, online: true, lastSeen: 0 });
   }
+  for (const username of onlineMembers.value.values()) {
+    if (seen.has(username.toLowerCase())) continue;
+    seen.add(username.toLowerCase());
+    list.push({ nick: username, online: true, lastSeen: 0 });
+  }
   for (const k of [...chat.knownNicks].sort((a, b) => b.lastSeen - a.lastSeen)) {
     if (seen.has(k.nick.toLowerCase())) continue;
     seen.add(k.nick.toLowerCase());
     list.push({ nick: k.nick, online: false, lastSeen: k.lastSeen });
   }
+  for (const m of members.value) {
+    if (seen.has(m.username.toLowerCase())) continue;
+    seen.add(m.username.toLowerCase());
+    list.push({ nick: m.username, online: false, lastSeen: 0 });
+  }
   return list;
 });
+
+/** Online stat: chat connections + realtime presence (correct with or
+ *  without the market server running). */
+const onlineCount = computed(() => allUsers.value.filter((u) => u.online).length);
 
 const filter = ref("");
 const filteredUsers = computed(() => {
@@ -44,72 +85,6 @@ const filteredUsers = computed(() => {
   if (!q) return allUsers.value;
   return allUsers.value.filter((u) => u.nick.toLowerCase().includes(q));
 });
-
-/* ── Members — every Supabase profile, online state from realtime presence.
-   Loads straight from Supabase, so this tab works on the deployed site
-   WITHOUT the market server; the chat-roster tab exists for moderation. ── */
-interface MemberRow {
-  userId: string;
-  username: string;
-  isAdmin: boolean;
-  joinedAt: string;
-}
-const members = ref<MemberRow[]>([]);
-const membersLoading = ref(true);
-const membersError = ref<string | null>(null);
-
-onMounted(async () => {
-  try {
-    const out: MemberRow[] = [];
-    const PAGE = 1000;
-    for (let from = 0; ; from += PAGE) {
-      const { data, error } = await supabase()
-        .from("profiles")
-        .select("user_id, username, is_admin, created_at")
-        .order("created_at", { ascending: false })
-        .range(from, from + PAGE - 1);
-      if (error) throw error;
-      const rows = (data ?? []) as {
-        user_id: string;
-        username: string;
-        is_admin: boolean | null;
-        created_at: string;
-      }[];
-      out.push(
-        ...rows.map((r) => ({
-          userId: r.user_id,
-          username: r.username,
-          isAdmin: !!r.is_admin,
-          joinedAt: r.created_at,
-        }))
-      );
-      if (rows.length < PAGE) break;
-    }
-    members.value = out;
-  } catch (err) {
-    membersError.value = err instanceof Error ? err.message : "Could not load members";
-  } finally {
-    membersLoading.value = false;
-  }
-});
-
-/** Online first (realtime presence), newest members next. */
-const membersList = computed(() => {
-  const online = onlineMembers.value;
-  const list = members.value.map((m) => ({ ...m, online: online.has(m.userId) }));
-  list.sort((a, b) => (a.online === b.online ? 0 : a.online ? -1 : 1));
-  const q = filter.value.trim().toLowerCase();
-  return q ? list.filter((m) => m.username.toLowerCase().includes(q)) : list;
-});
-const onlineCount = computed(() => members.value.filter((m) => onlineMembers.value.has(m.userId)).length);
-/** Online-only view — reuses the members list (search already applied). */
-const onlineList = computed(() => membersList.value.filter((m) => m.online));
-function fmtJoined(iso: string): string {
-  const d = new Date(iso);
-  return Number.isFinite(d.getTime())
-    ? d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
-    : "—";
-}
 
 /* ── Custom mute: amount + unit ── */
 const muteAmount = ref(10);
@@ -258,7 +233,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         <header class="admin-head">
           <div class="admin-head-text">
             <h2 class="admin-title">Admin Panel</h2>
-            <p class="admin-sub">See who is online and every registered member — mute, ban, message and announce.</p>
+            <p class="admin-sub">Manage chat users — mute, ban, message and announce.</p>
           </div>
           <button class="admin-close" type="button" aria-label="Close" @click="close">✕</button>
         </header>
@@ -266,7 +241,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         <!-- stat chips + telegram broadcast -->
         <div class="admin-stats">
           <div class="stat green"><span class="stat-num">{{ onlineCount }}</span><span class="stat-label">Online</span></div>
-          <div class="stat blue"><span class="stat-num">{{ members.length }}</span><span class="stat-label">Members</span></div>
+          <div class="stat blue"><span class="stat-num">{{ allUsers.length }}</span><span class="stat-label">Known users</span></div>
           <div class="stat amber"><span class="stat-num">{{ chat.mutes.length }}</span><span class="stat-label">Muted</span></div>
           <div class="stat red"><span class="stat-num">{{ chat.bans.length }}</span><span class="stat-label">Banned</span></div>
         </div>
@@ -281,58 +256,12 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         </div>
 
         <div class="admin-tabs" role="tablist">
-          <button class="tab" :class="{ on: tab === 'online' }" role="tab" :aria-selected="tab === 'online'" @click="tab = 'online'">Online ({{ onlineCount }})</button>
-          <button class="tab" :class="{ on: tab === 'members' }" role="tab" :aria-selected="tab === 'members'" @click="tab = 'members'">Members ({{ members.length }})</button>
-          <button class="tab" :class="{ on: tab === 'users' }" role="tab" :aria-selected="tab === 'users'" @click="tab = 'users'">Chat users</button>
+          <button class="tab" :class="{ on: tab === 'users' }" role="tab" :aria-selected="tab === 'users'" @click="tab = 'users'">Users</button>
           <button class="tab" :class="{ on: tab === 'muted' }" role="tab" :aria-selected="tab === 'muted'" @click="tab = 'muted'">Muted ({{ chat.mutes.length }})</button>
           <button class="tab" :class="{ on: tab === 'banned' }" role="tab" :aria-selected="tab === 'banned'" @click="tab = 'banned'">Banned ({{ chat.bans.length }})</button>
         </div>
 
-        <div v-if="tab === 'online'" class="admin-body">
-          <input
-            v-model="filter"
-            class="admin-search"
-            type="text"
-            placeholder="Search online members…"
-            aria-label="Search online members"
-          />
-          <div v-if="membersLoading" class="admin-empty">Loading members…</div>
-          <div v-else-if="!onlineList.length" class="admin-empty">No one is online right now.</div>
-          <div v-for="m in onlineList" :key="m.userId" class="user-row">
-            <button class="nick-btn" type="button" title="Show details (email, IP, country)" @click="openDetails(m.username)">
-              <span class="dot on"></span>
-              <span class="user-nick">{{ m.username }}</span>
-            </button>
-            <span v-if="isSelf(m.username)" class="user-flag you">you</span>
-            <span v-else class="user-flag live">online</span>
-            <span v-if="m.isAdmin" class="user-flag admin">admin</span>
-          </div>
-        </div>
-
-        <div v-else-if="tab === 'members'" class="admin-body">
-          <input
-            v-model="filter"
-            class="admin-search"
-            type="text"
-            placeholder="Search members…"
-            aria-label="Search members"
-          />
-          <div v-if="membersLoading" class="admin-empty">Loading members…</div>
-          <div v-else-if="membersError" class="admin-empty">{{ membersError }}</div>
-          <div v-else-if="!membersList.length" class="admin-empty">No members found.</div>
-          <div v-for="m in membersList" :key="m.userId" class="user-row">
-            <button class="nick-btn" type="button" title="Show details (email, IP, country)" @click="openDetails(m.username)">
-              <span class="dot" :class="m.online ? 'on' : 'off'"></span>
-              <span class="user-nick">{{ m.username }}</span>
-            </button>
-            <span v-if="isSelf(m.username)" class="user-flag you">you</span>
-            <span v-else-if="m.online" class="user-flag live">online</span>
-            <span v-if="m.isAdmin" class="user-flag admin">admin</span>
-            <span class="member-joined">joined {{ fmtJoined(m.joinedAt) }}</span>
-          </div>
-        </div>
-
-        <div v-else-if="tab === 'users'" class="admin-body">
+        <div v-if="tab === 'users'" class="admin-body">
           <input
             v-model="filter"
             class="admin-search"
@@ -719,14 +648,6 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
 .user-flag.muted { background: linear-gradient(135deg, #fbbf24, #f59e0b); }
 .user-flag.banned { background: linear-gradient(135deg, #fb7185, #ef4444); }
 .user-flag.you { background: linear-gradient(135deg, #8b5cf6, #6366f1); }
-.user-flag.admin { background: linear-gradient(135deg, #38bdf8, #3b82f6); }
-.member-joined {
-  margin-left: auto;
-  font-size: 10.5px;
-  font-weight: 600;
-  color: #7a83a0;
-  white-space: nowrap;
-}
 .dm-status {
   font-size: 10px;
   font-weight: 800;
