@@ -873,8 +873,17 @@ function applyChartStyle(): void {
     vert: s.crossVert ?? autoInk,
     horz: s.crossHorz ?? autoInk,
   });
-  localStorage.setItem(CHART_STYLE_KEY, JSON.stringify(s));
-  window.dispatchEvent(new CustomEvent("tk-local-change", { detail: { key: "chart-style" } }));
+  // Persist ONLY on a real change: applyChartStyle also runs on every boot,
+  // and an unconditional write counted as a local edit — which made the cloud
+  // row lose to the boot defaults (a returning account lost its saved
+  // colors, and a switch leaked the previous account's into the new one).
+  const next = JSON.stringify(s);
+  let prev = "";
+  try { prev = localStorage.getItem(CHART_STYLE_KEY) ?? ""; } catch {}
+  if (next !== prev) {
+    try { localStorage.setItem(CHART_STYLE_KEY, next); } catch {}
+    window.dispatchEvent(new CustomEvent("tk-local-change", { detail: { key: "chart-style" } }));
+  }
 }
 watch(chartStyle, applyChartStyle, { deep: true });
 

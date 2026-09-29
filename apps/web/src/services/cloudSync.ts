@@ -11,6 +11,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useWatchlistStore } from "@/stores/watchlist";
 import { useDrawingsStore } from "@/stores/drawings";
 import { useMarketStore } from "@/stores/market";
+import { useThemeStore } from "@/stores/theme";
 import { useIndicatorsStore } from "@/stores/indicators";
 
 interface CloudData {
@@ -30,6 +31,8 @@ interface CloudData {
   watchlist?: string[];
   instrument?: string;
   timeframe?: string;
+  /** Light/dark look — part of the account's saved setup. */
+  theme?: "dark" | "light";
 }
 
 const PUSH_DEBOUNCE_MS = 1500;
@@ -54,6 +57,44 @@ const LOCAL_CHANGE_KEY = "tk-cloud-local-change-at";
  *  keep it and heal the cloud row. Otherwise the cloud row already contains
  *  every local change, so applying it can never lose data. */
 const SYNCED_AT_KEY = "tk-cloud-synced-at";
+/** Which ACCOUNT the local cache belongs to. Set on every ready login; when a
+ *  DIFFERENT account signs in on this browser, the previous account's cached
+ *  settings are wiped and the page reloaded so every store re-seeds from clean
+ *  defaults — then THAT account's own cloud row is applied. Without this a
+ *  brand-new account inherited the previous account's chart colors (reported:
+ *  "signing in with another Google account came up with a black chart"). */
+const OWNER_KEY = "tk-cloud-owner";
+/** Set across the reload of an account switch: the cloud row must win over
+ *  anything the page writes back while booting. */
+const FORCE_KEY = "tk-force-cloud-apply";
+/** Local keys owned by an ACCOUNT (each mirrored in user_settings). Device
+ *  prefs (panel states, favorites, auth caches) are deliberately untouched. */
+const ACCOUNT_KEYS = [
+  "tk-chart-style",
+  "tk-chart-templates",
+  "tk-drawings",
+  "tk-drawings-lines",
+  "tk-drawings-polys",
+  "tk-drawings-positions",
+  "tk-drawings-singles",
+  "tk-watchlist",
+  "tk-instrument",
+  "tk-timeframe",
+  "tk-indicators-v1",
+  "tk-theme",
+  LOCAL_CHANGE_KEY,
+  SYNCED_AT_KEY,
+];
+
+function wipeAccountCache(): void {
+  for (const k of ACCOUNT_KEYS) {
+    try { localStorage.removeItem(k); } catch {}
+  }
+}
+
+function readTheme(): "dark" | "light" {
+  try { return localStorage.getItem("tk-theme") === "dark" ? "dark" : "light"; } catch { return "light"; }
+}
 
 function markLocalChange(): void {
   try { localStorage.setItem(LOCAL_CHANGE_KEY, String(Date.now())); } catch {}
@@ -67,6 +108,7 @@ function snapshot(): CloudData {
   return {
     indicators: JSON.parse(JSON.stringify(indStore.addedMap)) as Record<string, Record<string, boolean>>,
     indicatorSettings: JSON.parse(JSON.stringify(indStore.settingsSnapshot())) as Record<string, unknown>,
+    theme: readTheme(),
     chart: {
       style: JSON.parse(localStorage.getItem("tk-chart-style") ?? "null") as Record<string, unknown> | null,
       templates: JSON.parse(localStorage.getItem("tk-chart-templates") ?? "null") as unknown,
@@ -125,6 +167,11 @@ function applyLocal(cloud: CloudData): void {
     }
     if (cloud.indicatorSettings && typeof cloud.indicatorSettings === "object") {
       ind.applySettings(cloud.indicatorSettings);
+    }
+    // Light/dark travels with the account too, so a returning account gets
+    // its saved look on any device.
+    if (cloud.theme === "dark" || cloud.theme === "light") {
+      try { useThemeStore().setTheme(cloud.theme); } catch {}
     }
 
     if (cloud.chart && typeof cloud.chart === "object") {
@@ -215,6 +262,38 @@ export function startCloudSync(): void {
       if (activeUserId) teardown();
       const userId = auth.userId;
       if (!userId) return;
+      // Account switch on this browser: the local cache still holds the
+      // PREVIOUS account's settings. Wipe it and reload so every store
+      // re-seeds from clean defaults; this account's own cloud row (if any)
+      // is then applied authoritatively below. A brand-new account therefore
+      // starts on the defaults instead of someone else's chart colors.
+      let cacheOwner: string | null = null;
+      try { cacheOwner = localStorage.getItem(OWNER_KEY); } catch {}
+      if (cacheOwner && cacheOwner !== userId) {
+        try {
+          localStorage.removeItem(OWNER_KEY);
+          sessionStorage.setItem(FORCE_KEY, "1");
+        } catch {}
+        wipeAccountCache();
+        location.reload();
+        return;
+      }
+      try { localStorage.setItem(OWNER_KEY, userId); } catch {}
+      // The boot write-back (chart defaults) must not push DEFAULTS over this
+      // account's saved settings: drop the pending push and hold the change
+      // guard while the cloud row lands.
+      let forceApply = false;
+      try {
+        forceApply = sessionStorage.getItem(FORCE_KEY) === "1";
+        sessionStorage.removeItem(FORCE_KEY);
+      } catch {}
+      if (forceApply) {
+        if (pushTimer) {
+          clearTimeout(pushTimer);
+          pushTimer = null;
+        }
+        applying = true;
+      }
       activeUserId = userId;
       const sb = supabase();
       const { data, error } = await sb
@@ -224,6 +303,7 @@ export function startCloudSync(): void {
         .maybeSingle();
       if (error) {
         console.error("cloud load failed", error);
+        applying = false;
         return;
       }
       if (data?.data && typeof data.data === "object") {
@@ -243,7 +323,7 @@ export function startCloudSync(): void {
           // cloud row once.
           syncedAt = Date.parse(data.updated_at) || 0;
         }
-        if (localAt > syncedAt) {
+        if (!forceApply && localAt > syncedAt) {
           await push(userId);
           return;
         }
@@ -252,11 +332,18 @@ export function startCloudSync(): void {
         // initial layout/resize window crashed LWC's render loop ("Value
         // is null") — defer until the chart has fully settled.
         await new Promise((r) => setTimeout(r, 1500));
-        if (auth.status !== "ready" || activeUserId !== userId) return;
+        if (auth.status !== "ready" || activeUserId !== userId) {
+          applying = false;
+          return;
+        }
         applyLocal(data.data as CloudData);
       } else {
         // First login for this account — seed the cloud with local state.
         await push(userId);
+        // A forced switch holds the change-guard while the cloud row lands;
+        // the seed push above already stored the defaults, so release it or
+        // every later edit of this account would be blocked from syncing.
+        if (forceApply) applying = false;
       }
 
       // Push subsequent local changes (debounced), skipping our own apply.
@@ -276,6 +363,9 @@ export function startCloudSync(): void {
         watch(() => [d.drawings, d.lines, d.polys, d.positions, d.singles], onChange, { deep: true }),
         watch(() => [...w.instruments], onChange),
         watch(() => [m.instrument, m.timeframe], onChange),
+        // Light/dark is part of the account's setup: a toggle pushes it so the
+        // other devices restore the same look.
+        watch(() => useThemeStore().theme, onChange),
         watch(() => ind.addedMap, onChange, { deep: true }),
         watch(
           () => [
