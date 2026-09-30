@@ -284,6 +284,31 @@ PERSISTENT_AGGREGATIONS=EUR_USD:5s
 
 Example `Dockerfile` pattern or direct `npm run build && npm run start:server`. The process must be **persistent** — the stream is a long-lived HTTP response, not a cron/job.
 
+### Keeping a free-tier instance awake
+
+Render's **free** plan spins a web service down after ~15 minutes without
+traffic; the next visitor pays a 30–60s cold start (seen as "the chart took a
+minute or two to load"). Two free ways to prevent that:
+
+1. **Cloudflare cron warm-up (recommended — no third-party account):**
+   `cloudflare-worker/warmup/` holds a tiny Worker whose cron trigger calls
+   `GET /health` every 5 minutes. Put your market-server URL in its
+   `wrangler.toml`, then:
+   ```bash
+   cd cloudflare-worker/warmup && npx wrangler deploy
+   ```
+   Open the deployed worker URL to verify — it prints e.g.
+   `2026-09-30T… /health -> 200 (142ms)`.
+2. **UptimeRobot / cron-job.org:** create an HTTP(s) monitor on
+   `https://<market-server>/health` with a 5-minute interval (free plans cover
+   this). No code needed.
+
+A VPS deployment never sleeps, so this section only applies to free
+PaaS hosts. Render's free plan includes 750 instance-hours/month and one
+always-awake service needs ~730 h — continuous uptime still fits; a paid
+instance removes spin-down entirely.
+
+
 ---
 
 ## 13. Security Considerations

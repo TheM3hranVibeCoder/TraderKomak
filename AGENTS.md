@@ -5,7 +5,7 @@
 - `apps/market-server` — Fastify + WebSocket hub, OANDA/Binance/Dukascopy providers, chat. Unit tests in `apps/market-server/test` (vitest, node env).
 - `apps/web` — Vue 3 + Pinia + Lightweight Charts v5 SPA. No tests yet.
 - `supabase/schema.sql` — tables + RLS (profiles, user_emails, user_settings, admin_settings).
-- `cloudflare-worker/` — Iran-access relays: `binance-proxy.js` (+ `wrangler.toml`, Binance public data) and `oanda/` (`oanda-proxy.js` + its own `wrangler.toml`; holds the OANDA token in Worker secrets).
+- `cloudflare-worker/` — Iran-access relays: `binance-proxy.js` (+ `wrangler.toml`, Binance public data), `oanda/` (`oanda-proxy.js` + its own `wrangler.toml`; holds the OANDA token in Worker secrets) and `warmup/` (cron Worker pinging the market server's `/health` every 5 min so a free-tier instance never spins down).
 
 ## Commands
 - `npm run dev:server` / `npm run dev:web`

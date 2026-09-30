@@ -1,0 +1,12 @@
+name = "market-server-warmup"
+main = "warmup.js"
+compatibility_date = "2024-09-01"
+
+# The market server to keep awake — replace with your Render/Railway URL
+# (no trailing slash). Not a secret, so a plain var is fine.
+[vars]
+MARKET_SERVER_URL = "https://your-market-server.onrender.com"
+
+# Every 5 minutes, comfortably inside Render's ~15-minute idle window.
+[triggers]
+crons = ["*/5 * * * *"]
