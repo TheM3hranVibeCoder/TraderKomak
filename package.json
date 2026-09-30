@@ -20,6 +20,7 @@
     "dev:web": "npm run dev -w @traderkomak/web",
     "start:server": "npm run start -w @traderkomak/market-server",
     "chat:import-members": "node scripts/import-chat-members.mjs",
+    "csp:hash": "node scripts/csp-hash.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",

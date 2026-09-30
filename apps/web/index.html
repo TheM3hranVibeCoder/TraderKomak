@@ -5,7 +5,13 @@
     <!-- Apply the saved theme BEFORE first paint — otherwise the CSS dark
          default flashes black for light-theme users on every refresh. New
          visitors get the store's light default here too, so a first-time
-         sign-in never paints a black chart while Vue boots. -->
+         sign-in never paints a black chart while Vue boots.
+
+         !! Editing the script below changes its sha256, and vercel.json pins
+         it in the Content-Security-Policy — the browser SILENTLY BLOCKS a
+         mismatched inline script. After any edit run:
+             npm run csp:hash          (report)
+             npm run csp:hash -- --fix (rewrite the stale hash) -->
     <script>
       try {
         var t = localStorage.getItem("tk-theme");
