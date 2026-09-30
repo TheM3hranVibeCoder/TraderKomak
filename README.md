@@ -303,10 +303,12 @@ minute or two to load"). Two free ways to prevent that:
    `https://<market-server>/health` with a 5-minute interval (free plans cover
    this). No code needed.
 
-A VPS deployment never sleeps, so this section only applies to free
-PaaS hosts. Render's free plan includes 750 instance-hours/month and one
-always-awake service needs ~730 h — continuous uptime still fits; a paid
-instance removes spin-down entirely.
+A VPS deployment never sleeps, and if you run **no** market server at all
+(charts served straight by the `oanda-proxy` Worker + direct Binance, chat
+unused) there is nothing to keep awake either — Cloudflare Workers never
+sleep. This section only applies to free PaaS hosts. Render's free plan
+includes 750 instance-hours/month and one always-awake service needs ~730 h —
+continuous uptime still fits; a paid instance removes spin-down entirely.
 
 
 ---
