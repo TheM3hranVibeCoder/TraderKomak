@@ -4,6 +4,7 @@ import { useChatStore } from "@/stores/chat";
 import { useAuthStore } from "@/stores/auth";
 import { supabase } from "@/services/supabase";
 import { onlineMembers } from "@/services/presence";
+import { fetchAllLocations, type UserLocation } from "@/services/location";
 import { compressImage } from "@/utils/image";
 
 const chat = useChatStore();
@@ -51,6 +52,16 @@ onMounted(async () => {
   } catch {
     /* failed load leaves the chat-roster view exactly as before */
   }
+});
+
+/** Last-known IP + country for every registered user, keyed by user_id. Works
+ *  with no market server (the chat server could only ever report LIVE IPs, and
+ *  offline users have no connection to ask). Empty until
+ *  supabase/add-user-location.sql has been applied — the modal then simply
+ *  shows "unknown", exactly as before. */
+const locations = ref<Map<string, UserLocation>>(new Map());
+onMounted(async () => {
+  locations.value = await fetchAllLocations();
 });
 
 /** Everyone the room knows + every registered member: online first (chat
@@ -114,10 +125,33 @@ function isSelf(nick: string): boolean {
   return nick.toLowerCase() === chat.nick.toLowerCase();
 }
 
-/* ── User details modal (email / IP / country) ── */
-const details = ref<null | { nick: string; email: string | null; loading: boolean }>(null);
+/* ── User details modal (email / IP / country) ──
+   Email comes from the admin-only RPC (auth.users), IP/country from the
+   visitor's own last-known location row. */
+const details = ref<null | { nick: string; userId?: string | null; email: string | null; loading: boolean }>(null);
+/** Live answer from the chat server, when one happens to be running. */
+function wsInfoFor(d: { nick: string }): { lastIp: string | null; online: boolean; country: string | null } | null {
+  const ui = chat.userInfo;
+  return ui && ui.nick.toLowerCase() === d.nick.toLowerCase() ? ui : null;
+}
+/** Status: chat roster first, then realtime presence (server-independent). */
+function detailStatus(d: { nick: string }): string {
+  const ws = wsInfoFor(d);
+  if (ws) return ws.online ? "online" : "offline";
+  for (const username of onlineMembers.value.values()) {
+    if (username.toLowerCase() === d.nick.toLowerCase()) return "online";
+  }
+  if (chat.onlineNicks.some((n) => n.toLowerCase() === d.nick.toLowerCase())) return "online";
+  return "offline";
+}
+function detailIp(d: { nick: string; userId?: string | null }): string {
+  return wsInfoFor(d)?.lastIp ?? (d.userId ? locations.value.get(d.userId)?.ip : null) ?? "unknown";
+}
+function detailCountry(d: { nick: string; userId?: string | null }): string {
+  return wsInfoFor(d)?.country ?? (d.userId ? locations.value.get(d.userId)?.country : null) ?? "unknown";
+}
 async function openDetails(nick: string): Promise<void> {
-  details.value = { nick, email: null, loading: true };
+  details.value = { nick, userId: null, email: null, loading: true };
   chat.askUserInfo(nick);
   try {
     const { data: p } = await supabase()
@@ -127,6 +161,7 @@ async function openDetails(nick: string): Promise<void> {
       .maybeSingle();
     if (p) {
       const uid = p.user_id as string;
+      if (details.value && details.value.nick === nick) details.value.userId = uid;
       // 1) Live lookup straight from the auth table (admin-only RPC —
       //    works even if the user never logged in since the email sync
       //    existed). Falls back to the synced user_emails row.
@@ -349,9 +384,9 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             </div>
             <div class="detail-grid">
               <div class="d-row"><span class="d-label">Email</span><span class="d-value">{{ details.loading ? "…" : details.email ?? "not synced yet — opens after their next login" }}</span></div>
-              <div class="d-row"><span class="d-label">Status</span><span class="d-value">{{ chat.userInfo?.nick.toLowerCase() === details.nick.toLowerCase() ? (chat.userInfo.online ? "online" : "offline") : "…" }}</span></div>
-              <div class="d-row"><span class="d-label">Last IP</span><span class="d-value mono">{{ chat.userInfo?.nick.toLowerCase() === details.nick.toLowerCase() ? chat.userInfo.lastIp ?? "unknown" : "…" }}</span></div>
-              <div class="d-row"><span class="d-label">Country</span><span class="d-value">{{ chat.userInfo?.nick.toLowerCase() === details.nick.toLowerCase() ? chat.userInfo.country ?? "unknown" : "…" }}</span></div>
+              <div class="d-row"><span class="d-label">Status</span><span class="d-value">{{ detailStatus(details) }}</span></div>
+              <div class="d-row"><span class="d-label">Last IP</span><span class="d-value mono">{{ detailIp(details) }}</span></div>
+              <div class="d-row"><span class="d-label">Country</span><span class="d-value">{{ detailCountry(details) }}</span></div>
             </div>
           </div>
         </div>

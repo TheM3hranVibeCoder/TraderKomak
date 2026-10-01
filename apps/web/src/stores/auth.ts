@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { supabase, supabaseReady } from "@/services/supabase";
+import { recordMyLocation } from "@/services/location";
 import { useChatStore } from "@/stores/chat";
 
 export type AuthStatus = "guest" | "needs-username" | "ready" | "loading";
@@ -215,6 +216,10 @@ export const useAuthStore = defineStore("auth", () => {
         void supabase()
           .from("user_emails")
           .upsert({ user_id: session.user.id, email: email.value });
+        // Also record this visitor's own IP + country so the admin panel can
+        // show it (for offline users too — a live IP needs the market server,
+        // which is not running). Best-effort and independent of the sync above.
+        void recordMyLocation(session.user.id);
       }
       // Supabase-driven admin: fetch the moderator key from the
       // admin-only table and upgrade the chat connection with it.
