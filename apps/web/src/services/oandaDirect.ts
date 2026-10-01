@@ -34,32 +34,12 @@ const BACKOFF_CAP_MS = 30_000;
  *  connection is dead without a TCP close — recycle it. */
 const SILENCE_WATCHDOG_MS = 90_000;
 
-const SAME_ORIGIN_RELAY = "/api/oanda";
-
 export function oandaProxyConfigured(): boolean {
   const raw = (import.meta.env.VITE_OANDA_PROXY_URL as string | undefined)?.trim();
-  // Production always has the same-origin relay (api/oanda/candles.ts), so
-  // OANDA history is available wherever the site itself loads; dev uses the
-  // worker URL from .env.
-  return !!raw || !import.meta.env.DEV;
+  return !!raw;
 }
 
-/** History REST base. PRODUCTION uses the site's OWN relay (`/api/oanda`):
- *  Cloudflare-addressed subdomains (oanda.traderkomak.ir) are TLS-reset by
- *  several ISPs (ERR_CONNECTION_RESET -> empty chart), while the site's own
- *  domain always loads. The relay forwards server-side, so the OANDA token
- *  still never reaches the browser. Dev keeps the explicit worker URL
- *  (Vite serves no /api/oanda function). */
-function restBase(): string {
-  const raw = (import.meta.env.VITE_OANDA_PROXY_URL as string | undefined)?.trim();
-  if (import.meta.env.DEV && raw) return raw.replace(/\/+$/, "");
-  return SAME_ORIGIN_RELAY;
-}
-
-/** Live-stream base — still the worker's chunked endpoint on purpose:
- *  serverless functions cap the connection length, so the direct stream
- *  remains the best path wherever the ISP allows it. */
-function streamBase(): string {
+function proxyBase(): string {
   const raw = (import.meta.env.VITE_OANDA_PROXY_URL as string | undefined)?.trim();
   if (!raw) throw new Error("OANDA proxy URL is not configured (VITE_OANDA_PROXY_URL)");
   return raw.replace(/\/+$/, "");
@@ -203,7 +183,7 @@ export async function fetchOandaCandles(
   count: number,
   toSec?: number
 ): Promise<Candle[]> {
-  const base = restBase();
+  const base = proxyBase();
   const granularity = NATIVE_HISTORY_GRANULARITY[timeframe];
   if (!granularity) {
     throw new Error(`Timeframe ${timeframe} has no upstream-native history source`);
@@ -360,7 +340,7 @@ export class OandaDirectStream {
     if (!cur || this.abort) return;
     let base: string;
     try {
-      base = streamBase();
+      base = proxyBase();
     } catch {
       this.handlers.onStatus("offline");
       return;

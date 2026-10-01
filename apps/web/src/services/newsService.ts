@@ -67,15 +67,6 @@ function parseFeed(d: RawFeed): NewsFeed {
 }
 
 export async function fetchNews(): Promise<NewsFeed> {
-  // Same-origin relay FIRST: it is served by the site's own domain, which
-  // loads even where the ISP resets the Cloudflare worker hosts (see
-  // api/news.ts). Falls through to the worker, then the market server.
-  try {
-    const res = await fetch("/api/news", { signal: AbortSignal.timeout(12000) });
-    if (res.ok) return parseFeed((await res.json()) as RawFeed);
-  } catch {
-    // No relay on this host (plain static preview) — legacy paths below.
-  }
   const proxy = newsProxyBase();
   if (proxy) {
     try {
