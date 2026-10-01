@@ -1,8 +1,13 @@
 /**
  * Symbol icon resolution — returns an image URL for any asset code:
- *   fiat      → country flag (flagcdn)
- *   crypto    → colored coin logo (cryptocurrency-icons via jsDelivr)
+ *   fiat      → country flag   → /icons/flags/<cc>.png
+ *   crypto    → colored coin   → /icons/coins/<id>.svg | <id>.png
  *   metals    → inline SVG coin (gold / silver / platinum / palladium)
+ *
+ * The files are VENDORED into the deployment (see scripts/fetch-icons.mjs):
+ * the upstream flagcdn / jsDelivr / CoinCap CDNs are reset on many Iranian
+ * connections, which made icons randomly fail to appear until a refresh hit
+ * the browser cache. Same-origin icons always load, everywhere the site does.
  * Returns null when nothing suitable exists; callers fall back to emoji.
  */
 import { displayInstrument } from "@traderkomak/shared";
@@ -33,7 +38,8 @@ export function currencyFlagUrl(currency: string): string | null {
     JP225: "jp",
   };
   const flag = flags[currency];
-  if (flag) return `https://flagcdn.com/w20/${flag}.png`;
+  // Vendored flag (own origin) — the flagcdn CDN is reset on many ISPs.
+  if (flag) return `/icons/flags/${flag}.png`;
 
   // Crypto → colored coin logos. Two sources, verified per-coin:
   //   • spothq/cryptocurrency-icons (SVG, consistent circle style) — repo
@@ -72,13 +78,11 @@ export function currencyFlagUrl(currency: string): string | null {
     // Stablecoin quotes (Binance pairs)
     USDT: "usdt",
     USDC: "usdc",
-    BUSD: "busd",
     TUSD: "tusd",
-    FDUSD: "first-digital-usd",
   };
   const id = crypto[currency];
   if (id) {
-    return `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/svg/color/${id}.svg`;
+    return `/icons/coins/${id}.svg`;
   }
   // Coins the spothq repo predates — CoinCap carries them all (verified).
   const coincap: Record<string, string> = {
@@ -111,9 +115,12 @@ export function currencyFlagUrl(currency: string): string | null {
     FLOW: "flow",
     POL: "pol",
     EGLD: "egld",
+    // Stablecoins the SVG set predates or never had (vendored from CoinCap).
+    BUSD: "busd",
+    FDUSD: "fdusd",
   };
   if (coincap[currency]) {
-    return `https://assets.coincap.io/assets/icons/${coincap[currency]}@2x.png`;
+    return `/icons/coins/${coincap[currency]}.png`;
   }
 
   // Precious metals → inline SVG coins
