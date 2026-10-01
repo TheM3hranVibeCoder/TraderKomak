@@ -1,10 +1,21 @@
 /**
- * OANDA market data for the browser — relayed by the project's Cloudflare
- * Worker (cloudflare-worker/oanda/oanda-proxy.js). The browser NEVER talks
- * to OANDA directly and never sees the token: worker secrets hold it.
+ * OANDA market data for the browser.
  *
- *   REST:  GET <proxy>/candles?instrument&granularity&count&to
- *   Live:  GET <proxy>/stream?instruments=<list>   (chunked JSON-lines)
+ * PRIMARY PATH: the visitor talks to OANDA's practice API DIRECTLY with a
+ * practice-account token (see oandaAccounts.ts). OANDA allows browser CORS
+ * (the preflight permits the Authorization header), so every visitor loads
+ * candles and ticks over their OWN connection — no relay, no CDN bandwidth,
+ * and it keeps working where ISP filtering resets Cloudflare-hosted relay
+ * domains. Multiple practice accounts are load-balanced and rotated on
+ * rejection/rate-limit.
+ *
+ * FALLBACK: the project's Cloudflare Worker (cloudflare-worker/oanda/
+ * oanda-proxy.js) when VITE_OANDA_PROXY_URL is set — used for ISPs that
+ * block OANDA itself, and remembered for the rest of the session once a
+ * direct attempt fails.
+ *
+ *   REST:  OANDA /v3/instruments/<i>/candles (direct) or <proxy>/candles
+ *   Live:  OANDA /v3/accounts/<acct>/pricing/stream (direct) or <proxy>/stream
  *
  * History mirrors apps/market-server/src/oanda/restClient.ts (max 5000 per
  * batch, `to`-cursor backwards pagination); the stream adapter mirrors
@@ -24,6 +35,7 @@ import {
   type Timeframe,
 } from "@traderkomak/shared";
 import type { WsHandlers } from "./wsClient";
+import { currentOandaAccount, rotateOandaAccount, type OandaAccount } from "./oandaAccounts";
 
 const OANDA_MAX_COUNT = 5000;
 const MAX_BATCHES = 10;
@@ -34,15 +46,53 @@ const BACKOFF_CAP_MS = 30_000;
  *  connection is dead without a TCP close — recycle it. */
 const SILENCE_WATCHDOG_MS = 90_000;
 
+/** Direct practice API endpoints — browser CORS is allowed (see
+ *  oandaAccounts.ts), so the visitor's OWN connection carries the data. That
+ *  is also what keeps the chart working where ISP filtering resets the
+ *  Cloudflare-hosted relay domains. */
+const OANDA_DIRECT_API = "https://api-fxpractice.oanda.com/v3";
+const OANDA_DIRECT_STREAM = "https://stream-fxpractice.oanda.com/v3";
+
+/** Set when a direct stream attempt failed in this session: reconnects then
+ *  go straight to the worker instead of burning another doomed attempt. */
+let streamViaWorker = false;
+
 export function oandaProxyConfigured(): boolean {
-  const raw = (import.meta.env.VITE_OANDA_PROXY_URL as string | undefined)?.trim();
-  return !!raw;
+  // A data path exists when the direct practice pool OR the worker is set up.
+  return !!currentOandaAccount() || !!workerBase();
 }
 
-function proxyBase(): string {
+/** Worker relay base (now the FALLBACK path; may be unset). */
+function workerBase(): string | null {
   const raw = (import.meta.env.VITE_OANDA_PROXY_URL as string | undefined)?.trim();
-  if (!raw) throw new Error("OANDA proxy URL is not configured (VITE_OANDA_PROXY_URL)");
-  return raw.replace(/\/+$/, "");
+  return raw ? raw.replace(/\/+$/, "") : null;
+}
+
+/** A candle source: the visitor's direct practice account, or the worker. */
+type CandleTarget = { kind: "direct"; account: OandaAccount } | { kind: "worker"; base: string };
+
+/** A live-stream source (direct practice account, or the worker relay). */
+type StreamTarget = { url: string; headers: Record<string, string> };
+
+function candlesUrl(
+  target: CandleTarget,
+  instrument: string,
+  granularity: string,
+  count: number,
+  toIso?: string
+): string {
+  let url: string;
+  if (target.kind === "direct") {
+    url =
+      `${OANDA_DIRECT_API}/instruments/${encodeURIComponent(instrument)}/candles` +
+      `?granularity=${granularity}&price=M&count=${count}`;
+  } else {
+    url =
+      `${target.base}/candles` +
+      `?instrument=${encodeURIComponent(instrument)}&granularity=${granularity}&count=${count}`;
+  }
+  if (toIso) url += `&to=${encodeURIComponent(toIso)}`;
+  return url;
 }
 
 // ── adapter (ported from apps/market-server/src/oanda/adapter.ts) ──────────
@@ -136,20 +186,24 @@ function firstSidePrice(sides: unknown): number | null {
 // ── history ────────────────────────────────────────────────────────────────
 
 async function fetchBatch(
-  base: string,
+  target: CandleTarget,
   instrument: string,
   granularity: string,
   count: number,
   toIso?: string
 ): Promise<Candle[]> {
-  let url =
-    `${base}/candles` +
-    `?instrument=${encodeURIComponent(instrument)}` +
-    `&granularity=${granularity}&count=${count}`;
-  if (toIso) url += `&to=${encodeURIComponent(toIso)}`;
-
-  const res = await fetch(url, {
-    headers: { Accept: "application/json" },
+  const res = await fetch(candlesUrl(target, instrument, granularity, count, toIso), {
+    headers:
+      target.kind === "direct"
+        ? {
+            // Practice account: the token travels with the request (CORS
+            // preflight verified to allow it) so the visitor's own internet
+            // reaches OANDA directly — no relay in between.
+            Authorization: `Bearer ${target.account.token}`,
+            "Accept-Datetime-Format": "RFC3339",
+            Accept: "application/json",
+          }
+        : { Accept: "application/json" },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!res.ok) {
@@ -183,26 +237,54 @@ export async function fetchOandaCandles(
   count: number,
   toSec?: number
 ): Promise<Candle[]> {
-  const base = proxyBase();
   const granularity = NATIVE_HISTORY_GRANULARITY[timeframe];
   if (!granularity) {
     throw new Error(`Timeframe ${timeframe} has no upstream-native history source`);
   }
   const needed = nativeCandlesNeeded(timeframe, count);
 
+  // Source ladder: the visitor's sticky practice account FIRST (their own
+  // internet, no intermediary), rotated on rejection/rate-limit/network
+  // failure, with the worker relay as a last resort.
+  let account = currentOandaAccount();
+  const worker = workerBase();
+  let useDirect = !!account;
+  let lastErr: unknown = null;
+
   const all: Candle[] = [];
   let remaining = needed;
   let to = toSec !== undefined ? new Date(toSec * 1000).toISOString() : undefined;
   for (let batch = 0; batch < MAX_BATCHES && remaining > 0; batch++) {
     const batchCount = Math.min(remaining, OANDA_MAX_COUNT);
-    let candles: Candle[];
-    try {
-      candles = await fetchBatch(base, instrument, granularity, batchCount, to);
-    } catch (err) {
-      if (all.length > 0) break; // partial history beats a total failure
-      throw err;
+    let candles: Candle[] | null = null;
+    for (;;) {
+      const target: CandleTarget | null =
+        useDirect && account
+          ? { kind: "direct", account }
+          : worker
+            ? { kind: "worker", base: worker }
+            : null;
+      if (!target) {
+        if (all.length > 0) break; // partial history beats a total failure
+        throw lastErr instanceof Error ? lastErr : new Error("OANDA data source unavailable");
+      }
+      try {
+        candles = await fetchBatch(target, instrument, granularity, batchCount, to);
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (target.kind === "direct") {
+          // 401/403/429 or a network failure: retire this practice account
+          // for the session and continue with the next one.
+          account = rotateOandaAccount(target.account);
+          if (!account) useDirect = false;
+        } else {
+          if (all.length > 0) break;
+          throw err;
+        }
+      }
     }
-    if (candles.length === 0) break;
+    if (!candles || candles.length === 0) break;
     all.unshift(...candles);
     remaining -= candles.length;
     if (candles.length < batchCount) break;
@@ -338,62 +420,59 @@ export class OandaDirectStream {
   private dial(): void {
     const cur = this.current;
     if (!cur || this.abort) return;
-    let base: string;
-    try {
-      base = proxyBase();
-    } catch {
-      this.handlers.onStatus("offline");
-      return;
-    }
     const controller = new AbortController();
     this.abort = controller;
     this.lastMessageAt = Date.now();
-    void this.readLoop(cur, base, controller);
+    void this.readLoop(cur, controller);
+  }
+
+  /** Live-stream sources in preference order: the visitor's direct practice
+   *  account first (their own internet, no relay), then the worker. Once a
+   *  direct attempt has failed this session, reconnects go straight to the
+   *  worker instead of burning another doomed dial. */
+  private streamTargets(cur: { instrument: string; timeframe: Timeframe }): StreamTarget[] {
+    const list: StreamTarget[] = [];
+    const account = currentOandaAccount();
+    if (account && !streamViaWorker) {
+      list.push({
+        url:
+          `${OANDA_DIRECT_STREAM}/accounts/${encodeURIComponent(account.id)}/pricing/stream` +
+          `?instruments=${encodeURIComponent(cur.instrument)}`,
+        headers: {
+          Authorization: `Bearer ${account.token}`,
+          "Accept-Datetime-Format": "RFC3339",
+          Accept: "application/json",
+        },
+      });
+    }
+    const base = workerBase();
+    if (base) {
+      list.push({
+        url: `${base}/stream?instruments=${encodeURIComponent(cur.instrument)}`,
+        headers: { Accept: "application/json" },
+      });
+    }
+    return list;
   }
 
   private async readLoop(
     cur: { instrument: string; timeframe: Timeframe },
-    base: string,
     controller: AbortController
   ): Promise<void> {
+    const targets = this.streamTargets(cur);
     try {
-      const res = await fetch(`${base}/stream?instruments=${encodeURIComponent(cur.instrument)}`, {
-        headers: { Accept: "application/json" },
-        signal: controller.signal,
-      });
-      if (!res.ok || !res.body) {
-        let message = `OANDA proxy error (HTTP ${res.status})`;
+      if (targets.length === 0) throw new Error("No OANDA stream source configured");
+      for (const target of targets) {
         try {
-          const b = (await res.json()) as RawOandaErrorBody;
-          if (b.error?.message) message = b.error.message;
+          // Returns normally only when the stream ENDED by itself; a failure
+          // to open throws, so the next source gets its turn.
+          await this.consumeStream(cur, target, controller);
+          break;
         } catch {
-          // keep the generic message
-        }
-        throw new Error(message);
-      }
-
-      this.handlers.onStatus("connected");
-      this.attempt = 0;
-      this.startWatchdog(controller);
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        this.lastMessageAt = Date.now();
-        buffer += decoder.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buffer.indexOf("\n")) >= 0) {
-          const line = buffer.slice(0, nl).trim();
-          buffer = buffer.slice(nl + 1);
-          if (line) this.handleLine(cur, line);
+          if (controller.signal.aborted) return; // pause/unsubscribe/switch
+          if (target.headers.Authorization) streamViaWorker = true;
         }
       }
-    } catch {
-      // aborted (pause/unsubscribe/disconnect/switch) → stay down
-      if (controller.signal.aborted) return;
     } finally {
       this.stopWatchdog();
       if (this.abort === controller) this.abort = null;
@@ -406,6 +485,46 @@ export class OandaDirectStream {
     }
     this.handlers.onStatus("reconnecting");
     this.scheduleReconnect();
+  }
+
+  /** Opens one stream source and pumps its lines until it ends. Throws ONLY
+   *  when the connection could not be opened. */
+  private async consumeStream(
+    cur: { instrument: string; timeframe: Timeframe },
+    target: StreamTarget,
+    controller: AbortController
+  ): Promise<void> {
+    const res = await fetch(target.url, { headers: target.headers, signal: controller.signal });
+    if (!res.ok || !res.body) {
+      let message = `OANDA stream error (HTTP ${res.status})`;
+      try {
+        const b = (await res.json()) as RawOandaErrorBody;
+        if (b.error?.message) message = b.error.message;
+      } catch {
+        // keep the generic message
+      }
+      throw new Error(message);
+    }
+
+    this.handlers.onStatus("connected");
+    this.attempt = 0;
+    this.startWatchdog(controller);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      this.lastMessageAt = Date.now();
+      buffer += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (line) this.handleLine(cur, line);
+      }
+    }
   }
 
   private handleLine(cur: { instrument: string; timeframe: Timeframe }, line: string): void {

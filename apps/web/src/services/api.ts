@@ -5,8 +5,9 @@
  *   - Binance symbols → fetched DIRECTLY from Binance by the browser
  *     (binanceDirect.ts, public endpoints; server fallback on geo-block —
  *     a Cloudflare relay is not viable, Binance blocks datacenter IPs).
- *   - OANDA symbols   → via the oanda-proxy Cloudflare Worker when
- *     VITE_OANDA_PROXY_URL is configured (the token stays in the worker).
+ *   - OANDA symbols   → DIRECTLY to OANDA's practice API with a practice-account
+ *     token from the pool in oandaAccounts.ts (browser CORS is allowed), with the
+ *     oanda-proxy Cloudflare Worker as fallback for ISPs that block OANDA.
  *   - Everything else → the market-server REST API (as before).
  */
 import { isTimeframe, providerOf, type Candle } from "@traderkomak/shared";
