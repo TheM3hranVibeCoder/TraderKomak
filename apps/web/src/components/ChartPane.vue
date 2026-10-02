@@ -488,6 +488,12 @@ watch(
 /** Price display precision of the active instrument (template + tags). */
 const prec = computed(() => instrumentPrecision(market.instrument));
 
+/** Symbol-label timeframe badge. Day/week units read as D/W (1d→1D, 1w→1W)
+ *  to match the monthly 1M; finer units (m/h/s) keep their lowercase. */
+const timeframeBadge = computed(() =>
+  market.timeframe.replace(/[dw]$/, (u) => u.toUpperCase())
+);
+
 /* ── Demo trading: chart lines for pending/open positions ───────────── */
 interface DemoLinePx {
   id: string;
@@ -4757,7 +4763,7 @@ onBeforeUnmount(() => {
           {{ part }}
           <span v-if="idx === 0"> / </span>
         </template>
-        - {{ market.timeframe }}
+        - {{ timeframeBadge }}
         - {{ instrument && providerOf(instrument) === "binance" ? "BINANCE" : providerOf(instrument) === "dukascopy" ? "DUKASCOPY" : "OANDA" }}
       </span>
     </div>
