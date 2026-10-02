@@ -322,6 +322,11 @@ export class OandaDirectStream {
   private handlers: WsHandlers;
   private current: { instrument: string; timeframe: Timeframe } | null = null;
   private aggregator: CandleAggregator | null = null;
+  /** Freshest history candle, kept so a fresh aggregator created by
+   *  subscribe() continues the real partial OHLC instead of rebuilding the
+   *  current bucket from zero — on 4h/D/W/M that silently dropped the
+   *  bucket's wicks for the rest of the session. */
+  private seedCandle: Candle | null = null;
   private abort: AbortController | null = null;
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -357,6 +362,9 @@ export class OandaDirectStream {
     this.attempt = 0;
     this.teardown();
     this.aggregator = new CandleAggregator(timeframe, oandaAlignedBucketStart);
+    // Re-apply a seed set before subscribe() — subscribe() replaces the
+    // aggregator, so without this the store's seed() would be discarded.
+    if (this.seedCandle) this.aggregator.seed(this.seedCandle);
     this.handlers.onStatus("connecting");
     this.dial();
   }
@@ -364,6 +372,7 @@ export class OandaDirectStream {
   unsubscribe(): void {
     this.current = null;
     this.aggregator = null;
+    this.seedCandle = null;
     this.clearTimers();
     this.teardown();
     this.handlers.onStatus("offline");
@@ -383,8 +392,10 @@ export class OandaDirectStream {
     }
   }
 
-  /** Prime the aggregator with the freshest history candle. */
+  /** Prime the aggregator with the freshest history candle. Stored too, so
+   *  a subscribe() that recreates the aggregator keeps the seed. */
   seed(candle: Candle): void {
+    this.seedCandle = candle;
     this.aggregator?.seed(candle);
   }
 

@@ -245,6 +245,9 @@ export class BinanceDirectStream {
   private ws: WebSocket | null = null;
   private current: { instrument: string; timeframe: Timeframe } | null = null;
   private aggregator: CandleAggregator | null = null;
+  /** Freshest history candle, kept so subscribe()'s fresh aggregator keeps
+   *  the real partial OHLC of the live bucket instead of rebuilding it. */
+  private seedCandle: Candle | null = null;
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closedByUser = false;
@@ -283,6 +286,9 @@ export class BinanceDirectStream {
       TIMEFRAME_SECONDS[timeframe] < 60
         ? new CandleAggregator(timeframe, binanceBucketStart)
         : null;
+    // Re-apply a seed set before subscribe() — subscribe() replaces the
+    // aggregator, so without this the store's seed() would be discarded.
+    if (this.seedCandle) this.aggregator?.seed(this.seedCandle);
     this.handlers.onStatus("connecting");
     this.dial();
   }
@@ -290,6 +296,7 @@ export class BinanceDirectStream {
   unsubscribe(): void {
     this.current = null;
     this.aggregator = null;
+    this.seedCandle = null;
     this.clearTimer();
     this.teardownSocket();
     this.handlers.onStatus("offline");
@@ -307,8 +314,10 @@ export class BinanceDirectStream {
     }
   }
 
-  /** Prime the sub-minute aggregator with the freshest history candle. */
+  /** Prime the sub-minute aggregator with the freshest history candle.
+   *  Stored too, so a subscribe() that recreates the aggregator keeps it. */
   seed(candle: Candle): void {
+    this.seedCandle = candle;
     this.aggregator?.seed(candle);
   }
 
