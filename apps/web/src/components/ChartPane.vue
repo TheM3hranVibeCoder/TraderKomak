@@ -11,8 +11,7 @@ import { useIndicatorsStore, sessionKindAt, nextBoundaryAfter, boundaryEpoch, CH
 import DemoPanel from "./DemoPanel.vue";
 import type { Candle } from "@traderkomak/shared";
 import { currencyFlagUrl, commodityIcon, generatedCoinIcon, symbolParts } from "@/utils/flags";
-import { TIMEFRAME_SECONDS, TIMEFRAMES, instrumentPrecision, instrumentPipSize, instrumentPipUnit, providerOf, binanceBucketStart, oandaDailyBucketStart, oandaH4BucketStart, oandaWeeklyBucketStart, oandaMonthlyBucketStart } from "@traderkomak/shared";
-import type { Timeframe } from "@traderkomak/shared";
+import { TIMEFRAME_SECONDS, instrumentPrecision, instrumentPipSize, instrumentPipUnit, providerOf, binanceBucketStart, oandaDailyBucketStart, oandaH4BucketStart, oandaWeeklyBucketStart, oandaMonthlyBucketStart } from "@traderkomak/shared";
 
 const props = defineProps<{
   candles: Candle[];
@@ -860,13 +859,6 @@ const posLabelColors = computed(() => {  const s = chartStyle.value;
     border: light ? "rgba(16, 19, 24, 0.4)" : "rgba(232, 236, 244, 0.4)",
   };
 });
-
-/** Quick timeframe switcher on the chart label: ink adapts to the chart
- *  background exactly like the symbol label text. */
-const chipIdleBg = computed(() => (chartBgIsLight() ? "rgba(16, 19, 24, 0.08)" : "rgba(232, 236, 244, 0.12)"));
-function setChartTimeframe(tf: Timeframe): void {
-  if (tf !== market.timeframe) void market.setTimeframe(tf);
-}
 
 function chartBgIsLight(): boolean {
   const s = chartStyle.value;
@@ -4765,19 +4757,8 @@ onBeforeUnmount(() => {
           {{ part }}
           <span v-if="idx === 0"> / </span>
         </template>
+        - {{ market.timeframe }}
         - {{ instrument && providerOf(instrument) === "binance" ? "BINANCE" : providerOf(instrument) === "dukascopy" ? "DUKASCOPY" : "OANDA" }}
-      </span>
-      <!-- Quick timeframe switcher, inline with the symbol label -->
-      <span class="tf-chips" role="group" aria-label="Chart timeframes">
-        <button
-          v-for="tf in TIMEFRAMES"
-          :key="tf"
-          type="button"
-          class="tf-chip"
-          :class="{ active: market.timeframe === tf }"
-          :style="market.timeframe === tf ? { background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)' } : { color: autoInkColor, background: chipIdleBg }"
-          @click.stop="setChartTimeframe(tf)"
-        >{{ tf }}</button>
       </span>
     </div>
 
@@ -6568,7 +6549,6 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 10px;
   left: 14px;
-  right: 70px;
   z-index: 6; /* above rectangles so drawings never cover the symbol label */
   display: inline-flex;
   align-items: center;
@@ -6577,35 +6557,6 @@ onBeforeUnmount(() => {
   border: none;
   padding: 0;
   pointer-events: none;
-}
-/* Quick timeframe switcher inline with the symbol label */
-.tf-chips {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  overflow-x: auto;
-  max-width: min(58vw, 430px);
-  padding: 2px;
-  pointer-events: auto;
-  scrollbar-width: none;
-}
-.tf-chips::-webkit-scrollbar {
-  display: none;
-}
-.tf-chip {
-  flex-shrink: 0;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  padding: 2px 7px;
-  font-size: 10.5px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-  line-height: 1.5;
-  transition: background 120ms, border-color 120ms;
-}
-.tf-chip:hover {
-  border-color: currentColor;
 }
 /* Indicator legend row under the symbol label */
 .indicator-legend {
