@@ -2,7 +2,7 @@
 .theme-dark {
   color-scheme: dark;
   --bg: #060a13;
-  --bg-panel: rgba(16, 22, 38, 0.72);
+  --bg-panel: #131a2c;
   --bg-panel-solid: #101626;
   --bg-toolbar: linear-gradient(135deg, rgba(13, 18, 32, 0.82) 0%, rgba(20, 26, 44, 0.72) 50%, rgba(13, 18, 32, 0.82) 100%);
   --bg-app: radial-gradient(1300px 700px at 15% -10%, rgba(41, 98, 255, 0.14), transparent 55%),
@@ -11,7 +11,7 @@
     linear-gradient(180deg, #060a13 0%, #0a0e18 55%, #080b14 100%);
   --border: rgba(148, 163, 205, 0.14);
   --border-strong: rgba(148, 163, 205, 0.3);
-  --glass-bg: rgba(16, 22, 38, 0.55);
+  --glass-bg: #111729;
   --glass-bg-hover: rgba(255, 255, 255, 0.07);
   --glass-border: rgba(148, 163, 205, 0.18);
   --glass-highlight: rgba(255, 255, 255, 0.06);
@@ -44,7 +44,7 @@
 [data-theme="light"] {
   color-scheme: light;
   --bg: #f6f8fd;
-  --bg-panel: rgba(255, 255, 255, 0.72);
+  --bg-panel: #ffffff;
   --bg-panel-solid: #ffffff;
   --bg-toolbar: linear-gradient(135deg, rgba(255, 255, 255, 0.85) 0%, rgba(244, 247, 255, 0.72) 50%, rgba(250, 245, 255, 0.78) 100%);
   --bg-app: radial-gradient(1300px 700px at 15% -10%, rgba(59, 130, 246, 0.1), transparent 55%),
@@ -53,7 +53,7 @@
     linear-gradient(180deg, #f8fafd 0%, #f1f4fc 55%, #f6f3fc 100%);
   --border: rgba(15, 23, 42, 0.08);
   --border-strong: rgba(15, 23, 42, 0.16);
-  --glass-bg: rgba(255, 255, 255, 0.6);
+  --glass-bg: #ffffff;
   --glass-bg-hover: rgba(255, 255, 255, 0.9);
   --glass-border: rgba(255, 255, 255, 0.75);
   --glass-highlight: rgba(255, 255, 255, 0.85);
