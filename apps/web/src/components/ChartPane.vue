@@ -834,6 +834,33 @@ function relLuma(hex: string): number {
  *  own gradient otherwise — so the ink always matches what is painted. */
 const autoInkColor = computed(() => (chartBgIsLight() ? "#101318" : "#e8ecf4"));
 
+/** Midpoint blend of two 6-digit hex colors (for gradient backgrounds). */
+function mixHex(a: string, b: string): string {
+  const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
+  const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
+  if (pa.some(Number.isNaN) || pb.some(Number.isNaN)) return a;
+  const m = pa.map((v, i) => Math.round((v + pb[i]!) / 2));
+  return `#${m.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** Position-drawing label colors: derived from the EFFECTIVE chart
+ *  background (custom/template colors when set) so the R:R, TP and SL
+ *  labels stay readable no matter what the chart background looks like —
+ *  matching the symbol label and axis ink exactly. */
+const posLabelColors = computed(() => {
+  const s = chartStyle.value;
+  const light = chartBgIsLight();
+  const bg =
+    s.bgMode === "solid"
+      ? s.bgSolid ?? themeBgPair()[0]
+      : mixHex(s.bgTop ?? themeBgPair()[0], s.bgBottom ?? themeBgPair()[1]);
+  return {
+    ink: light ? "#101318" : "#e8ecf4",
+    bg,
+    border: light ? "rgba(16, 19, 24, 0.4)" : "rgba(232, 236, 244, 0.4)",
+  };
+});
+
 function chartBgIsLight(): boolean {
   const s = chartStyle.value;
   if (s.bgMode === "solid") return relLuma(s.bgSolid ?? themeBgPair()[0]) > 0.5;
@@ -5245,7 +5272,13 @@ onBeforeUnmount(() => {
          below the TP line and above the SL line — instead of beside it. -->
     <div
       class="pos-label-layer drawing-clip"
-      :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }"
+      :style="{
+        right: axisRightW + 'px',
+        bottom: overlayBottom + 'px',
+        '--pos-label-bg': posLabelColors.bg,
+        '--pos-label-ink': posLabelColors.ink,
+        '--pos-label-border': posLabelColors.border,
+      }"
     >
       <template v-for="p in posPixels" :key="p.id">
         <template v-if="p.id !== '__pospreview'">
@@ -7486,9 +7519,12 @@ onBeforeUnmount(() => {
   padding: 1px 5px;
   border-radius: 4px;
   white-space: nowrap;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  color: var(--text);
+  /* Adaptive: derived from the EFFECTIVE chart background (custom/template
+     colors included) so R:R / TP / SL labels stay readable on any chart
+     background — matching the symbol label and axis ink. */
+  background: var(--pos-label-bg, var(--bg-panel));
+  border: 1px solid var(--pos-label-border, var(--border));
+  color: var(--pos-label-ink, var(--text));
 }
 .pos-label.entry {
   color: var(--accent);
