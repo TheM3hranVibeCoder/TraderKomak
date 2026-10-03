@@ -555,7 +555,9 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 /* Round coin/metal logos are square — the 16×12 flag frame crops their
-   tops and bottoms. Crypto icons come from jsDelivr, metals are data-URIs. */
+   tops and bottoms. Crypto icons are vendored same-origin under /icons/coins
+   (legacy jsDelivr kept for cached pages), metals are data-URIs. */
+.flag-img[src*="/icons/coins/"],
 .flag-img[src*="jsdelivr"],
 .flag-img[src^="data:"] {
   width: 16px;
