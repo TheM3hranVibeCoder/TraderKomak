@@ -20,8 +20,12 @@ export const RECORD_LOCATION = true;
 const THROTTLE_MS = 30 * 60_000;
 const THROTTLE_KEY = "tk-loc-recorded-at";
 
-/** CORS-enabled IP echo services (first one also returns the country). */
-const GEO_URL = "https://ipapi.co/json/";
+/** CORS-enabled IP echo services, tried in order. ipapi.co used to be the
+ *  primary but now sits behind a Cloudflare browser challenge (plain fetch
+ *  always gets 403), which left every user's country "unknown" in the admin
+ *  panel — so it is gone. ipwho.is and geojs both answer a plain GET from
+ *  Iranian ISPs (verified) and return the IP + country in one call. */
+const GEO_URLS = ["https://ipwho.is/", "https://get.geojs.io/v1/ip/geo.json"] as const;
 const IP_ONLY_URL = "https://api.ipify.org?format=json";
 
 export interface UserLocation {
@@ -33,8 +37,9 @@ export interface UserLocation {
 
 interface GeoResponse {
   ip?: unknown;
-  country_name?: unknown;
+  country?: unknown;
   country_code?: unknown;
+  success?: unknown;
 }
 
 async function fetchJson(url: string, timeoutMs: number): Promise<Record<string, unknown> | null> {
@@ -50,10 +55,14 @@ async function fetchJson(url: string, timeoutMs: number): Promise<Record<string,
 /**
  * Record the signed-in visitor's own IP + country on their row. Fire-and-forget
  * (never blocks sign-in), throttled to one call per 30 minutes, and a failure
- * here must never affect anything else — the columns may not even exist yet
- * (the migration is optional), so every error is swallowed.
+ * here must never affect anything else — every error is swallowed.
+ *
+ * `email` (when the auth flow knows it) makes this a full UPSERT so the very
+ * first login creates the row — a plain update would match zero rows and the
+ * location would be lost until the next login. Without an email the upsert
+ * only carries the location columns and leaves the email untouched.
  */
-export async function recordMyLocation(userId: string): Promise<void> {
+export async function recordMyLocation(userId: string, email?: string | null): Promise<void> {
   if (!RECORD_LOCATION) return;
   try {
     const last = Number(sessionStorage.getItem(THROTTLE_KEY) ?? 0) || 0;
@@ -63,10 +72,18 @@ export async function recordMyLocation(userId: string): Promise<void> {
     // sessionStorage unavailable (private mode) — still try, just unthrottled.
   }
 
-  const geo = (await fetchJson(GEO_URL, 6000)) as GeoResponse | null;
-  let ip = typeof geo?.ip === "string" ? geo.ip : null;
-  const country = typeof geo?.country_name === "string" ? geo.country_name : null;
-  const countryCode = typeof geo?.country_code === "string" ? geo.country_code : null;
+  let ip: string | null = null;
+  let country: string | null = null;
+  let countryCode: string | null = null;
+  for (const url of GEO_URLS) {
+    const geo = (await fetchJson(url, 6000)) as GeoResponse | null;
+    ip = typeof geo?.ip === "string" ? geo.ip : null;
+    country = typeof geo?.country === "string" && geo.country ? geo.country : null;
+    countryCode = typeof geo?.country_code === "string" && geo.country_code ? geo.country_code : null;
+    // ipwho.is flags failures with success:false — skip to the next source.
+    if (ip && (geo?.success === undefined || geo.success !== false)) break;
+    ip = country = countryCode = null;
+  }
   if (!ip) {
     // Fallback: IP only, no country (the panel shows the IP at least).
     const fallback = await fetchJson(IP_ONLY_URL, 5000);
@@ -75,17 +92,20 @@ export async function recordMyLocation(userId: string): Promise<void> {
   if (!ip) return;
 
   try {
-    // Only the location columns — a missing migration (or a column the user
-    // never added) makes this upsert fail, which is harmless by design.
+    // Upsert on the user_id PK: first login creates the row (with the email
+    // when known), later logins refresh only the location columns. A missing
+    // migration (or a column the user never added) makes this fail, which is
+    // harmless by design.
+    const row: Record<string, string> = {
+      last_ip: ip,
+      last_seen_at: new Date().toISOString(),
+    };
+    if (country) row.last_country = country;
+    if (countryCode) row.last_country_code = countryCode;
+    if (email) row.email = email;
     await supabase()
       .from("user_emails")
-      .update({
-        last_ip: ip,
-        last_country: country,
-        last_country_code: countryCode,
-        last_seen_at: new Date().toISOString(),
-      })
-      .eq("user_id", userId);
+      .upsert({ user_id: userId, ...row });
   } catch {
     // ignore — the email sync above is what matters
   }

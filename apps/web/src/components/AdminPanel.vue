@@ -150,6 +150,17 @@ function detailIp(d: { nick: string; userId?: string | null }): string {
 function detailCountry(d: { nick: string; userId?: string | null }): string {
   return wsInfoFor(d)?.country ?? (d.userId ? locations.value.get(d.userId)?.country : null) ?? "unknown";
 }
+/** Country name with a flag emoji prefix (from the stored ISO code) —
+ *  no network needed, so it renders on every connection. */
+function detailCountryDisplay(d: { nick: string; userId?: string | null }): string {
+  const name = detailCountry(d);
+  const code = d.userId ? locations.value.get(d.userId)?.countryCode : null;
+  const flag =
+    code && /^[A-Za-z]{2}$/.test(code)
+      ? String.fromCodePoint(...[...code.toUpperCase()].map((c) => 127397 + c.charCodeAt(0)))
+      : "";
+  return flag ? `${flag} ${name}` : name;
+}
 async function openDetails(nick: string): Promise<void> {
   details.value = { nick, userId: null, email: null, loading: true };
   chat.askUserInfo(nick);
@@ -386,7 +397,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
               <div class="d-row"><span class="d-label">Email</span><span class="d-value">{{ details.loading ? "…" : details.email ?? "not synced yet — opens after their next login" }}</span></div>
               <div class="d-row"><span class="d-label">Status</span><span class="d-value">{{ detailStatus(details) }}</span></div>
               <div class="d-row"><span class="d-label">Last IP</span><span class="d-value mono">{{ detailIp(details) }}</span></div>
-              <div class="d-row"><span class="d-label">Country</span><span class="d-value">{{ detailCountry(details) }}</span></div>
+              <div class="d-row"><span class="d-label">Country</span><span class="d-value">{{ detailCountryDisplay(details) }}</span></div>
             </div>
           </div>
         </div>

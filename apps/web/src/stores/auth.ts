@@ -218,8 +218,10 @@ export const useAuthStore = defineStore("auth", () => {
           .upsert({ user_id: session.user.id, email: email.value });
         // Also record this visitor's own IP + country so the admin panel can
         // show it (for offline users too — a live IP needs the market server,
-        // which is not running). Best-effort and independent of the sync above.
-        void recordMyLocation(session.user.id);
+        // which is not running). The email makes it a true upsert so the very
+        // first login already lands a row. Best-effort, independent of the
+        // sync above.
+        void recordMyLocation(session.user.id, email.value);
       }
       // Supabase-driven admin: fetch the moderator key from the
       // admin-only table and upgrade the chat connection with it.
