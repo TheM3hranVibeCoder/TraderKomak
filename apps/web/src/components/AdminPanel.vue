@@ -129,10 +129,13 @@ function isSelf(nick: string): boolean {
    Email comes from the admin-only RPC (auth.users), IP/country from the
    visitor's own last-known location row. */
 const details = ref<null | { nick: string; userId?: string | null; email: string | null; loading: boolean }>(null);
-/** Live answer from the chat server, when one happens to be running. */
+/** Live answer from the chat server, when one happens to be running. The
+ *  local stub written by askUserInfo (pending: true) is NOT an answer —
+ *  trusting it forced every user "offline" whenever the server was down
+ *  or slow. While pending, presence and stored rows stay authoritative. */
 function wsInfoFor(d: { nick: string }): { lastIp: string | null; online: boolean; country: string | null } | null {
   const ui = chat.userInfo;
-  return ui && ui.nick.toLowerCase() === d.nick.toLowerCase() ? ui : null;
+  return ui && !ui.pending && ui.nick.toLowerCase() === d.nick.toLowerCase() ? ui : null;
 }
 /** Status: chat roster first, then realtime presence (server-independent). */
 function detailStatus(d: { nick: string }): string {
@@ -160,6 +163,18 @@ function detailCountryDisplay(d: { nick: string; userId?: string | null }): stri
       ? String.fromCodePoint(...[...code.toUpperCase()].map((c) => 127397 + c.charCodeAt(0)))
       : "";
   return flag ? `${flag} ${name}` : name;
+}
+/** When the IP/country row was last refreshed (each visitor writes it from
+ *  their own browser — there is no server to ask). */
+function detailSeen(d: { nick: string; userId?: string | null }): string {
+  const ts = d.userId ? locations.value.get(d.userId)?.seenAt : null;
+  if (!ts) return "—";
+  const ms = Date.now() - new Date(ts).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  if (ms < 90_000) return "just now";
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)} min ago`;
+  if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)} h ago`;
+  return `${Math.floor(ms / 86_400_000)} d ago`;
 }
 async function openDetails(nick: string): Promise<void> {
   details.value = { nick, userId: null, email: null, loading: true };
@@ -396,6 +411,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             <div class="detail-grid">
               <div class="d-row"><span class="d-label">Email</span><span class="d-value">{{ details.loading ? "…" : details.email ?? "not synced yet — opens after their next login" }}</span></div>
               <div class="d-row"><span class="d-label">Status</span><span class="d-value">{{ detailStatus(details) }}</span></div>
+              <div class="d-row"><span class="d-label">Last seen</span><span class="d-value">{{ detailSeen(details) }}</span></div>
               <div class="d-row"><span class="d-label">Last IP</span><span class="d-value mono">{{ detailIp(details) }}</span></div>
               <div class="d-row"><span class="d-label">Country</span><span class="d-value">{{ detailCountryDisplay(details) }}</span></div>
             </div>

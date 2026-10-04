@@ -24,7 +24,7 @@ export interface ChatClientHandlers {
   onUnmuted: () => void;
   onRateLimit: (waitMs: number) => void;
   /** Admin: details for a nick. */
-  onUserInfo?: (info: { nick: string; lastIp: string | null; online: boolean; country: string | null }) => void;
+  onUserInfo?: (info: { nick: string; lastIp: string | null; online: boolean; country: string | null; pending?: boolean }) => void;
   /** User: a direct message from the admin. */
   onAdminDm?: (dm: { id: string; text?: string; img?: string }) => void;
   /** Admin: DM receipt update (offline = could not deliver). */
@@ -405,7 +405,8 @@ export class ChatClient {
         this.handlers.onError(msg.message ?? "Chat error");
         break;
       case "userinfo":
-        this.handlers.onUserInfo?.(msg as unknown as { nick: string; lastIp: string | null; online: boolean; country: string | null });
+        // A genuine server answer (no `pending` flag) replaces the local stub.
+        this.handlers.onUserInfo?.(msg as unknown as { nick: string; lastIp: string | null; online: boolean; country: string | null; pending?: boolean });
         break;
       case "admin_dm":
         this.handlers.onAdminDm?.({ id: msg.id, text: msg.text, img: msg.img });

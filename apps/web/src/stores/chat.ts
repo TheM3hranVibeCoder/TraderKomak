@@ -367,7 +367,10 @@ function addHealListeners(): void {
   }
 
   /* ── Admin tools state ── */
-  const userInfo = ref<{ nick: string; lastIp: string | null; online: boolean; country: string | null } | null>(null);
+  /** `pending` marks the local stub created by askUserInfo — the SERVER has
+   *  not answered yet (maybe it is down and never will). Consumers must
+   *  ignore pending entries and fall back to presence / stored rows. */
+  const userInfo = ref<{ nick: string; lastIp: string | null; online: boolean; country: string | null; pending?: boolean } | null>(null);
   const dmStatuses = ref<Record<string, { nick: string; read: boolean; offline: boolean }>>({});
   /** DM status chips persist while the panel is open: "Sent…" until the
    *  user reads it (→ "Read ✓"), cleared when the panel closes. */
@@ -385,7 +388,7 @@ function addHealListeners(): void {
   }
 
   function askUserInfo(nick: string): void {
-    userInfo.value = { nick, lastIp: null, online: false, country: null };
+    userInfo.value = { nick, lastIp: null, online: false, country: null, pending: true };
     client?.requestUserInfo(nick);
   }
   function clearUserInfo(): void {
