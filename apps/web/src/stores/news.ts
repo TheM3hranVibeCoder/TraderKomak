@@ -168,23 +168,20 @@ export const useNewsStore = defineStore("news", () => {
     return items.value.filter((it) => it.date >= start && it.date < end).sort((a, b) => a.date - b.date);
   });
 
-  /** Nearest upcoming HIGH-impact release — drives the rail alarm. */
-  const nearestHigh = computed<NewsItem | null>(() => {
+  /** Nearest upcoming release of a given impact — drives the rail alarm. */
+  function nearestOf(impact: NewsItem["impact"]): NewsItem | null {
     let best: NewsItem | null = null;
     for (const it of items.value) {
-      if (it.impact !== "High" || it.date <= now.value) continue;
+      if (it.impact !== impact || it.date <= now.value) continue;
       if (!best || it.date < best.date) best = it;
     }
     return best;
-  });
+  }
 
-  const alarmActive = computed(() => {
-    const n = nearestHigh.value;
-    return !!n && n.date - now.value <= ALARM_WINDOW_MS;
-  });
+  const nearestHigh = computed<NewsItem | null>(() => nearestOf("High"));
+  const nearestMedium = computed<NewsItem | null>(() => nearestOf("Medium"));
 
-  const alarmLabel = computed(() => {
-    const n = nearestHigh.value;
+  function countdownLabel(n: NewsItem | null): string {
     if (!n || n.date <= now.value) return "";
     const total = Math.ceil((n.date - now.value) / 1000);
     const p2 = (x: number) => String(x).padStart(2, "0");
@@ -192,7 +189,23 @@ export const useNewsStore = defineStore("news", () => {
     const m = Math.floor((total % 3600) / 60);
     const s = total % 60;
     return h > 0 ? `${p2(h)}:${p2(m)}:${p2(s)}` : `${p2(m)}:${p2(s)}`;
+  }
+
+  const alarmActive = computed(() => {
+    const n = nearestHigh.value;
+    return !!n && n.date - now.value <= ALARM_WINDOW_MS;
   });
+
+  const alarmLabel = computed(() => countdownLabel(nearestHigh.value));
+
+  /** Same 15-minute window as the High alarm, but for Medium releases —
+   *  shown on the rail only when no High alarm is active (High wins). */
+  const medAlarmActive = computed(() => {
+    const n = nearestMedium.value;
+    return !!n && n.date - now.value <= ALARM_WINDOW_MS;
+  });
+
+  const medAlarmLabel = computed(() => countdownLabel(nearestMedium.value));
 
   function shiftDay(dir: -1 | 1): void {
     selectedStart.value += dir * 86_400_000;
@@ -209,8 +222,11 @@ export const useNewsStore = defineStore("news", () => {
     dayItems,
     selectedStart,
     nearestHigh,
+    nearestMedium,
     alarmActive,
     alarmLabel,
+    medAlarmActive,
+    medAlarmLabel,
     shiftDay,
     setOpen,
     goToRelevantDay,

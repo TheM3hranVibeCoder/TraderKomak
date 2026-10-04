@@ -332,9 +332,9 @@ function onTimeframeChange(next: Timeframe): void {
         </button>
         <button
           class="rail-half news"
-          :class="{ active: news.open, alarm: news.alarmActive }"
+          :class="{ active: news.open, alarm: news.alarmActive, medalarm: !news.alarmActive && news.medAlarmActive }"
           @click="toggleNews"
-          :title="news.alarmActive ? `High impact news in ${news.alarmLabel}` : 'Economic news calendar'"
+          :title="news.alarmActive ? `High impact news in ${news.alarmLabel}` : news.medAlarmActive ? `Medium impact news in ${news.medAlarmLabel}` : 'Economic news calendar'"
           aria-label="Toggle economic news"
         >
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -342,6 +342,7 @@ function onTimeframeChange(next: Timeframe): void {
             <circle cx="12" cy="12" r="9" />
           </svg>
           <span v-if="news.alarmActive" class="alarm-badge">{{ news.alarmLabel }}</span>
+          <span v-else-if="news.medAlarmActive" class="alarm-badge med">{{ news.medAlarmLabel }}</span>
         </button>
       </nav>
     </main>
@@ -490,6 +491,10 @@ nav.right-rail {
   z-index: 5;
   animation: alarmPulse 1s ease-in-out infinite;
 }
+.alarm-badge.med {
+  /* Medium-impact countdown: same pill, orange like the MED row badge. */
+  background: linear-gradient(135deg, #fb923c, #f97316);
+}
 @keyframes alarmPulse {
   50% {
     transform: translateX(-50%) scale(1.15);
@@ -497,6 +502,9 @@ nav.right-rail {
 }
 .rail-half.news.alarm {
   color: var(--offline);
+}
+.rail-half.news.medalarm {
+  color: #fb923c;
 }
 .unread-badge {
   position: absolute;
