@@ -262,15 +262,15 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     "position:absolute",
     "left:10px",
     `bottom:${(chart.timeScale().height() || 26) + 8}px`,
-    "width:26px",
-    "height:26px",
+    "width:39px", /* 1.5x larger than the previous 26px badge */
+    "height:39px",
     "border-radius:7px",
     "box-shadow:0 1px 4px rgba(0,0,0,0.35)",
     "pointer-events:none",
     "user-select:none",
     "z-index:10",
   ].join(";");
-  badge.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="26" height="26">` +
+  badge.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="39" height="39">` +
     `<defs><linearGradient id="${gradId}" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">` +
     `<stop offset="0" stop-color="#2962ff"/><stop offset="0.5" stop-color="#6a5cff"/><stop offset="1" stop-color="#8b5cf6"/>` +
     `</linearGradient></defs>` +
