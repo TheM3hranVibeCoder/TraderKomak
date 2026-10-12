@@ -1896,6 +1896,12 @@ function startMeasureFollow(): void {
 }
 const drawingPreview = ref<RectPixel | null>(null);
 const selectedRect = ref<DrawingRect | null>(null);
+/** Hovered rect id — drives the edge highlight + body tint (TradingView
+ *  hover affordance). Cleared on leave; never blocks the chart. */
+const hoverRectId = ref<string | null>(null);
+function onRectHover(id: string | null): void {
+  hoverRectId.value = id;
+}
 const editPanelPos = ref<{ x: number; y: number } | null>(null);
 const editPanelEl = ref<HTMLElement | null>(null);
 const editMenuEl = ref<HTMLElement | null>(null);
@@ -3121,6 +3127,63 @@ function onRectDragStart(e: MouseEvent, id: string): void {
   const onUp = () => {
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
+  };
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
+}
+
+/** Drag a rect EDGE to resize it (TradingView-style edge drag). Works even
+ *  unselected — press selects first, then the drag resizes that edge. */
+function onRectEdgeStart(e: MouseEvent, id: string, edge: "n" | "s" | "e" | "w"): void {
+  if (e.button !== 0 || drawingsStore.activeTool !== "cursor") return;
+  if (!adapter || !containerRef.value) return;
+  const rect = drawingsStore.getFor(market.instrument).find((r) => r.id === id);
+  if (!rect) return;
+  e.preventDefault();
+  e.stopPropagation();
+  rectMenu.value = null;
+  closePalette();
+  clearSingleSelection();
+  // Select on press so the handles + edit panel appear immediately
+  drawingsStore.selectedId = id;
+  drawingsStore.selectedLineId = null;
+  drawingsStore.selectedPolyId = null;
+  selectedLine.value = null;
+  linePanelPos.value = null;
+  selectedRect.value = rect;
+  recalcRects();
+  positionEditPanel(id);
+  const snapshot = { ...rect };
+  const edgeTime =
+    edge === "e" ? (snapshot.time1 > snapshot.time2 ? "time1" : "time2")
+    : edge === "w" ? (snapshot.time1 > snapshot.time2 ? "time2" : "time1")
+    : null;
+  const edgePrice =
+    edge === "n" ? (snapshot.price1 > snapshot.price2 ? "price1" : "price2")
+    : edge === "s" ? (snapshot.price1 > snapshot.price2 ? "price2" : "price1")
+    : null;
+  const onMove = (ev: MouseEvent): void => {
+    if (!adapter || !containerRef.value) return;
+    const r = containerRef.value.getBoundingClientRect();
+    const t = adapter.xToTime(ev.clientX - r.left);
+    const p = adapter.yToPrice(ev.clientY - r.top);
+    if (t === null || p === null) return;
+    const newRect: Partial<DrawingRect> = {};
+    if (edgeTime) newRect[edgeTime] = t;
+    if (edgePrice) newRect[edgePrice] = p;
+    drawingsStore.updateRect(market.instrument, id, newRect);
+    const updated = drawingsStore.getFor(market.instrument).find((x) => x.id === id);
+    if (updated) selectedRect.value = updated;
+    recalcRects();
+    positionEditPanel(id);
+  };
+  const onUp = (): void => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    const updated = drawingsStore.getFor(market.instrument).find((x) => x.id === id);
+    if (updated) selectedRect.value = updated;
+    recalcRects();
+    positionEditPanel(id);
   };
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onUp);
@@ -5138,21 +5201,25 @@ onBeforeUnmount(() => {
         class="drawing-hit-rect"
         :class="{ selected: rect.selected, 'border-only': rect.filled === false }"
         :data-rect-id="rect.id === '__preview' ? null : rect.id"
+        :data-hovered="hoverRectId === rect.id ? '1' : null"
         :style="{
           left: rect.left + 'px',
           top: rect.top + 'px',
           width: rect.width + 'px',
           height: rect.height + 'px',
         }"
+        @pointerenter="onRectHover(rect.id)"
+        @pointerleave="onRectHover(null)"
       >
-        <!-- TradingView-style: the filled body NEVER takes the pointer (the
-             chart crosshair keeps working over it). All 4 edge strips always
-             select/drag — even unselected — so hovering an edge shows the
-             handles affordance and clicking it selects + opens the editor. -->
-        <div class="rect-edge-hit top" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
-        <div class="rect-edge-hit bottom" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
-        <div class="rect-edge-hit left" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
-        <div class="rect-edge-hit right" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
+        <!-- TradingView-style: the filled body hovers (highlight + move
+             cursor) but NEVER blocks the chart crosshair or pan — drag starts
+             from here, and press-select still works. All 4 edge strips always
+             resize-select, even unselected. -->
+        <div class="rect-body-hit" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
+        <div class="rect-edge-hit top" @pointerdown.stop="onRectEdgeStart($event, rect.id, 'n')" @click.stop="onRectClick(rect.id, $event)"></div>
+        <div class="rect-edge-hit bottom" @pointerdown.stop="onRectEdgeStart($event, rect.id, 's')" @click.stop="onRectClick(rect.id, $event)"></div>
+        <div class="rect-edge-hit left" @pointerdown.stop="onRectEdgeStart($event, rect.id, 'w')" @click.stop="onRectClick(rect.id, $event)"></div>
+        <div class="rect-edge-hit right" @pointerdown.stop="onRectEdgeStart($event, rect.id, 'e')" @click.stop="onRectClick(rect.id, $event)"></div>
         <template v-if="rect.selected">
           <div class="resize-handle nw" @pointerdown.stop.prevent="onResizeStart($event, 'nw')"></div>
           <div class="resize-handle ne" @pointerdown.stop.prevent="onResizeStart($event, 'ne')"></div>
@@ -7193,9 +7260,8 @@ onBeforeUnmount(() => {
 }
 .drawing-hit-rect {
   position: absolute;
-  /* TradingView-style: the body is click-transparent so the chart's own
-     crosshair (h/v lines) keeps working over a rectangle's fill. Only the
-     4 edge strips + resize handles below take the pointer. */
+  /* Wrapper stays click-transparent — only the body/edge children below
+     take the pointer, so gaps between them always reach the chart. */
   pointer-events: none;
   cursor: crosshair;
 }
@@ -7204,13 +7270,32 @@ onBeforeUnmount(() => {
 .drawing-hit-rect.border-only {
   pointer-events: none;
 }
+/* Filled body: hover highlight + move cursor, but never blocks the chart's
+   own crosshair lines or pan — pointerdown starts the rect drag. */
+.rect-body-hit {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  cursor: move;
+  background: transparent;
+}
+.rect-body-hit:hover {
+  background: rgba(41, 98, 255, 0.06);
+}
+.drawing-hit-rect.selected .rect-body-hit {
+  background: rgba(41, 98, 255, 0.04);
+}
 .rect-edge-hit {
   position: absolute;
   pointer-events: auto;
-  /* Edges are thin (4px each side) so they rarely cover the crosshair —
-     hovering one keeps the crosshair; click/drag selects + moves. */
+  /* Hovering an edge shows the resize affordance; click/drag selects +
+     resizes that edge (see onRectEdgeStart). */
   cursor: crosshair;
 }
+.rect-edge-hit.top { cursor: ns-resize; }
+.rect-edge-hit.bottom { cursor: ns-resize; }
+.rect-edge-hit.left { cursor: ew-resize; }
+.rect-edge-hit.right { cursor: ew-resize; }
 .drawing-hit-rect.selected .rect-edge-hit {
   cursor: move;
 }
