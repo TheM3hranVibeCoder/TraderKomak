@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import type { ChatMessage, ChatReactionKind } from "@traderkomak/shared";
 import { ChatClient, type ChatStatus } from "@/services/chatClient";
 import { supabase, supabaseReady } from "@/services/supabase";
@@ -32,9 +32,9 @@ export const useChatStore = defineStore("chat", () => {
 
   /** Only filter once the Supabase usernames have actually loaded —
    *  an empty set must never blank the roster at startup. */
-  let validNicksLoaded = false;
+  const validNicksLoaded = ref(false);
   function applyNickFilter(): void {
-    if (!validNicksLoaded) {
+    if (!validNicksLoaded.value) {
       onlineNicks.value = rawOnline.value;
       knownNicks.value = rawKnown.value;
       return;
@@ -49,7 +49,7 @@ export const useChatStore = defineStore("chat", () => {
       const { data, error } = await supabase().from("profiles").select("username");
       if (error) return;
       validNicks.value = new Set((data ?? []).map((r) => String(r.username).toLowerCase()));
-      validNicksLoaded = true;
+      validNicksLoaded.value = true;
       applyNickFilter();
     } catch {}
   }
@@ -603,6 +603,11 @@ function addHealListeners(): void {
     bans,
     onlineNicks,
     knownNicks,
+    /** True once Supabase usernames have loaded and the nick filter is active.
+     *  Before this, `knownNicks` is unfiltered (includes legacy guest nicks),
+     *  so consumers that must show only registered users (e.g. admin panel)
+     *  should gate on this to avoid a transient oversized count. */
+    nicksReady: computed(() => validNicksLoaded.value),
     mutedUntil,
     rateWaitUntil,
     banned,

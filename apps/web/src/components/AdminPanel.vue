@@ -310,7 +310,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         <!-- stat chips + telegram broadcast -->
         <div class="admin-stats">
           <div class="stat green"><span class="stat-num">{{ onlineCount }}</span><span class="stat-label">Online</span></div>
-          <div class="stat blue"><span class="stat-num">{{ allUsers.length }}</span><span class="stat-label">Known users</span></div>
+          <div class="stat blue"><span class="stat-num">{{ chat.nicksReady ? allUsers.length : '…' }}</span><span class="stat-label">Known users</span></div>
           <div class="stat amber"><span class="stat-num">{{ chat.mutes.length }}</span><span class="stat-label">Muted</span></div>
           <div class="stat red"><span class="stat-num">{{ chat.bans.length }}</span><span class="stat-label">Banned</span></div>
         </div>
@@ -338,7 +338,8 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             placeholder="Search users…"
             aria-label="Search users"
           />
-          <div v-if="!filteredUsers.length" class="admin-empty">No users seen yet.</div>
+          <div v-if="!chat.nicksReady" class="admin-empty">Loading users…</div>
+          <div v-else-if="!filteredUsers.length" class="admin-empty">No users seen yet.</div>
           <div v-for="u in filteredUsers" :key="u.nick" class="user-row">
             <button class="nick-btn" type="button" title="Show details (email, IP, country)" @click="openDetails(u.nick)">
               <span class="dot" :class="u.online ? 'on' : 'off'"></span>
