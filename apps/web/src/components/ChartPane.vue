@@ -2,6 +2,7 @@
 import { ref, watch, onMounted, onBeforeUnmount, nextTick, computed, onUnmounted, type Ref } from "vue";
 import { createChartAdapter, type ChartAdapter } from "@/chart/chartAdapter";
 import { computeRsi, computeSma, computeEma } from "@/chart/indicators";
+import { toTimeStr, pnlClass, fmtMoney, relLuma, mixHex } from "@/chart/format";
 import { useThemeStore } from "@/stores/theme";
 import { chartRestorePending } from "@/services/cloudSync";
 import { useMarketStore, sanitizeCandles, isSaneCandle } from "@/stores/market";
@@ -274,10 +275,8 @@ function computeSessionBoxes(): void {
 }
 
 /** "09:00" ↔ minutes-of-day helpers for the settings time inputs. */
-function toTimeStr(min: number): string {
-  const m = ((Math.round(min) % 1440) + 1440) % 1440;
-  return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
-}
+/** Time formatting + color math (toTimeStr / pnlClass / fmtMoney / relLuma /
+ *  mixHex) live in @/chart/format — imported above. */
 function onCustomTimeChange(s: CustomSession, which: "start" | "end", ev: Event): void {
   const v = (ev.target as HTMLInputElement).value; // "HH:MM"
   const [h = 0, m = 0] = v.split(":").map(Number);
@@ -671,12 +670,6 @@ function cancelDemoDraft(): void {
 const demoSummary = computed(() => demo.summaryFor(demoPeriod.value));
 const pendingOrders = computed(() => demo.positions.filter((p) => p.status === "pending"));
 const marketClosedNote = computed(() => !replay.active && isForexClosed());
-function pnlClass(v: number | undefined): string {
-  return (v ?? 0) >= 0 ? "pos" : "neg";
-}
-function fmtMoney(v: number): string {
-  return (v >= 0 ? "$" : "-$") + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
 
 const themeStore = useThemeStore();
 
@@ -770,30 +763,10 @@ function eff(v: string | null, theme: string): string {
   return v ?? theme;
 }
 
-/** Relative luminance 0–1 of a #rrggbb color (perceptual weights). */
-function relLuma(hex: string): number {
-  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
-  if (!m) return 0;
-  const n = parseInt(m[1]!, 16);
-  const r = (n >> 16) & 255;
-  const g = (n >> 8) & 255;
-  const b = n & 255;
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-}
-
 /** Is the EFFECTIVE chart background light or dark? Resolves the real
  *  rendered colors: a template/custom background when set, the theme's
  *  own gradient otherwise — so the ink always matches what is painted. */
 const autoInkColor = computed(() => (chartBgIsLight() ? "#101318" : "#e8ecf4"));
-
-/** Midpoint blend of two 6-digit hex colors (for gradient backgrounds). */
-function mixHex(a: string, b: string): string {
-  const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
-  const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
-  if (pa.some(Number.isNaN) || pb.some(Number.isNaN)) return a;
-  const m = pa.map((v, i) => Math.round((v + pb[i]!) / 2));
-  return `#${m.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
-}
 
 /** Position-drawing label colors: derived from the EFFECTIVE chart
  *  background (custom/template colors when set) so the R:R, TP and SL
