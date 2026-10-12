@@ -5144,17 +5144,15 @@ onBeforeUnmount(() => {
           width: rect.width + 'px',
           height: rect.height + 'px',
         }"
-        @pointerdown.stop="onRectDragStart($event, rect.id)"
-        @click.stop="onRectClick(rect.id, $event)"
       >
-        <!-- Border-only rectangles: the body is click-transparent (clicks
-             pass to the chart), only the 4 edge strips select/drag. -->
-        <template v-if="rect.filled === false">
-          <div class="rect-edge-hit top" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
-          <div class="rect-edge-hit bottom" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
-          <div class="rect-edge-hit left" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
-          <div class="rect-edge-hit right" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
-        </template>
+        <!-- TradingView-style: the filled body NEVER takes the pointer (the
+             chart crosshair keeps working over it). All 4 edge strips always
+             select/drag — even unselected — so hovering an edge shows the
+             handles affordance and clicking it selects + opens the editor. -->
+        <div class="rect-edge-hit top" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
+        <div class="rect-edge-hit bottom" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
+        <div class="rect-edge-hit left" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
+        <div class="rect-edge-hit right" @pointerdown.stop="onRectDragStart($event, rect.id)" @click.stop="onRectClick(rect.id, $event)"></div>
         <template v-if="rect.selected">
           <div class="resize-handle nw" @pointerdown.stop.prevent="onResizeStart($event, 'nw')"></div>
           <div class="resize-handle ne" @pointerdown.stop.prevent="onResizeStart($event, 'ne')"></div>
@@ -7195,49 +7193,50 @@ onBeforeUnmount(() => {
 }
 .drawing-hit-rect {
   position: absolute;
-  pointer-events: auto;
-  /* TradingView-style: hovering an UNSELECTED rect body keeps the chart
-     crosshair (the library's h/v lines) — no pointer/move takeover. */
+  /* TradingView-style: the body is click-transparent so the chart's own
+     crosshair (h/v lines) keeps working over a rectangle's fill. Only the
+     4 edge strips + resize handles below take the pointer. */
+  pointer-events: none;
   cursor: crosshair;
 }
-/* Border-only rectangles: the body passes clicks through to the chart —
-   only the 4 edge strips (the visible border area) select/drag. */
+/* Border-only rectangles: same rule — body transparent, edges interactive
+   (the selector below keeps .rect-edge-hit at pointer-events: auto). */
 .drawing-hit-rect.border-only {
   pointer-events: none;
 }
 .rect-edge-hit {
   position: absolute;
   pointer-events: auto;
-  /* Edges only show the move cursor once selected (when dragging/resizing
-     actually works) — unselected edges keep the crosshair like TV. */
+  /* Edges are thin (4px each side) so they rarely cover the crosshair —
+     hovering one keeps the crosshair; click/drag selects + moves. */
   cursor: crosshair;
 }
 .drawing-hit-rect.selected .rect-edge-hit {
   cursor: move;
 }
 .rect-edge-hit.top {
-  top: -4px;
+  top: -2px;
   left: 0;
   right: 0;
-  height: 8px;
+  height: 4px;
 }
 .rect-edge-hit.bottom {
-  bottom: -4px;
+  bottom: -2px;
   left: 0;
   right: 0;
-  height: 8px;
+  height: 4px;
 }
 .rect-edge-hit.left {
-  left: -4px;
+  left: -2px;
   top: 0;
   bottom: 0;
-  width: 8px;
+  width: 4px;
 }
 .rect-edge-hit.right {
-  right: -4px;
+  right: -2px;
   top: 0;
   bottom: 0;
-  width: 8px;
+  width: 4px;
 }
 .drawing-hit-rect.selected {
   cursor: move;
