@@ -33,6 +33,10 @@ const bannedSet = computed(() => new Set(bannedNicks.value));
    the market server: people with the site open are marked via realtime
    presence. Both merge into the list below; the table itself is unchanged. ── */
 const members = ref<{ user_id: string; username: string }[]>([]);
+/** True once the paginated Supabase `profiles` load has finished. The user
+ *  list/count stays hidden until this AND the chat nick-filter are ready, so
+ *  the stat settles at its final number instead of stepping up. */
+const membersLoaded = ref(false);
 onMounted(async () => {
   try {
     const out: { user_id: string; username: string }[] = [];
@@ -51,8 +55,15 @@ onMounted(async () => {
     members.value = out;
   } catch {
     /* failed load leaves the chat-roster view exactly as before */
+  } finally {
+    membersLoaded.value = true;
   }
 });
+
+/** The registered-user list is only trustworthy once BOTH the chat nick-filter
+ *  and the paginated Supabase members load have settled — otherwise the
+ *  "Known users" count steps up (e.g. 220 -> 456) as each source lands. */
+const usersReady = computed(() => chat.nicksReady && membersLoaded.value);
 
 /** Last-known IP + country for every registered user, keyed by user_id. Works
  *  with no market server (the chat server could only ever report LIVE IPs, and
@@ -310,7 +321,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
         <!-- stat chips + telegram broadcast -->
         <div class="admin-stats">
           <div class="stat green"><span class="stat-num">{{ onlineCount }}</span><span class="stat-label">Online</span></div>
-          <div class="stat blue"><span class="stat-num">{{ chat.nicksReady ? allUsers.length : '…' }}</span><span class="stat-label">Known users</span></div>
+          <div class="stat blue"><span class="stat-num">{{ usersReady ? allUsers.length : '…' }}</span><span class="stat-label">Known users</span></div>
           <div class="stat amber"><span class="stat-num">{{ chat.mutes.length }}</span><span class="stat-label">Muted</span></div>
           <div class="stat red"><span class="stat-num">{{ chat.bans.length }}</span><span class="stat-label">Banned</span></div>
         </div>
@@ -338,7 +349,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
             placeholder="Search users…"
             aria-label="Search users"
           />
-          <div v-if="!chat.nicksReady" class="admin-empty">Loading users…</div>
+          <div v-if="!usersReady" class="admin-empty">Loading users…</div>
           <div v-else-if="!filteredUsers.length" class="admin-empty">No users seen yet.</div>
           <div v-for="u in filteredUsers" :key="u.nick" class="user-row">
             <button class="nick-btn" type="button" title="Show details (email, IP, country)" @click="openDetails(u.nick)">
