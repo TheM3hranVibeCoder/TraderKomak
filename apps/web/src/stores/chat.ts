@@ -43,18 +43,59 @@ export const useChatStore = defineStore("chat", () => {
     knownNicks.value = rawKnown.value.filter((k) => validNicks.value.has(k.nick.toLowerCase()));
   }
 
+  /** Registered usernames are identical for every open tab, so a per-tab
+   *  Supabase fetch on a timer is the app's biggest single source of
+   *  API-gateway traffic — which is exactly what inflates "Log Ingestion".
+   *  One tab fetches; the others read this shared cache. The refresh drops
+   *  to every 30 min and skips hidden tabs, cutting per-user request volume
+   *  ~10x with no behavior change (roster staleness window: ≤30 min, the
+   *  same order the server already uses for its hourly member sync). */
+  const NICKS_CACHE_KEY = "tk_valid_nicks_v1";
+  const NICKS_TTL_MS = 30 * 60_000;
+  function readCachedNicks(): string[] | null {
+    try {
+      const raw = localStorage.getItem(NICKS_CACHE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { at?: unknown; nicks?: unknown };
+      if (!parsed || !Array.isArray(parsed.nicks)) return null;
+      if (typeof parsed.at !== "number" || Date.now() - parsed.at > NICKS_TTL_MS) return null;
+      return parsed.nicks.map((n) => String(n).toLowerCase());
+    } catch {
+      return null;
+    }
+  }
+  function writeCachedNicks(nicks: string[]): void {
+    try {
+      localStorage.setItem(NICKS_CACHE_KEY, JSON.stringify({ at: Date.now(), nicks }));
+    } catch {}
+  }
+
   async function refreshValidNicks(): Promise<void> {
     if (!supabaseReady) return;
+    // Another tab (or this tab) fetched recently — reuse instead of hitting
+    // Supabase again. The filter activates immediately, same as before.
+    const cached = readCachedNicks();
+    if (cached) {
+      validNicks.value = new Set(cached);
+      validNicksLoaded.value = true;
+      applyNickFilter();
+      return;
+    }
     try {
       const { data, error } = await supabase().from("profiles").select("username");
       if (error) return;
-      validNicks.value = new Set((data ?? []).map((r) => String(r.username).toLowerCase()));
+      const nicks = (data ?? []).map((r) => String(r.username).toLowerCase());
+      validNicks.value = new Set(nicks);
       validNicksLoaded.value = true;
+      writeCachedNicks(nicks);
       applyNickFilter();
     } catch {}
   }
   void refreshValidNicks();
-  setInterval(() => void refreshValidNicks(), 5 * 60_000);
+  setInterval(() => {
+    if (document.hidden) return;
+    void refreshValidNicks();
+  }, 30 * 60_000);
   /** Epoch ms when this user's mute lifts (0 = not muted). */
   const mutedUntil = ref<number>(0);
   /** Epoch ms when the 15s chat cooldown lifts (0 = can send now). */
