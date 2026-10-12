@@ -7270,35 +7270,34 @@ onBeforeUnmount(() => {
 .drawing-hit-rect.border-only {
   pointer-events: none;
 }
-/* Filled body: hover highlight + move cursor, but never blocks the chart's
-   own crosshair lines or pan — pointerdown starts the rect drag. */
+/* Unselected body: fully click-transparent — the chart's own crosshair
+   (h/v lines) shows through, no move cursor, no highlight. Selection
+   happens only via the edges below. */
 .rect-body-hit {
   position: absolute;
   inset: 0;
-  pointer-events: auto;
-  cursor: move;
+  pointer-events: none;
+  cursor: crosshair;
   background: transparent;
 }
-.rect-body-hit:hover {
-  background: rgba(41, 98, 255, 0.06);
-}
+/* Selected body: draggable — move cursor, faint tint, h/v lines still show
+   (tint is translucent). Dragging here moves the whole rect. */
 .drawing-hit-rect.selected .rect-body-hit {
+  pointer-events: auto;
+  cursor: move;
   background: rgba(41, 98, 255, 0.04);
 }
 .rect-edge-hit {
   position: absolute;
   pointer-events: auto;
-  /* Hovering an edge shows the resize affordance; click/drag selects +
-     resizes that edge (see onRectEdgeStart). */
-  cursor: crosshair;
+  /* Unselected edge: the "selecting" cursor — hover invites a click that
+     selects + opens handles/panel. */
+  cursor: pointer;
 }
-.rect-edge-hit.top { cursor: ns-resize; }
-.rect-edge-hit.bottom { cursor: ns-resize; }
-.rect-edge-hit.left { cursor: ew-resize; }
-.rect-edge-hit.right { cursor: ew-resize; }
-.drawing-hit-rect.selected .rect-edge-hit {
-  cursor: move;
-}
+.drawing-hit-rect.selected .rect-edge-hit.top,
+.drawing-hit-rect.selected .rect-edge-hit.bottom { cursor: ns-resize; }
+.drawing-hit-rect.selected .rect-edge-hit.left,
+.drawing-hit-rect.selected .rect-edge-hit.right { cursor: ew-resize; }
 .rect-edge-hit.top {
   top: -2px;
   left: 0;
