@@ -60,7 +60,11 @@ async function fetchBi5(url: string, live: boolean): Promise<Buffer | null> {
 
 async function fetchDayMinutes(symbol: string, dayStartMs: number): Promise<{ time: number; open: number; close: number; low: number; high: number }[]> {
   const d = new Date(dayStartMs);
-  const url = `${BASE}/${symbol}/${d.getUTCFullYear()}/${d.getUTCMonth()}/${d.getUTCDate()}/BID_candles_min_1.bi5`;
+  // Dukascopy requires zero-padded month (0-indexed) and day: /2026/09/05/
+  // Unpadded (/2026/9/5/) 404s → looked like "no data" for most of the month.
+  const mm = String(d.getUTCMonth()).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const url = `${BASE}/${symbol}/${d.getUTCFullYear()}/${mm}/${dd}/BID_candles_min_1.bi5`;
   const buf = await fetchBi5(url, Date.now() - dayStartMs < DAY_MS);
   if (!buf) return [];
   const raw = decompressBi5(buf);
@@ -77,7 +81,10 @@ async function fetchDayMinutes(symbol: string, dayStartMs: number): Promise<{ ti
 
 async function fetchHourTicks(symbol: string, hourStartMs: number): Promise<{ t: number; bid: number }[]> {
   const d = new Date(hourStartMs);
-  const url = `${BASE}/${symbol}/${d.getUTCFullYear()}/${d.getUTCMonth()}/${d.getUTCDate()}/${d.getUTCHours()}h_ticks.bi5`;
+  const mm = String(d.getUTCMonth()).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const url = `${BASE}/${symbol}/${d.getUTCFullYear()}/${mm}/${dd}/${hh}h_ticks.bi5`;
   const buf = await fetchBi5(url, Date.now() - hourStartMs < 2 * HOUR_MS);
   if (!buf) return [];
   const raw = decompressBi5(buf);
