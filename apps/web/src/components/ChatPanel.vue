@@ -372,7 +372,7 @@ onBeforeUnmount(() => {
         <span class="chat-title">Live Chat</span>
         <span v-if="chat.isAdmin" class="chat-online clickable" :class="chat.status" @click="showMembers = !showMembers" title="Members — click to moderate">
           <span class="dot" :class="chat.status"></span>
-          {{ chat.online }} online · {{ statusLabel[chat.status] ?? chat.status }}
+          {{ chat.onlineNicks.length }} online · {{ statusLabel[chat.status] ?? chat.status }}
           <svg v-if="chat.isAdmin" viewBox="0 0 6 8" width="6" height="8" aria-hidden="true"><path d="M0 0l5 4-5 4z" fill="currentColor"/></svg>
         </span>
         <div v-if="chat.isAdmin && showMembers" class="members-pop">

@@ -22,7 +22,7 @@ function close(): void {
 
 const tab = ref<"users" | "muted" | "banned">("users");
 
-const onlineSet = computed(() => new Set(chat.onlineNicks));
+const onlineSet = computed(() => new Set(chat.onlineNicks.map((n) => n.toLowerCase())));
 const mutedNicks = computed(() => chat.mutes.map((m) => m.nick));
 const bannedNicks = computed(() => chat.bans.map((b) => b.nick));
 const mutedSet = computed(() => new Set(mutedNicks.value));
@@ -65,7 +65,10 @@ onMounted(async () => {
 });
 
 /** Everyone the room knows + every registered member: online first (chat
- *  WebSocket and/or Supabase presence), then the rest by recency. */
+ *  WebSocket and/or Supabase presence), then the rest by recency.
+ *  NOTE: admin "online" = chat-online UNION presence-online. The chat panel
+ *  header shows chat-online only, so the two numbers differ whenever someone
+ *  has the site open (presence) without joining the chat room. */
 const allUsers = computed(() => {
   const seen = new Set<string>();
   const list: { nick: string; online: boolean; lastSeen: number }[] = [];
