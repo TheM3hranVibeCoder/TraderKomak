@@ -5,7 +5,7 @@ compatibility_date = "2024-09-01"
 # The market server to keep awake — replace with your Render/Railway URL
 # (no trailing slash). Not a secret, so a plain var is fine.
 [vars]
-MARKET_SERVER_URL = "https://your-market-server.onrender.com"
+MARKET_SERVER_URL = "https://traderkomak-market-server-t63h.onrender.com"
 
 # Every 5 minutes, comfortably inside Render's ~15-minute idle window.
 [triggers]

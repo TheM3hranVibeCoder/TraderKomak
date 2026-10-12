@@ -30,5 +30,18 @@ services:
         value: https://api-fxpractice.oanda.com
       - key: OANDA_STREAM_URL
         value: https://stream-fxpractice.oanda.com
+      # ── Lean mode: candles come from each visitor's OWN internet (browser →
+      # Binance vision endpoints + browser → OANDA practice pool in
+      # apps/web/src/services/oandaAccounts.ts, with oanda.traderkomak.ir as
+      # fallback). Render only serves chat (/chat), admin, health and rare
+      # REST fallbacks (Dukascopy symbols, geo-blocked visitors). Keep this
+      # EMPTY so no aggregation/stream runs with zero subscribers.
+      - key: PERSISTENT_AGGREGATIONS
+        value: ""
       - key: LOG_LEVEL
         value: info
+      # Secrets — set these in the Render dashboard (sync: false):
+      - key: CHAT_ADMIN_KEY
+        sync: false
+      - key: CHAT_OWNER_NICK
+        value: mehran
