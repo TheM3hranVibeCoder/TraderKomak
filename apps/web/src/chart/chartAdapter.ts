@@ -475,14 +475,27 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
   }
 
   /** Bar index → time: exact bar times inside the data, uniform seconds-per-bar
-   *  extrapolation beyond either end (margins / over the axis / off-pane). */
+   *  extrapolation beyond either end (margins / over the axis / off-pane).
+   *  FRACTIONAL indices interpolate between bars (not round): rounding
+   *  quantized every drag delta to whole bars, so a slow left-drag jittered
+   *  between two frozen positions until a full bar-width accumulated. */
   function indexToTime(i: number): number | null {
     const n = lastData.length;
     if (n === 0) return null;
-    const idx = Math.round(i);
-    if (idx >= n) return lastData[n - 1]!.time + (idx - (n - 1)) * barSeconds();
-    if (idx < 0) return lastData[0]!.time + idx * barSeconds();
-    return lastData[idx]!.time;
+    if (!Number.isFinite(i)) return null;
+    const barSec = barSeconds();
+    if (i >= n - 1) return lastData[n - 1]!.time + (i - (n - 1)) * barSec;
+    if (i <= 0) return lastData[0]!.time + i * barSec;
+    const lo = Math.floor(i);
+    const hi = lo + 1;
+    const frac = i - lo;
+    const t0 = lastData[lo]!.time;
+    const t1 = lastData[hi]!.time;
+    // Session gaps (weekends) make neighboring bars far apart in time —
+    // extrapolate uniformly rather than jumping across the gap.
+    const gap = t1 - t0;
+    if (gap <= 0 || gap > barSec * 4) return t0 + frac * barSec;
+    return t0 + frac * gap;
   }
 
   const impl: ChartAdapter = {
