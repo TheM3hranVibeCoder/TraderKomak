@@ -2374,7 +2374,6 @@ function recalcRectsNow(): void {
   // or a dot. Sub-bar rectangles are therefore snapped to the bar CELLS they
   // touch; wider ones keep their exact projection.
   let barWidthPx = 0;
-  let barRefX: number | null = null;
   const gridRange = adapter.getLogicalRange();
   if (gridRange) {
     const iTo = Math.floor(gridRange.to);
@@ -2382,7 +2381,6 @@ function recalcRectsNow(): void {
     const xThisBar = adapter.logicalToX(iTo);
     if (xPrevBar !== null && xThisBar !== null && xThisBar !== xPrevBar) {
       barWidthPx = Math.abs(xThisBar - xPrevBar);
-      barRefX = xThisBar;
     }
   }
 
@@ -2397,21 +2395,19 @@ function recalcRectsNow(): void {
     const xr = Math.max(x1, x2);
     let left = xl;
     let width = Math.max(1, xr - xl);
-    const refX = barRefX;
     const step = barWidthPx;
-    if (refX !== null && step > 0 && xr - xl < step) {
-      // Collapse onto the bar grid: find the bars the span touches and cover
-      // their full cells, centred on them (refX is a bar CENTER, so a cell
-      // runs from centre − half a step to centre + half a step). Same bar →
-      // exactly one bar wide, straddling two → cover both, so the box lines up
-      // with the candles. When bars are so narrow that one cell still reads as
-      // a candle body, keep a small usable box instead.
-      const barOf = (x: number) => Math.round((x - refX) / step);
-      const firstBar = barOf(xl);
-      const lastBar = barOf(xr);
-      const centre = refX + ((firstBar + lastBar) / 2) * step;
-      width = Math.max((lastBar - firstBar + 1) * step, MIN_RECT_W);
-      left = centre - width / 2;
+    if (step > 0 && xr - xl < step) {
+      // Sub-bar span (narrower than one candle). Keep the TRUE projected left
+      // edge (pixel-smooth) and only enforce a one-bar minimum width so a
+      // sub-bar rect still reads as a box, not a candle sliver. The previous
+      // code recentred `left` onto whole bar CELLS via Math.round — that
+      // quantised the drag: the rect froze while the pointer kept moving, then
+      // teleported a full bar and the right edge shrank/grew (one-bar vs
+      // two-bar rounding). Anchoring at the true left edge with a fixed width
+      // floor keeps a pure move perfectly smooth; width only grows to its
+      // minimum, never shrinks back.
+      left = xl;
+      width = Math.max(xr - xl, step, MIN_RECT_W);
     }
     return {
       left,
