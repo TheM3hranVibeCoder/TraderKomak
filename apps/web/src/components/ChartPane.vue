@@ -2359,12 +2359,61 @@ function recalcRectsNow(): void {
     measureView.value = null;
   }
 
-  const project = (x1: number, y1: number, x2: number, y2: number) => ({
-    left: Math.min(x1, x2),
-    top: Math.min(y1, y2),
-    width: Math.max(1, Math.abs(x2 - x1)),
-    height: Math.max(1, Math.abs(y2 - y1)),
-  });
+  // One bar of the CURRENT timeframe, in px, measured between two visible
+  // bars (LWC's logicalToCoordinate is exact only inside the viewport). A
+  // rectangle's anchors are candle buckets of the timeframe it was DRAWN on,
+  // so on a coarser timeframe its time span can be a fraction of a single bar
+  // — a 10-bar 1m rectangle is 0.8% of a 1D bar. Projection then collapsed it
+  // to the 1px floor and painted a bordered sliver that read as a candle body
+  // or a dot. Sub-bar rectangles are therefore snapped to the bar CELLS they
+  // touch; wider ones keep their exact projection.
+  let barWidthPx = 0;
+  let barRefX: number | null = null;
+  const gridRange = adapter.getLogicalRange();
+  if (gridRange) {
+    const iTo = Math.floor(gridRange.to);
+    const xPrevBar = adapter.logicalToX(iTo - 1);
+    const xThisBar = adapter.logicalToX(iTo);
+    if (xPrevBar !== null && xThisBar !== null && xThisBar !== xPrevBar) {
+      barWidthPx = Math.abs(xThisBar - xPrevBar);
+      barRefX = xThisBar;
+    }
+  }
+
+  /** Rendered box for a rectangle: min/max of the projected corners, with a
+   *  sub-bar time span widened to the bar cell(s) it touches and small
+   *  minimums so a tiny rectangle never renders as a dot or a candle sliver.
+   *  Only the RENDERED box is adjusted — stored anchors are never rewritten. */
+  const MIN_RECT_H = 3;
+  const MIN_RECT_W = 8;
+  const project = (x1: number, y1: number, x2: number, y2: number) => {
+    const xl = Math.min(x1, x2);
+    const xr = Math.max(x1, x2);
+    let left = xl;
+    let width = Math.max(1, xr - xl);
+    const refX = barRefX;
+    const step = barWidthPx;
+    if (refX !== null && step > 0 && xr - xl < step) {
+      // Collapse onto the bar grid: find the bars the span touches and cover
+      // their full cells, centred on them (refX is a bar CENTER, so a cell
+      // runs from centre − half a step to centre + half a step). Same bar →
+      // exactly one bar wide, straddling two → cover both, so the box lines up
+      // with the candles. When bars are so narrow that one cell still reads as
+      // a candle body, keep a small usable box instead.
+      const barOf = (x: number) => Math.round((x - refX) / step);
+      const firstBar = barOf(xl);
+      const lastBar = barOf(xr);
+      const centre = refX + ((firstBar + lastBar) / 2) * step;
+      width = Math.max((lastBar - firstBar + 1) * step, MIN_RECT_W);
+      left = centre - width / 2;
+    }
+    return {
+      left,
+      top: Math.min(y1, y2),
+      width,
+      height: Math.max(MIN_RECT_H, Math.abs(y2 - y1)),
+    };
+  };
 
   for (const rect of rects) {
     const x1 = adapter.timeToX(rect.time1);
@@ -6537,6 +6586,10 @@ onBeforeUnmount(() => {
   overflow: hidden;
   box-shadow: var(--glass-shadow);
   border: 1px solid var(--border);
+  /* Own stacking context: keeps the chart canvases and every overlay layer
+     in one well-defined composite so a behind-the-canvas layer is never
+     occluded/cached against an ancestor's paint. */
+  isolation: isolate;
 }
 .chart-container {
   flex: 1;
@@ -6949,6 +7002,15 @@ onBeforeUnmount(() => {
   inset: 0;
   z-index: 0;
   pointer-events: none;
+  /* Windows Chromium WITHOUT GPU acceleration (software rendering) coalesced
+     this behind-the-canvas layer's repaints with the candle canvas painting
+     on top, so moved rectangles/trendlines froze in screen space while the
+     chart panned. Promoting the layer to its own composited layer keeps its
+     invalidation independent of the canvas — drawings stay glued to the
+     chart. (No visual change: translateZ(0) is a no-op transform.) */
+  transform: translateZ(0);
+  will-change: transform;
+  backface-visibility: hidden;
 }
 /* Measure tool layer: ABOVE the candle canvases so the box and its stats
    label stay readable when drawn over candle bodies. */
@@ -6964,6 +7026,10 @@ onBeforeUnmount(() => {
   inset: 0;
   z-index: 0;
   pointer-events: none;
+  /* Same software-rendering projection fix as .drawing-layer above. */
+  transform: translateZ(0);
+  will-change: transform;
+  backface-visibility: hidden;
 }
 .session-box {
   position: absolute;
@@ -7130,7 +7196,9 @@ onBeforeUnmount(() => {
 .drawing-hit-rect {
   position: absolute;
   pointer-events: auto;
-  cursor: pointer;
+  /* TradingView-style: hovering an UNSELECTED rect body keeps the chart
+     crosshair (the library's h/v lines) — no pointer/move takeover. */
+  cursor: crosshair;
 }
 /* Border-only rectangles: the body passes clicks through to the chart —
    only the 4 edge strips (the visible border area) select/drag. */
@@ -7140,6 +7208,11 @@ onBeforeUnmount(() => {
 .rect-edge-hit {
   position: absolute;
   pointer-events: auto;
+  /* Edges only show the move cursor once selected (when dragging/resizing
+     actually works) — unselected edges keep the crosshair like TV. */
+  cursor: crosshair;
+}
+.drawing-hit-rect.selected .rect-edge-hit {
   cursor: move;
 }
 .rect-edge-hit.top {
