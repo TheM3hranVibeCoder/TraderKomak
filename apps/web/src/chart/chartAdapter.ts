@@ -773,6 +773,45 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       return Math.ceil(ctx.measureText(text).width);
     },
     timeToX(time: number): number | null {
+      // In-gap / sub-bar fractional times are the exact inverse of what the
+      // drag path (xToTime → indexToTime) produces, so they MUST render back
+      // through the SAME continuous bar-grid math. LWC's native
+      // timeToCoordinate instead CLAMPS an in-gap time to the nearest bar
+      // edge — discontinuous with the drag — which froze a dragged drawing's
+      // edge at a session boundary (weekend / overnight open like Sydney
+      // 01:30) while the cursor kept moving, then snapped once clear (the
+      // "wall, then jump"). Detect those first (cheap binary search, no grid
+      // needed) and project them continuously; times exactly ON a bar keep
+      // LWC's native result so existing drawings render byte-identically.
+      const nIn = lastData.length;
+      if (nIn >= 2) {
+        const firstT = lastData[0]!.time;
+        const lastT = lastData[nIn - 1]!.time;
+        if (time > firstT && time < lastT) {
+          let lo = 0;
+          let hi = nIn - 1;
+          let i = 0;
+          while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (lastData[mid]!.time <= time) {
+              i = mid;
+              lo = mid + 1;
+            } else {
+              hi = mid - 1;
+            }
+          }
+          if (lastData[i]!.time !== time) {
+            const gridIn = barGrid();
+            if (gridIn) {
+              const t0 = lastData[i]!.time;
+              const t1 = i + 1 < nIn ? lastData[i + 1]!.time : t0 + gridIn.barSec;
+              const frac = t1 > t0 ? (time - t0) / (t1 - t0) : 0;
+              const logical = i + frac;
+              return gridIn.xRef + (logical - gridIn.iRef) * gridIn.pxPerBar;
+            }
+          }
+        }
+      }
       try {
         const x = chart.timeScale().timeToCoordinate(time as never);
         if (typeof x === "number" && Number.isFinite(x)) return x;
