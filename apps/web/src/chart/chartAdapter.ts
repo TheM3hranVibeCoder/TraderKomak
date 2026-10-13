@@ -83,6 +83,17 @@ export interface ChartAdapter {
   logicalToX(logical: number): number | null;
   /** Converts an x-pixel on the chart back to a UNIX timestamp (seconds). */
   xToTime(x: number): number | null;
+  /** Converts an x-pixel to a logical (fractional) bar index — the inverse of
+   *  logicalToX on the calibrated grid. Pixels are linear in logical index,
+   *  NOT in time, so body-drags translate here to keep pixel size constant
+   *  across session gaps. */
+  xToLogical(x: number): number | null;
+  /** Converts a UNIX timestamp (seconds) to a logical (fractional) bar index
+   *  (gap-aware; exact inverse of logicalToTime inside the data). */
+  timeToLogical(time: number): number | null;
+  /** Converts a logical (fractional) bar index back to a UNIX timestamp
+   *  (seconds), interpolating across session gaps. */
+  logicalToTime(logical: number): number | null;
   /** Converts a y-pixel on the chart back to a price. */
   yToPrice(y: number): number | null;
   subscribeVisibleRange(cb: (range: { from: number; to: number } | null) => void): void;
@@ -505,6 +516,50 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     return t0 + frac * gap;
   }
 
+  /** Pixel → logical (fractional) index — the inverse of logicalToX on the
+   *  same calibrated grid. Pixels are linear in logical index, NOT in time, so
+   *  body-drags translate here (see the four on*DragStart handlers) to keep a
+   *  drawing's pixel size constant as it crosses a session gap: a weekend or
+   *  overnight close is ~1px wide in LWC but ~48h in time, so an equal *time*
+   *  shift moved the two edges by unequal *pixels* and the shape visibly
+   *  collapsed then sprang back. */
+  function xToLogicalFn(x: number): number | null {
+    const grid = barGrid();
+    if (!grid) return null;
+    const logical = grid.iRef + (x - grid.xRef) / grid.pxPerBar;
+    return Number.isFinite(logical) ? logical : null;
+  }
+
+  /** Time → logical (fractional) index, the exact inverse of indexToTime:
+   *  inside the data locate the surrounding bars and interpolate by their real
+   *  spacing; beyond either end extrapolate with barSeconds. */
+  function timeToLogicalFn(time: number): number | null {
+    const n = lastData.length;
+    if (n === 0) return null;
+    if (!Number.isFinite(time)) return null;
+    const barSec = barSeconds();
+    const lastT = lastData[n - 1]!.time;
+    const firstT = lastData[0]!.time;
+    if (time >= lastT) return n - 1 + (time - lastT) / barSec;
+    if (time <= firstT) return (time - firstT) / barSec;
+    let lo = 0;
+    let hi = n - 1;
+    let i = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (lastData[mid]!.time <= time) {
+        i = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    const t0 = lastData[i]!.time;
+    const t1 = i + 1 < n ? lastData[i + 1]!.time : t0 + barSec;
+    const frac = t1 > t0 ? (time - t0) / (t1 - t0) : 0;
+    return i + frac;
+  }
+
   const impl: ChartAdapter = {
     setData(candles: Candle[]): void {
       // Capture the user's viewport BEFORE replacing data so it survives
@@ -800,15 +855,26 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
               hi = mid - 1;
             }
           }
-          if (lastData[i]!.time !== time) {
-            const gridIn = barGrid();
-            if (gridIn) {
-              const t0 = lastData[i]!.time;
-              const t1 = i + 1 < nIn ? lastData[i + 1]!.time : t0 + gridIn.barSec;
-              const frac = t1 > t0 ? (time - t0) / (t1 - t0) : 0;
-              const logical = i + frac;
-              return gridIn.xRef + (logical - gridIn.iRef) * gridIn.pxPerBar;
-            }
+          // Project EVERY in-range time (on-bar AND in-gap) through the SAME
+          // continuous bar-grid math the drag path (xToLogical / timeToLogical)
+          // uses, so render is the EXACT inverse of the drag. The old code kept
+          // LWC's native result for times exactly ON a bar and used the grid
+          // only for in-gap times — but native and the grid disagree by a
+          // sub-pixel offset at some bars, so when a dragged edge crossed from
+          // in-gap (grid) onto a bar (native) its rendered x jumped by that
+          // offset. With one edge on-bar (native) and the other in-gap (grid)
+          // straddling a session gap, the rectangle's width momentarily shrank
+          // then sprang back as it cleared the gap ("smaller, then normal").
+          // Routing on-bar times through the grid too (frac=0 → exact bar
+          // logical → same pixel within <1px) removes that discontinuity; saved
+          // drawings stay put (sub-pixel, imperceptible).
+          const gridIn = barGrid();
+          if (gridIn) {
+            const t0 = lastData[i]!.time;
+            const t1 = i + 1 < nIn ? lastData[i + 1]!.time : t0 + gridIn.barSec;
+            const frac = t1 > t0 ? (time - t0) / (t1 - t0) : 0;
+            const logical = i + frac;
+            return gridIn.xRef + (logical - gridIn.iRef) * gridIn.pxPerBar;
           }
         }
       }
@@ -875,6 +941,9 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       if (!Number.isFinite(logical)) return null;
       return indexToTime(logical);
     },
+    xToLogical: xToLogicalFn,
+    timeToLogical: timeToLogicalFn,
+    logicalToTime: indexToTime,
     yToPrice(y: number): number | null {
       try {
         const p = series.coordinateToPrice(y as never);
