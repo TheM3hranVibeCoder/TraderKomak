@@ -3014,22 +3014,33 @@ function onRectDragStart(e: MouseEvent, id: string): void {
   positionEditPanel(id);
 
   const r0 = containerRef.value.getBoundingClientRect();
-  const startT = adapter.xToTime(e.clientX - r0.left);
+  const startL = adapter.xToLogical(e.clientX - r0.left);
   const startP = adapter.yToPrice(e.clientY - r0.top);
-  if (startT === null || startP === null) return;
+  if (startL === null || startP === null) return;
   const orig = { time1: rect.time1, price1: rect.price1, time2: rect.time2, price2: rect.price2 };
+  // Drag in LOGICAL (index) space, not time: pixels are linear in logical
+  // index, so shifting both edges by an equal logical delta keeps the pixel
+  // width constant as the rect crosses a session gap (weekend / overnight
+  // open). An equal *time* delta shrank the shape while it straddled the gap
+  // (in-gap time maps to almost no pixels) then sprang it back on the far side.
+  const origL1 = adapter.timeToLogical(orig.time1);
+  const origL2 = adapter.timeToLogical(orig.time2);
+  if (origL1 === null || origL2 === null) return;
 
   const onMove = (ev: MouseEvent) => {
     if (!adapter || !containerRef.value) return;
     const r = containerRef.value.getBoundingClientRect();
-    const t = adapter.xToTime(ev.clientX - r.left);
+    const l = adapter.xToLogical(ev.clientX - r.left);
     const p = adapter.yToPrice(ev.clientY - r.top);
-    if (t === null || p === null) return;
-    const dt = t - startT;
+    if (l === null || p === null) return;
+    const dL = l - startL;
     const dp = p - startP;
+    const t1 = adapter.logicalToTime(origL1 + dL);
+    const t2 = adapter.logicalToTime(origL2 + dL);
+    if (t1 === null || t2 === null) return;
     drawingsStore.updateRect(market.instrument, id, {
-      time1: orig.time1 + dt,
-      time2: orig.time2 + dt,
+      time1: t1,
+      time2: t2,
       price1: orig.price1 + dp,
       price2: orig.price2 + dp,
     });
@@ -3354,23 +3365,33 @@ function onTrendDragStart(e: MouseEvent, id: string): void {
   positionLinePanel(id);
 
   const r0 = containerRef.value.getBoundingClientRect();
-  const startT = adapter.xToTime(e.clientX - r0.left);
+  const startL = adapter.xToLogical(e.clientX - r0.left);
   const startP = adapter.yToPrice(e.clientY - r0.top);
-  if (startT === null || startP === null) return;
+  if (startL === null || startP === null) return;
   const orig = { time1: line.time1, price1: line.price1, time2: line.time2, price2: line.price2 };
+  // Logical-space drag (same as rectangles): pixels are linear in logical
+  // index, so an equal logical shift keeps pixel length constant across a
+  // session gap. An equal *time* shift collapsed the line while straddling
+  // the gap (in-gap time maps to almost no pixels) then sprang it back.
+  const origL1 = adapter.timeToLogical(orig.time1);
+  const origL2 = adapter.timeToLogical(orig.time2);
+  if (origL1 === null || origL2 === null) return;
 
   const onMove = (ev: MouseEvent) => {
     if (!adapter || !containerRef.value) return;
     const r = containerRef.value.getBoundingClientRect();
-    const t = adapter.xToTime(ev.clientX - r.left);
+    const l = adapter.xToLogical(ev.clientX - r.left);
     const p = adapter.yToPrice(ev.clientY - r.top);
-    if (t === null || p === null) return;
-    const dt = t - startT;
+    if (l === null || p === null) return;
+    const dL = l - startL;
     const dp = p - startP;
+    const t1 = adapter.logicalToTime(origL1 + dL);
+    const t2 = adapter.logicalToTime(origL2 + dL);
+    if (t1 === null || t2 === null) return;
     drawingsStore.updateLine(market.instrument, id, {
-      time1: orig.time1 + dt,
+      time1: t1,
       price1: orig.price1 + dp,
-      time2: orig.time2 + dt,
+      time2: t2,
       price2: orig.price2 + dp,
     });
     const updated = drawingsStore.getLinesFor(market.instrument).find((x) => x.id === id);
@@ -3539,23 +3560,33 @@ function onPolyDragStart(e: MouseEvent, id: string): void {
   positionPolyPanel(id);
 
   const r0 = containerRef.value.getBoundingClientRect();
-  const startT = adapter.xToTime(e.clientX - r0.left);
+  const startL = adapter.xToLogical(e.clientX - r0.left);
   const startP = adapter.yToPrice(e.clientY - r0.top);
-  if (startT === null || startP === null) return;
+  if (startL === null || startP === null) return;
   const orig = poly.points.map((pt) => ({ ...pt }));
+  // Logical-space drag (same as rectangles/trendlines): keeps pixel shape
+  // constant across session gaps; a time delta collapsed it over gaps.
+  const origLs = orig.map((pt) => adapter!.timeToLogical(pt.time));
+  if (origLs.some((v) => v === null)) return;
 
   const onMove = (ev: MouseEvent) => {
     if (!adapter || !containerRef.value) return;
     const r = containerRef.value.getBoundingClientRect();
-    const t = adapter.xToTime(ev.clientX - r.left);
+    const l = adapter.xToLogical(ev.clientX - r.left);
     const p = adapter.yToPrice(ev.clientY - r.top);
-    if (t === null || p === null) return;
-    const dt = t - startT;
+    if (l === null || p === null) return;
+    const dL = l - startL;
     const dp = p - startP;
+    const next: { time: number; price: number }[] = [];
+    for (let i = 0; i < orig.length; i++) {
+      const t = adapter.logicalToTime((origLs[i] as number) + dL);
+      if (t === null) return;
+      next.push({ time: t, price: orig[i]!.price + dp });
+    }
     drawingsStore.updatePolyPoints(
       market.instrument,
       id,
-      orig.map((pt) => ({ time: pt.time + dt, price: pt.price + dp }))
+      next
     );
     const updated = drawingsStore.getPolysFor(market.instrument).find((x) => x.id === id);
     if (updated) selectedPoly.value = updated;
@@ -3912,20 +3943,29 @@ function onPosDragStart(e: MouseEvent, id: string): void {
   void onPosClick(id, e);
 
   const r0 = containerRef.value.getBoundingClientRect();
-  const startT = adapter.xToTime(e.clientX - r0.left);
+  const startL = adapter.xToLogical(e.clientX - r0.left);
   const startP = adapter.yToPrice(e.clientY - r0.top);
-  if (startT === null || startP === null) return;
+  if (startL === null || startP === null) return;
   const orig = { time1: pos.time1, time2: pos.time2, entry: pos.entry, sl: pos.sl, tp: pos.tp };
+  // Logical-space drag (same as rectangles/trendlines): keeps pixel width
+  // constant across session gaps; a time delta collapsed it over gaps.
+  const origL1 = adapter.timeToLogical(orig.time1);
+  const origL2 = adapter.timeToLogical(orig.time2);
+  if (origL1 === null || origL2 === null) return;
 
   const onMove = (ev: MouseEvent) => {
     if (!adapter || !containerRef.value) return;
     const r = containerRef.value.getBoundingClientRect();
-    const t = adapter.xToTime(ev.clientX - r.left);
+    const l = adapter.xToLogical(ev.clientX - r.left);
     const p = adapter.yToPrice(ev.clientY - r.top);
-    if (t === null || p === null) return;
+    if (l === null || p === null) return;
+    const dL = l - startL;
+    const t1 = adapter.logicalToTime(origL1 + dL);
+    const t2 = adapter.logicalToTime(origL2 + dL);
+    if (t1 === null || t2 === null) return;
     drawingsStore.updatePosition(market.instrument, id, {
-      time1: orig.time1 + (t - startT),
-      time2: orig.time2 + (t - startT),
+      time1: t1,
+      time2: t2,
       entry: orig.entry + (p - startP),
       sl: orig.sl + (p - startP),
       tp: orig.tp + (p - startP),

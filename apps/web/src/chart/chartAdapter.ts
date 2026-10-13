@@ -878,48 +878,55 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
           }
         }
       }
+      // Out-of-range times (a drawing dragged past the first/last loaded
+      // candle — e.g. across the previous day's open where the data begins)
+      // MUST NOT go through LWC's native timeToCoordinate: it CLAMPS them to
+      // the boundary bar's coordinate, so the dragged edge froze there while
+      // the other edge kept moving (the rectangle narrowed from one side),
+      // then jumped once older candles lazily widened the range. Extrapolate
+      // along the calibrated bar grid instead — the exact inverse of the
+      // drag's index-space math — so the edge keeps tracking the cursor past
+      // the data edge. The in-range branch above already returned for times
+      // inside the data, so reaching here means out-of-range (or nIn<2).
+      const grid = barGrid();
+      if (grid) {
+        const n = lastData.length;
+        const lastT = lastData[n - 1]!.time;
+        const firstT = lastData[0]!.time;
+        let logical: number;
+        if (time >= lastT) {
+          logical = n - 1 + (time - lastT) / grid.barSec;
+        } else if (time <= firstT) {
+          logical = (time - firstT) / grid.barSec;
+        } else {
+          let lo = 0;
+          let hi = n - 1;
+          let i = 0;
+          while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (lastData[mid]!.time <= time) {
+              i = mid;
+              lo = mid + 1;
+            } else {
+              hi = mid - 1;
+            }
+          }
+          const t0 = lastData[i]!.time;
+          const t1 = i + 1 < n ? lastData[i + 1]!.time : t0 + grid.barSec;
+          const frac = t1 > t0 ? (time - t0) / (t1 - t0) : 0;
+          logical = i + frac;
+        }
+        return grid.xRef + (logical - grid.iRef) * grid.pxPerBar;
+      }
+      // No calibrated grid (fewer than 2 bars / degenerate viewport): best-effort
+      // native, then give up. Never reached while real data is loaded.
       try {
         const x = chart.timeScale().timeToCoordinate(time as never);
         if (typeof x === "number" && Number.isFinite(x)) return x;
       } catch {
-        /* fall through to bar-grid extrapolation */
+        /* ignore */
       }
-      // timeToCoordinate returns null for times off the current bar grid —
-      // both outside the data range (margins) and for in-data times that
-      // aren't on a bucket boundary (e.g. a 1s-anchored rectangle edge
-      // viewed on the 5s chart). Project along the calibrated bar grid:
-      // outside the data extrapolate; inside it, locate the surrounding
-      // bars and interpolate (index space — session gaps make time
-      // non-linear in x, see barGrid).
-      const grid = barGrid();
-      if (!grid) return null;
-      const n = lastData.length;
-      const lastT = lastData[n - 1]!.time;
-      const firstT = lastData[0]!.time;
-      let logical: number;
-      if (time >= lastT) {
-        logical = n - 1 + (time - lastT) / grid.barSec;
-      } else if (time <= firstT) {
-        logical = (time - firstT) / grid.barSec;
-      } else {
-        let lo = 0;
-        let hi = n - 1;
-        let i = 0;
-        while (lo <= hi) {
-          const mid = (lo + hi) >> 1;
-          if (lastData[mid]!.time <= time) {
-            i = mid;
-            lo = mid + 1;
-          } else {
-            hi = mid - 1;
-          }
-        }
-        const t0 = lastData[i]!.time;
-        const t1 = i + 1 < n ? lastData[i + 1]!.time : t0 + grid.barSec;
-        const frac = t1 > t0 ? (time - t0) / (t1 - t0) : 0;
-        logical = i + frac;
-      }
-      return grid.xRef + (logical - grid.iRef) * grid.pxPerBar;
+      return null;
     },
     logicalToX(logical: number): number | null {
       try {
