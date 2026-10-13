@@ -491,10 +491,17 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     const frac = i - lo;
     const t0 = lastData[lo]!.time;
     const t1 = lastData[hi]!.time;
-    // Session gaps (weekends) make neighboring bars far apart in time —
-    // extrapolate uniformly rather than jumping across the gap.
+    // Interpolate by the REAL bar spacing so this is the exact inverse of
+    // timeToX (which spreads an in-gap time across its full cell). The old
+    // uniform barSec extrapolation DISAGREED with timeToX at session gaps
+    // (weekends/overnight closes): crossing such a boundary made xToTime jump
+    // by a whole gap, so a drag's dt = t - startT teleported the rectangle and
+    // then snapped back — the "glitch, then it crosses" stutter. Matching both
+    // directions keeps x<->time continuous and monotonic, so a dragged edge
+    // tracks the cursor through the gap (the round-trip fidelity xToTime
+    // promises). timeToX is unchanged, so saved drawings render as before.
     const gap = t1 - t0;
-    if (gap <= 0 || gap > barSec * 4) return t0 + frac * barSec;
+    if (gap <= 0) return t0 + frac * barSec; // guard non-increasing data
     return t0 + frac * gap;
   }
 
