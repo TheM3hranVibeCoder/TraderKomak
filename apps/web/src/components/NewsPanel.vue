@@ -55,6 +55,14 @@ const outOfFeedRange = computed(() => {
 });
 
 const panelEl = ref<HTMLElement | null>(null);
+
+/** True when the viewed day is the real today — today always gets the
+ *  plain "no news on this day" empty state, never the out-of-range note. */
+const isToday = computed(() => {
+  const d = new Date();
+  const todayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  return news.selectedStart === todayStart;
+});
 function closePanel(): void {
   news.setOpen(false);
 }
@@ -85,9 +93,9 @@ onMounted(() => {
           ⚠ {{ news.error }}
           <button class="retry-btn" @click="news.refresh()">Retry</button>
         </div>
-        <div v-else-if="news.dayItems.length === 0 && outOfFeedRange" class="news-empty">
+        <div v-else-if="news.dayItems.length === 0 && outOfFeedRange && !isToday" class="news-empty">
           📅 Only the current week's calendar is available.
-          <button class="retry-btn" @click="news.goToRelevantDay()">Back to this week</button>
+          <button class="retry-btn" @click="news.goToRelevantDay()">Back to today</button>
         </div>
         <div v-else-if="news.dayItems.length === 0" class="news-empty">
           No medium/high impact news on this day

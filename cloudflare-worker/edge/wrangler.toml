@@ -1,0 +1,11 @@
+name = "edge-proxy"
+main = "edge-proxy.js"
+compatibility_date = "2024-09-01"
+
+# Custom domain — this is what Iran IPs connect to (workers.dev is blocked).
+routes = [
+  { pattern = "edge.traderkomak.ir", custom_domain = true }
+]
+
+[vars]
+UPSTREAM = "https://traderkomak-market-server-t63h.onrender.com"

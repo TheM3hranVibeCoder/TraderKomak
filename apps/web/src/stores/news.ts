@@ -78,41 +78,11 @@ export const useNewsStore = defineStore("news", () => {
     }
   }
 
-  /** Pick the day the panel opens on: TODAY if it has news, otherwise the
-   *  most recent day that does, otherwise the next upcoming one. */
+  /** The panel always opens on TODAY — even when today has no medium/high
+   *  news, it shows today with the "no news" empty state rather than
+   *  snapping back to a previous day that does. */
   function goToRelevantDay(): void {
-    // Open on the real today when it has events; otherwise snap to the
-    // nearest day that does (weekend rollover → the feed's first day).
-    const todayStart = todayLocalStart();
-    const hasItems = (start: number) =>
-      items.value.some((it) => it.date >= start && it.date < start + 86_400_000);
-    if (hasItems(todayStart)) {
-      selectedStart.value = todayStart;
-      return;
-    }
-    const starts = days.value.map((x) => x.start);
-    if (!starts.length) return;
-    if (todayStart < starts[0]!) {
-      selectedStart.value = starts[0]!;
-      return;
-    }
-    if (todayStart > starts[starts.length - 1]!) {
-      selectedStart.value = starts[starts.length - 1]!;
-      return;
-    }
-    for (let st = todayStart - 86_400_000; st >= starts[0]!; st -= 86_400_000) {
-      if (hasItems(st)) {
-        selectedStart.value = st;
-        return;
-      }
-    }
-    for (let st = todayStart + 86_400_000; st <= starts[starts.length - 1]!; st += 86_400_000) {
-      if (hasItems(st)) {
-        selectedStart.value = st;
-        return;
-      }
-    }
-    selectedStart.value = todayStart;
+    selectedStart.value = todayLocalStart();
   }
 
   function setOpen(v: boolean): void {
