@@ -26,7 +26,14 @@ import type { BinanceStreamClient } from "../binance/streamClient.js";
 import type { Log } from "../logger.js";
 import type { MarketTick } from "@traderkomak/shared";
 
-const SNAPSHOT_CANDLES = 300;
+/** Snapshot depth per (re)subscribe: the client merges this into its REST
+ *  history as a live-tail backstop (and re-fetches gaps itself), so a short
+ *  tail suffices — a deep buffer just re-sends on every reconnect flap. */
+const SNAPSHOT_CANDLES = 60;
+/** Watchlist tick coalescing: at most one price message per instrument per
+ *  window. Display prices don't need per-tick fidelity (live chart candles
+ *  travel untouched via onCandleEvent), and OANDA majors tick several Hz. */
+const TICK_MIN_INTERVAL_MS = 500;
 const PING_INTERVAL_MS = 30_000;
 
 function keyOf(instrument: string, timeframe: string): string {
@@ -45,6 +52,8 @@ export class MarketHub {
    *  price ticks until they resume. Per-connection state — a reconnect
    *  always starts unpaused. */
   private readonly paused = new Set<WebSocket>();
+  /** Last forwarded tick per instrument (watchlist coalescing). */
+  private readonly lastTickAt = new Map<string, number>();
   /** Connections awaiting a pong since their last ping. */
   private readonly awaitingPong = new Set<WebSocket>();
   private pingTimer: NodeJS.Timeout | null = null;
@@ -131,6 +140,12 @@ export class MarketHub {
   }
 
   onPriceTick(tick: MarketTick): void {
+    // Coalesce: drop ticks that arrive within the window since the last
+    // forwarded one for this instrument (the next tick refreshes anyway).
+    const now = Date.now();
+    const last = this.lastTickAt.get(tick.instrument);
+    if (last !== undefined && now - last < TICK_MIN_INTERVAL_MS) return;
+    this.lastTickAt.set(tick.instrument, now);
     const payload: ServerMessage = {
       type: "price",
       instrument: tick.instrument,

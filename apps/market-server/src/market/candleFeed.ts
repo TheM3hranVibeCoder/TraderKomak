@@ -69,6 +69,9 @@ const MAX_PENDING_TICKS = 10_000;
  */
 const SYNTH_WINDOW_MS = 5 * 60_000;
 
+/** Zero-subscriber grace before a session is torn down (see removeSubscriber). */
+const LINGER_MS = 60_000;
+
 interface Session {
   instrument: string;
   timeframe: Timeframe;
@@ -82,6 +85,10 @@ interface Session {
   /** Fires at each bucket boundary so candles roll over on time —
    *  even when the tick stream is silent. */
   rollover: NodeJS.Timeout | null;
+  /** Zero-subscriber grace timer: reconnect flaps re-subscribe within
+   *  seconds, so deleting immediately would re-prime (full REST history
+   *  download) on every blip. Null when subscribers > 0. */
+  linger: NodeJS.Timeout | null;
   /** Timestamp of the last real tick — gates synthetic rollovers. */
   lastTickAt: number;
 }
@@ -105,6 +112,12 @@ export class CandleFeed extends EventEmitter {
     const existing = this.sessions.get(key);
     if (existing) {
       existing.subscribers++;
+      // Rejoin during the linger window: cancel the pending teardown so the
+      // primed buffer (and its upstream subscription) survives the flap.
+      if (existing.linger) {
+        clearTimeout(existing.linger);
+        existing.linger = null;
+      }
       return;
     }
     const session = this.createSession(instrument, timeframe);
@@ -119,9 +132,22 @@ export class CandleFeed extends EventEmitter {
     if (!session) return;
     session.subscribers--;
     if (session.subscribers <= 0 && !session.persistent) {
-      if (session.rollover) clearTimeout(session.rollover);
-      this.sessions.delete(key);
-      this.log.info({ instrument, timeframe }, "aggregation session released");
+      // Linger instead of deleting: a reconnect re-subscribing within the
+      // window reuses the primed buffer with zero REST re-download. The
+      // instrument stays in instrumentUnion() meanwhile, so upstream
+      // subscriptions don't churn either.
+      if (session.linger) return; // already counting down
+      session.linger = setTimeout(() => {
+        const cur = this.sessions.get(key);
+        if (!cur) return;
+        cur.linger = null;
+        if (cur.subscribers <= 0 && !cur.persistent) {
+          if (cur.rollover) clearTimeout(cur.rollover);
+          this.sessions.delete(key);
+          this.log.info({ instrument, timeframe }, "aggregation session released");
+        }
+      }, LINGER_MS);
+      session.linger.unref?.();
     }
   }
 
@@ -244,6 +270,7 @@ export class CandleFeed extends EventEmitter {
       primingSettled: false,
       persistent: false,
       rollover: null,
+      linger: null,
       lastTickAt: 0,
     };
 
