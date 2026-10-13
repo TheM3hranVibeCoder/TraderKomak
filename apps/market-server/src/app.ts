@@ -60,7 +60,14 @@ export async function createMarketServer(config: AppConfig): Promise<MarketServe
   });
 
   await app.register(websocket, {
-    options: { maxPayload: 1_048_576 },
+    options: {
+      maxPayload: 1_048_576,
+      // Negotiate permessage-deflate with browsers: JSON tick/candle frames
+      // compress ~3-5x, which directly cuts metered egress (the WS stream is
+      // the biggest bandwidth consumer). No behavior change — clients that
+      // don't offer the extension simply get uncompressed frames.
+      perMessageDeflate: true,
+    },
   });
 
   const oandaRest = new OandaRestClient({

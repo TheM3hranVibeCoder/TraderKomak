@@ -2,10 +2,15 @@ name = "binance-proxy"
 main = "binance-proxy.js"
 compatibility_date = "2024-09-01"
 
-# ⚠️ NOT DEPLOYED (2026-09): Binance geo-blocks datacenter IPs, so a Cloudflare
-# Worker relay gets 403 on both api.binance.com (CloudFront WAF) and
-# data-api.binance.vision (CF-challenge). Browser-direct access to
-# binance.vision is the primary path; the fallback for blocked visitors is the
-# market server (api.ts falls back to fetchServerCandles automatically).
-# Only rebind a custom domain if you ever host this relay on a Binance-friendly
-# non-datacenter origin.
+# Custom domain — workers.dev is blocked in Iran, same as the oanda proxy.
+# NOTE (retest on deploy): 2026-09 notes said Binance 403s Cloudflare egress
+# on both api.binance.com and data-api.binance.vision. If a curl through this
+# worker returns klines fine, the relay is viable and Iran visitors use it
+# (their own internet via Cloudflare) instead of Render bandwidth.
+routes = [
+  { pattern = "binance.traderkomak.ir", custom_domain = true }
+]
+
+# Previous note: browser-direct binance.vision is the primary path; the
+# fallback for blocked visitors is this relay (VITE_BINANCE_PROXY_URL), with
+# the market server as last resort (api.ts falls back automatically).
