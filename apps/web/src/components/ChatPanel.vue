@@ -5,6 +5,7 @@ import { useAuthStore } from "@/stores/auth";
 import type { ChatMessage, ChatReactionKind } from "@traderkomak/shared";
 import { compressImage } from "@/utils/image";
 import { chatImgUrl } from "@/services/api";
+import { onlineMembers } from "@/services/presence";
 
 const chat = useChatStore();
 const auth = useAuthStore();
@@ -22,6 +23,17 @@ const pendingImg = ref<string | null>(null);
  *  a caption. Send is ignored for a short window after staging. */
 let stageGuardUntil = 0;
 const showMembers = ref(false);
+/** Site-wide online = chat roster UNION Supabase presence — the same basis
+ *  the admin panel's Online stat uses (AdminPanel.vue allUsers). Presence
+ *  captures signed-in users with the site open who never joined the chat
+ *  room, so the header no longer under-counts vs the admin panel. */
+const siteOnlineCount = computed(() => {
+  const seen = new Set(chat.onlineNicks.map((n) => n.toLowerCase()));
+  for (const username of onlineMembers.value.values()) {
+    if (username) seen.add(username.toLowerCase());
+  }
+  return seen.size;
+});
 /** 1s ticker for the send-cooldown countdown display. */
 const nowTick = ref(Date.now());
 let tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -372,11 +384,11 @@ onBeforeUnmount(() => {
         <span class="chat-title">Live Chat</span>
         <span v-if="chat.isAdmin" class="chat-online clickable" :class="chat.status" @click="showMembers = !showMembers" title="Members — click to moderate">
           <span class="dot" :class="chat.status"></span>
-          {{ chat.onlineNicks.length }} online · {{ statusLabel[chat.status] ?? chat.status }}
+          {{ siteOnlineCount }} online · {{ statusLabel[chat.status] ?? chat.status }}
           <svg v-if="chat.isAdmin" viewBox="0 0 6 8" width="6" height="8" aria-hidden="true"><path d="M0 0l5 4-5 4z" fill="currentColor"/></svg>
         </span>
         <div v-if="chat.isAdmin && showMembers" class="members-pop">
-          <div class="members-title">Online — {{ chat.onlineNicks.length }}</div>
+          <div class="members-title">Online — {{ chat.onlineNicks.length }} in chat · {{ siteOnlineCount }} on site</div>
           <div v-for="n in chat.onlineNicks" :key="'on-' + n" class="member-row">
             <span class="member-name">{{ n }}</span>
             <template v-if="chat.isAdmin && n !== chat.nick">
