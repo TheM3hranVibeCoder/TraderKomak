@@ -7,6 +7,19 @@
   "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
   "headers": [
     {
+      // Content-hashed bundles: cache for a year — every visit after the
+      // first re-downloads ZERO JS/CSS. Each deploy produces new hashes, so
+      // freshness is automatic (this is why vite disallows hashed-asset
+      // inlining). Cuts the majority of repeat-visit transfer + edge hits.
+      "source": "/assets/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
       "source": "/(.*)",
       "headers": [
         {

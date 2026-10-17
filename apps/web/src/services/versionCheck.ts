@@ -50,5 +50,8 @@ export function startVersionCheck(): void {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") void check();
   });
-  setInterval(() => void check(), 5 * 60_000);
+  // Interval backstop only — the focus/visibility handlers cover every
+  // realistic return-to-tab. 30 min (was 5) so a 24/7-visible desktop tab no
+  // longer re-fetches the page ~11,000×/month from the CDN edge.
+  setInterval(() => void check(), 30 * 60_000);
 }
