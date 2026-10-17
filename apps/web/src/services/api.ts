@@ -63,8 +63,16 @@ export async function fetchCandles(
       // metered bandwidth must never absorb Binance traffic.
       return fetchBinanceCandles(instrument, timeframe, count, to);
     }
-    if (provider === "oanda" && oandaProxyConfigured()) {
-      return fetchOandaCandles(instrument, timeframe, count, to);
+    if (provider === "oanda") {
+      if (oandaProxyConfigured()) return fetchOandaCandles(instrument, timeframe, count, to);
+      // OANDA without its proxy config: no server fallback — the market
+      // server's metered bandwidth must never serve OANDA data.
+      throw new Error("OANDA data unavailable — proxy not configured");
+    }
+    if (provider === "dukascopy") {
+      // Dukascopy has no browser-direct source; serving it from the market
+      // server was disabled to save Render bandwidth.
+      throw new Error("Dukascopy data is not served by this deployment");
     }
   }
   return fetchServerCandles(instrument, timeframe, count, to);

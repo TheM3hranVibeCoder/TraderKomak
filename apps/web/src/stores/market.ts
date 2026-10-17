@@ -128,19 +128,20 @@ interface MarketStream {
   seed?(candle: Candle): void;
 }
 
-type StreamKind = "server" | "binance" | "oanda-proxy";
+type StreamKind = "server" | "binance" | "oanda-proxy" | "off";
 
 /** Which live-stream implementation should serve a pair: Binance symbols
  *  ALWAYS stream straight from Binance/mirrors over the visitor's own
  *  internet — never the market server (Render's metered bandwidth must not
  *  absorb Binance traffic; a blocked visitor sees the pair as unavailable
- *  instead). OANDA pairs go through the oanda-proxy worker when configured,
- *  everything else keeps using the market server. */
+ *  instead). OANDA pairs go through the oanda-proxy worker when configured;
+ *  without the config — and every Dukascopy pair (no browser source) — the
+ *  pair is simply unavailable ("off"), never the market server. */
 function desiredStreamKind(instrument: string): StreamKind {
   const provider = providerOf(instrument);
   if (provider === "binance") return "binance";
   if (provider === "oanda" && oandaProxyConfigured()) return "oanda-proxy";
-  return "server";
+  return "off";
 }
 
 export const useMarketStore = defineStore("market", () => {
@@ -190,6 +191,20 @@ export const useMarketStore = defineStore("market", () => {
   );
 
   let lastWsStatus: WsStatus = "offline";
+  /** No-op stream for pairs with no browser-direct source (see
+   *  desiredStreamKind): instantly "offline" with a clear error, zero
+   *  sockets — the market server must never be dialed for these. */
+  function offlineStream(message: string): MarketStream {
+    status.value = "offline";
+    error.value = message;
+    return {
+      connect() {},
+      disconnect() {},
+      subscribe() {},
+      unsubscribe() {},
+      setPaused() {},
+    };
+  }
   function ensureWs(): MarketStream {
     // The direct clients are provider-specific, so the stream instance is
     // recreated whenever the desired kind changes (e.g. XAU_USD → BTCUSDT).
@@ -200,6 +215,12 @@ export const useMarketStore = defineStore("market", () => {
       ws = null;
     }
     wsKind = kind;
+    if (kind === "off") {
+      const message = providerOf(instrument.value) === "oanda"
+        ? "OANDA data unavailable — proxy not configured"
+        : "Dukascopy data is not served by this deployment";
+      return (ws = offlineStream(message));
+    }
     const handlers: WsHandlers = {
       onStatus: (s) => {
         status.value = s;
