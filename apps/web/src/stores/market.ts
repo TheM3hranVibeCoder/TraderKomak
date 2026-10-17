@@ -23,7 +23,6 @@ import { useReplayStore } from "@/stores/replay";
 import { MarketWsClient, type WsHandlers, type WsStatus } from "@/services/wsClient";
 import {
   BinanceDirectStream,
-  binanceDirectBlocked,
 } from "@/services/binanceDirect";
 import { OandaDirectStream, oandaProxyConfigured } from "@/services/oandaDirect";
 
@@ -132,16 +131,14 @@ interface MarketStream {
 type StreamKind = "server" | "binance" | "oanda-proxy";
 
 /** Which live-stream implementation should serve a pair: Binance symbols
- *  stream straight from Binance (or the binance-proxy relay), OANDA pairs
- *  go through the oanda-proxy worker when configured, everything else
- *  keeps using the market server. Binance pairs also drop to the server
- *  stream once a direct fetch proved blocked for this visitor (451/reset)
- *  with no relay configured — the server fetches Binance from the VPS. */
+ *  ALWAYS stream straight from Binance/mirrors over the visitor's own
+ *  internet — never the market server (Render's metered bandwidth must not
+ *  absorb Binance traffic; a blocked visitor sees the pair as unavailable
+ *  instead). OANDA pairs go through the oanda-proxy worker when configured,
+ *  everything else keeps using the market server. */
 function desiredStreamKind(instrument: string): StreamKind {
   const provider = providerOf(instrument);
-  if (provider === "binance") {
-    return binanceDirectBlocked() ? "server" : "binance";
-  }
+  if (provider === "binance") return "binance";
   if (provider === "oanda" && oandaProxyConfigured()) return "oanda-proxy";
   return "server";
 }

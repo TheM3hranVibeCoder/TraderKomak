@@ -56,15 +56,12 @@ export async function fetchCandles(
   const provider = providerOf(instrument);
   if (isTimeframe(timeframe)) {
     if (provider === "binance") {
-      try {
-        return await fetchBinanceCandles(instrument, timeframe, count, to);
-      } catch {
-        // Direct Binance is unreachable for this visitor (geo-block / reset)
-        // and no Cloudflare relay can help — Binance blocks datacenter IPs.
-        // The market server still serves Binance candles from the VPS, so
-        // use it as the last-resort fallback before giving up.
-        return fetchServerCandles(instrument, timeframe, count, to);
-      }
+      // Strict no-Render policy for Binance: the browser always talks to
+      // Binance (or its public mirrors) over the visitor's own internet.
+      // If that is geo-blocked/reset for this visitor, we surface the
+      // failure instead of falling back to the market server — Render's
+      // metered bandwidth must never absorb Binance traffic.
+      return fetchBinanceCandles(instrument, timeframe, count, to);
     }
     if (provider === "oanda" && oandaProxyConfigured()) {
       return fetchOandaCandles(instrument, timeframe, count, to);
