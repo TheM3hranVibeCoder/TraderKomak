@@ -237,15 +237,6 @@ onMounted(() => {
   border: 1px solid var(--glass-border);
   background: var(--glass-bg);
 }
-.news-row.high {
-  border-left: 3px solid #ef4444;
-}
-.news-row.med {
-  border-left: 3px solid #fb923c;
-}
-.news-row.hol {
-  border-left: 3px solid var(--text-muted);
-}
 .row-time {
   display: flex;
   flex-direction: column;
@@ -315,10 +306,10 @@ onMounted(() => {
   color: #fff;
 }
 .impact-badge.high {
-  background: linear-gradient(135deg, #ef4444, #dc2626);
+  background: #ef4444;
 }
 .impact-badge.med {
-  background: linear-gradient(135deg, #fb923c, #f97316);
+  background: #fb923c;
 }
 .impact-badge.hol {
   background: var(--text-muted);

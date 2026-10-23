@@ -40,8 +40,8 @@ const auth = useAuthStore();
   align-items: center;
   justify-content: center;
   background:
-    radial-gradient(1200px 700px at 12% -10%, #dbe9ff 0%, transparent 55%),
-    radial-gradient(1000px 600px at 88% 108%, #e7dcff 0%, transparent 55%),
+    radial-gradient(1200px 700px at 12% -10%, rgba(96, 148, 255, 0.1) 0%, transparent 55%),
+    radial-gradient(1000px 600px at 88% 108%, rgba(150, 110, 255, 0.08) 0%, transparent 55%),
     linear-gradient(160deg, #f2f6ff 0%, #e9efff 45%, #f4effe 100%);
   color: #1f2430;
 }
@@ -49,7 +49,7 @@ const auth = useAuthStore();
   position: absolute;
   border-radius: 50%;
   filter: blur(60px);
-  opacity: 0.55;
+  opacity: 0.35;
   pointer-events: none;
 }
 .glow-a {
@@ -83,7 +83,7 @@ const auth = useAuthStore();
   display: block;
   margin: 0 auto 20px;
   border-radius: 20px;
-  filter: drop-shadow(0 14px 34px rgba(59, 130, 246, 0.35));
+  filter: drop-shadow(0 10px 24px rgba(30, 60, 130, 0.18));
 }
 .landing-title {
   margin: 0 0 10px;

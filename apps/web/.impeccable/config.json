@@ -1,0 +1,35 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "src/components/ChartPane.vue"
+        ],
+        "createdAt": "2026-10-23T16:32:23.398Z",
+        "reason": "Not a card: selected stroke width of a chart drawing tool (vertical line)"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "src/components/ChatPanel.vue"
+        ],
+        "createdAt": "2026-10-23T16:32:26.635Z",
+        "reason": "Chat quote/reply indicator, softened to 45% alpha via color-mix; flagged line is the fallback"
+      },
+      {
+        "rule": "gradient-text",
+        "value": "*",
+        "files": [
+          "src/components/TopToolbar.vue"
+        ],
+        "createdAt": "2026-10-23T16:56:43.098Z",
+        "reason": "Brand logotype: user-approved text-to-accent gradient on the TraderKomak wordmark (deliberate brand choice, not decorative slop)"
+      }
+    ]
+  }
+}

@@ -1282,6 +1282,7 @@ onBeforeUnmount(() => {
   margin: 3px 0 5px;
   padding: 5px 9px;
   border-left: 2px solid var(--accent);
+  border-left-color: color-mix(in srgb, var(--accent) 45%, transparent);
   border-radius: 6px;
   background: var(--glass-bg-hover);
   max-width: 100%;
@@ -1308,6 +1309,7 @@ onBeforeUnmount(() => {
   margin: 0 10px 6px;
   padding: 6px 10px;
   border-left: 2px solid var(--accent);
+  border-left-color: color-mix(in srgb, var(--accent) 45%, transparent);
   border-radius: 7px;
   background: var(--glass-bg-hover);
 }

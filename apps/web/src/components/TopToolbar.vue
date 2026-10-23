@@ -361,7 +361,7 @@ function toggleReplay(): void {
   border-radius: 9px;
   letter-spacing: 0.04em;
   box-shadow:
-    0 4px 16px rgba(59, 130, 246, 0.4),
+    0 2px 8px rgba(2, 6, 18, 0.3),
     0 1px 0 rgba(255, 255, 255, 0.35) inset;
 }
 .brand-name {

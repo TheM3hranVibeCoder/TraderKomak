@@ -211,11 +211,3 @@ body {
 ::view-transition-new(root) {
   z-index: 2;
 }
-
-/* Utility for gradient text */
-.gradient-text {
-  background: var(--accent-gradient);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}

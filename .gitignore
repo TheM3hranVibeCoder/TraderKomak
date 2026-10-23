@@ -15,6 +15,10 @@ coverage/
 .agents/
 .claude/
 
+# Impeccable ephemeral output (keep shared config with scoped ignores)
+**/.impeccable/*
+!**/.impeccable/config.json
+
 *.log
 web-tmp/
 btc_site.json
