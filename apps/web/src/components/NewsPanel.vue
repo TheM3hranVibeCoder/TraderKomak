@@ -237,6 +237,15 @@ onMounted(() => {
   border: 1px solid var(--glass-border);
   background: var(--glass-bg);
 }
+.news-row.high {
+  border-left: 3px solid #ef4444;
+}
+.news-row.med {
+  border-left: 3px solid #fb923c;
+}
+.news-row.hol {
+  border-left: 3px solid var(--text-muted);
+}
 .row-time {
   display: flex;
   flex-direction: column;
