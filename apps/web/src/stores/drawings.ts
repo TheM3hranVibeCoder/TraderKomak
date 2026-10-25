@@ -92,6 +92,7 @@ const STORAGE_KEY = "tk-drawings";
 const STORAGE_KEY_LAST_RECT_STYLE = "tk-drawings-last-rect-style";
 const STORAGE_KEY_LAST_LINE_STYLE = "tk-drawings-last-line-style";
 const STORAGE_KEY_LAST_POLY_STYLE = "tk-drawings-last-poly-style";
+const STORAGE_KEY_LAST_SINGLE_STYLE = "tk-drawings-last-single-style";
 const STORAGE_KEY_LINES = "tk-drawings-lines";
 const STORAGE_KEY_POLYS = "tk-drawings-polys";
 const STORAGE_KEY_POSITIONS = "tk-drawings-positions";
@@ -218,6 +219,29 @@ function loadLastPolyStyle(): PolyStyle {
     }
   } catch {}
   return { ...base, arrow: false };
+}
+
+/** Per-tool stroke style remembered from the most recently edited one-click
+ *  line — each of hline / hray / vline keeps its own. */
+export type LastSingleStyle = Record<SingleKind, LineStyle>;
+
+function loadLastSingleStyle(): LastSingleStyle {
+  const fallback = (): LineStyle => ({ color: PRESET_COLORS[0]!, width: DEFAULT_LINE_WIDTH, dash: "solid" });
+  const out: LastSingleStyle = { hline: fallback(), hray: fallback(), vline: fallback() };
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_LAST_SINGLE_STYLE);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<Record<SingleKind, Partial<LineStyle>>>;
+      for (const kind of ["hline", "hray", "vline"] as SingleKind[]) {
+        const p = parsed[kind];
+        if (!p) continue;
+        if (typeof p.color === "string") out[kind]!.color = p.color;
+        if (typeof p.width === "number") out[kind]!.width = Math.min(6, Math.max(1, p.width));
+        if (p.dash === "dashed" || p.dash === "dotted") out[kind]!.dash = p.dash;
+      }
+    }
+  } catch {}
+  return out;
 }
 
 /**
@@ -358,6 +382,8 @@ export const useDrawingsStore = defineStore("drawings", () => {
   const lastLineStyle = ref<LineStyle>(loadLastLineStyle());
   /** Style of the most recently edited polyline — new polylines reuse it. */
   const lastPolyStyle = ref<PolyStyle>(loadLastPolyStyle());
+  /** Per-tool style of the most recently edited one-click line. */
+  const lastSingleStyle = ref<LastSingleStyle>(loadLastSingleStyle());
   const activeTool = ref<"cursor" | "position" | "rectangle" | "trendline" | "polyline" | "hline" | "hray" | "vline" | "measure">("cursor");
   /** Magnet mode: snap drawing points to the nearest candle's high/low.
    *  Latched by the toolbar button; Ctrl temporarily forces it either way. */
@@ -424,6 +450,12 @@ export const useDrawingsStore = defineStore("drawings", () => {
   function persistLastPolyStyle() {
     try {
       localStorage.setItem(STORAGE_KEY_LAST_POLY_STYLE, JSON.stringify(lastPolyStyle.value));
+    } catch {}
+  }
+
+  function persistLastSingleStyle() {
+    try {
+      localStorage.setItem(STORAGE_KEY_LAST_SINGLE_STYLE, JSON.stringify(lastSingleStyle.value));
     } catch {}
   }
 
@@ -548,12 +580,15 @@ export const useDrawingsStore = defineStore("drawings", () => {
   }
 
   function addSingle(kind: SingleKind, symbol: string, item: Record<string, unknown>): SingleDrawing {
+    // Reuse the style of the last edited line of the same tool (defaults
+    // until the user styles one).
+    const st = lastSingleStyle.value[kind];
     const full = {
       ...item,
       id: `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      color: PRESET_COLORS[Math.floor(Math.random() * 4)] ?? "#2962ff",
-      width: DEFAULT_LINE_WIDTH,
-      dash: "solid",
+      color: st.color,
+      width: st.width,
+      dash: st.dash,
     } as unknown as SingleDrawing;
     if (!singles.value[kind][symbol]) singles.value[kind][symbol] = [];
     singles.value[kind][symbol]!.push(full);
@@ -579,6 +614,13 @@ export const useDrawingsStore = defineStore("drawings", () => {
       if (k === "id") continue;
       (item as unknown as Record<string, unknown>)[k] = v;
     }
+    // Style changes are remembered per tool (geometry patches — price/time —
+    // are ignored here); the next line of this tool starts with them.
+    const st = lastSingleStyle.value[kind];
+    if (typeof patch.color === "string") st.color = patch.color;
+    if (patch.dash === "solid" || patch.dash === "dashed" || patch.dash === "dotted") st.dash = patch.dash;
+    if (typeof patch.width === "number") st.width = Math.min(6, Math.max(1, patch.width));
+    persistLastSingleStyle();
     persistSingles();
   }
 
@@ -775,6 +817,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
     lastRectStyle,
     lastLineStyle,
     lastPolyStyle,
+    lastSingleStyle,
     activeTool,
     magnet,
     toggleMagnet,
