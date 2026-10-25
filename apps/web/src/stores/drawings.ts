@@ -89,6 +89,7 @@ export interface DrawingVLine {
 export type SingleDrawing = DrawingHLine | DrawingHRay | DrawingVLine;
 
 const STORAGE_KEY = "tk-drawings";
+const STORAGE_KEY_LAST_RECT_STYLE = "tk-drawings-last-rect-style";
 const STORAGE_KEY_LINES = "tk-drawings-lines";
 const STORAGE_KEY_POLYS = "tk-drawings-polys";
 const STORAGE_KEY_POSITIONS = "tk-drawings-positions";
@@ -145,6 +146,30 @@ const PRESET_COLORS = [
   "#64748b", // slate gray
   "#000000", // black
 ];
+
+/** Visual style remembered from the most recently edited rectangle. */
+export interface RectStyle {
+  color: string;
+  opacity: number;
+  /** false → border-only rectangle (no background fill) */
+  filled: boolean;
+}
+
+function loadLastRectStyle(): RectStyle {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_LAST_RECT_STYLE);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<RectStyle>;
+      return {
+        color: typeof parsed.color === "string" ? parsed.color : PRESET_COLORS[0]!,
+        opacity:
+          typeof parsed.opacity === "number" ? Math.min(1, Math.max(0, parsed.opacity)) : DEFAULT_OPACITY,
+        filled: typeof parsed.filled === "boolean" ? parsed.filled : true,
+      };
+    }
+  } catch {}
+  return { color: PRESET_COLORS[0]!, opacity: DEFAULT_OPACITY, filled: true };
+}
 
 /**
  * Drawings are keyed by SYMBOL only (not symbol|timeframe): a rectangle is
@@ -278,6 +303,8 @@ export const useDrawingsStore = defineStore("drawings", () => {
   const polys = ref<Record<string, DrawingPoly[]>>(loadPolys());
   const positions = ref<Record<string, DrawingPosition[]>>(loadPositions());
   const singles = ref<Record<SingleKind, Record<string, SingleDrawing[]>>>(loadSingles());
+  /** Style of the most recently edited rectangle — new rectangles reuse it. */
+  const lastRectStyle = ref<RectStyle>(loadLastRectStyle());
   const activeTool = ref<"cursor" | "position" | "rectangle" | "trendline" | "polyline" | "hline" | "hray" | "vline" | "measure">("cursor");
   /** Magnet mode: snap drawing points to the nearest candle's high/low.
    *  Latched by the toolbar button; Ctrl temporarily forces it either way. */
@@ -329,6 +356,12 @@ export const useDrawingsStore = defineStore("drawings", () => {
     } catch {}
   }
 
+  function persistLastRectStyle() {
+    try {
+      localStorage.setItem(STORAGE_KEY_LAST_RECT_STYLE, JSON.stringify(lastRectStyle.value));
+    } catch {}
+  }
+
   function getFor(symbol: string): DrawingRect[] {
     return drawings.value[symbol] ?? [];
   }
@@ -349,9 +382,11 @@ export const useDrawingsStore = defineStore("drawings", () => {
     const full: DrawingRect = {
       ...rect,
       id: `dr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      color: PRESET_COLORS[Math.floor(Math.random() * 4)] ?? "#2962ff",
-      opacity: DEFAULT_OPACITY,
-      filled: true,
+      // Reuse the style of the last edited rectangle (falls back to the
+      // default blue until the user styles one).
+      color: lastRectStyle.value.color,
+      opacity: lastRectStyle.value.opacity,
+      filled: lastRectStyle.value.filled,
     };
     if (!drawings.value[symbol]) drawings.value[symbol] = [];
     drawings.value[symbol]!.push(full);
@@ -396,7 +431,8 @@ export const useDrawingsStore = defineStore("drawings", () => {
     }
   }
 
-  /** Update visual style: opacity (0–1) and/or filled (border-only) flag. */
+  /** Update visual style: opacity (0–1) and/or filled (border-only) flag.
+   *  Every change is also remembered as the style new rectangles start with. */
   function updateStyle(
     symbol: string,
     id: string,
@@ -404,9 +440,19 @@ export const useDrawingsStore = defineStore("drawings", () => {
   ) {
     const item = drawings.value[symbol]?.find((d) => d.id === id);
     if (!item) return;
-    if (patch.color !== undefined) item.color = patch.color;
-    if (patch.opacity !== undefined) item.opacity = Math.min(1, Math.max(0, patch.opacity));
-    if (patch.filled !== undefined) item.filled = patch.filled;
+    if (patch.color !== undefined) {
+      item.color = patch.color;
+      lastRectStyle.value.color = patch.color;
+    }
+    if (patch.opacity !== undefined) {
+      item.opacity = Math.min(1, Math.max(0, patch.opacity));
+      lastRectStyle.value.opacity = item.opacity;
+    }
+    if (patch.filled !== undefined) {
+      item.filled = patch.filled;
+      lastRectStyle.value.filled = patch.filled;
+    }
+    persistLastRectStyle();
     persist();
   }
 
@@ -634,6 +680,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
     polys,
     positions,
     singles,
+    lastRectStyle,
     activeTool,
     magnet,
     toggleMagnet,
