@@ -2352,19 +2352,21 @@ function recalcRectsNow(): void {
     });
   }
 
-  // Drawing preview
+  // Drawing preview — matches the style new rectangles get on finalize
+  // (the last-edited rectangle style), not a hardcoded look.
   if (drawingState.value && adapter && drawingsStore.activeTool === "rectangle") {
     const x1 = adapter.timeToX(drawingState.value.time1);
     const y1 = adapter.getPriceY(drawingState.value.price1);
     const x2 = adapter.timeToX(drawingState.value.time2);
     const y2 = adapter.getPriceY(drawingState.value.price2);
     if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
+      const st = drawingsStore.lastRectStyle;
       out.push({
         id: "__preview",
         ...project(x1, y1, x2, y2),
-        color: "#2962ff",
-        opacity: 0.15,
-        filled: true,
+        color: st.color,
+        opacity: st.opacity,
+        filled: st.filled,
         selected: false,
       });
     }
