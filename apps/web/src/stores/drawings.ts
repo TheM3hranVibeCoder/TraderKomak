@@ -90,6 +90,8 @@ export type SingleDrawing = DrawingHLine | DrawingHRay | DrawingVLine;
 
 const STORAGE_KEY = "tk-drawings";
 const STORAGE_KEY_LAST_RECT_STYLE = "tk-drawings-last-rect-style";
+const STORAGE_KEY_LAST_LINE_STYLE = "tk-drawings-last-line-style";
+const STORAGE_KEY_LAST_POLY_STYLE = "tk-drawings-last-poly-style";
 const STORAGE_KEY_LINES = "tk-drawings-lines";
 const STORAGE_KEY_POLYS = "tk-drawings-polys";
 const STORAGE_KEY_POSITIONS = "tk-drawings-positions";
@@ -169,6 +171,53 @@ function loadLastRectStyle(): RectStyle {
     }
   } catch {}
   return { color: PRESET_COLORS[0]!, opacity: DEFAULT_OPACITY, filled: true };
+}
+
+/** Stroke style remembered from the most recently edited trendline. */
+export interface LineStyle {
+  color: string;
+  width: number;
+  dash: DashStyle;
+}
+
+/** Stroke style remembered from the most recently edited polyline. */
+export interface PolyStyle extends LineStyle {
+  /** arrowhead on the last corner */
+  arrow: boolean;
+}
+
+function loadLastLineStyle(): LineStyle {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_LAST_LINE_STYLE);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<LineStyle>;
+      return {
+        color: typeof parsed.color === "string" ? parsed.color : PRESET_COLORS[0]!,
+        width:
+          typeof parsed.width === "number" ? Math.min(6, Math.max(1, parsed.width)) : DEFAULT_LINE_WIDTH,
+        dash: parsed.dash === "dashed" || parsed.dash === "dotted" ? parsed.dash : "solid",
+      };
+    }
+  } catch {}
+  return { color: PRESET_COLORS[0]!, width: DEFAULT_LINE_WIDTH, dash: "solid" };
+}
+
+function loadLastPolyStyle(): PolyStyle {
+  const base = loadLastLineStyle();
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_LAST_POLY_STYLE);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<PolyStyle>;
+      return {
+        ...base,
+        color: typeof parsed.color === "string" ? parsed.color : base.color,
+        width: typeof parsed.width === "number" ? Math.min(6, Math.max(1, parsed.width)) : base.width,
+        dash: parsed.dash === "dashed" || parsed.dash === "dotted" ? parsed.dash : base.dash,
+        arrow: typeof parsed.arrow === "boolean" ? parsed.arrow : false,
+      };
+    }
+  } catch {}
+  return { ...base, arrow: false };
 }
 
 /**
@@ -305,6 +354,10 @@ export const useDrawingsStore = defineStore("drawings", () => {
   const singles = ref<Record<SingleKind, Record<string, SingleDrawing[]>>>(loadSingles());
   /** Style of the most recently edited rectangle — new rectangles reuse it. */
   const lastRectStyle = ref<RectStyle>(loadLastRectStyle());
+  /** Style of the most recently edited trendline — new trendlines reuse it. */
+  const lastLineStyle = ref<LineStyle>(loadLastLineStyle());
+  /** Style of the most recently edited polyline — new polylines reuse it. */
+  const lastPolyStyle = ref<PolyStyle>(loadLastPolyStyle());
   const activeTool = ref<"cursor" | "position" | "rectangle" | "trendline" | "polyline" | "hline" | "hray" | "vline" | "measure">("cursor");
   /** Magnet mode: snap drawing points to the nearest candle's high/low.
    *  Latched by the toolbar button; Ctrl temporarily forces it either way. */
@@ -359,6 +412,18 @@ export const useDrawingsStore = defineStore("drawings", () => {
   function persistLastRectStyle() {
     try {
       localStorage.setItem(STORAGE_KEY_LAST_RECT_STYLE, JSON.stringify(lastRectStyle.value));
+    } catch {}
+  }
+
+  function persistLastLineStyle() {
+    try {
+      localStorage.setItem(STORAGE_KEY_LAST_LINE_STYLE, JSON.stringify(lastLineStyle.value));
+    } catch {}
+  }
+
+  function persistLastPolyStyle() {
+    try {
+      localStorage.setItem(STORAGE_KEY_LAST_POLY_STYLE, JSON.stringify(lastPolyStyle.value));
     } catch {}
   }
 
@@ -576,9 +641,11 @@ export const useDrawingsStore = defineStore("drawings", () => {
     const full: DrawingTrend = {
       ...trend,
       id: `tl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      color: PRESET_COLORS[Math.floor(Math.random() * 4)] ?? "#2962ff",
-      width: DEFAULT_LINE_WIDTH,
-      dash: "solid",
+      // Reuse the style of the last edited trendline (defaults until the
+      // user styles one).
+      color: lastLineStyle.value.color,
+      width: lastLineStyle.value.width,
+      dash: lastLineStyle.value.dash,
     };
     if (!lines.value[symbol]) lines.value[symbol] = [];
     lines.value[symbol]!.push(full);
@@ -617,9 +684,19 @@ export const useDrawingsStore = defineStore("drawings", () => {
   ) {
     const item = lines.value[symbol]?.find((l) => l.id === id);
     if (!item) return;
-    if (patch.color !== undefined) item.color = patch.color;
-    if (patch.dash !== undefined) item.dash = patch.dash;
-    if (patch.width !== undefined) item.width = Math.min(6, Math.max(1, patch.width));
+    if (patch.color !== undefined) {
+      item.color = patch.color;
+      lastLineStyle.value.color = patch.color;
+    }
+    if (patch.dash !== undefined) {
+      item.dash = patch.dash;
+      lastLineStyle.value.dash = patch.dash;
+    }
+    if (patch.width !== undefined) {
+      item.width = Math.min(6, Math.max(1, patch.width));
+      lastLineStyle.value.width = item.width;
+    }
+    persistLastLineStyle();
     persistLines();
   }
 
@@ -632,10 +709,12 @@ export const useDrawingsStore = defineStore("drawings", () => {
     const full: DrawingPoly = {
       ...poly,
       id: `pl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      color: PRESET_COLORS[Math.floor(Math.random() * 4)] ?? "#2962ff",
-      width: DEFAULT_LINE_WIDTH,
-      dash: "solid",
-      arrow: false,
+      // Reuse the style of the last edited polyline (defaults until the
+      // user styles one).
+      color: lastPolyStyle.value.color,
+      width: lastPolyStyle.value.width,
+      dash: lastPolyStyle.value.dash,
+      arrow: lastPolyStyle.value.arrow,
     };
     if (!polys.value[symbol]) polys.value[symbol] = [];
     polys.value[symbol]!.push(full);
@@ -667,10 +746,23 @@ export const useDrawingsStore = defineStore("drawings", () => {
   ) {
     const item = polys.value[symbol]?.find((p) => p.id === id);
     if (!item) return;
-    if (patch.color !== undefined) item.color = patch.color;
-    if (patch.dash !== undefined) item.dash = patch.dash;
-    if (patch.width !== undefined) item.width = Math.min(6, Math.max(1, patch.width));
-    if (patch.arrow !== undefined) item.arrow = patch.arrow;
+    if (patch.color !== undefined) {
+      item.color = patch.color;
+      lastPolyStyle.value.color = patch.color;
+    }
+    if (patch.dash !== undefined) {
+      item.dash = patch.dash;
+      lastPolyStyle.value.dash = patch.dash;
+    }
+    if (patch.width !== undefined) {
+      item.width = Math.min(6, Math.max(1, patch.width));
+      lastPolyStyle.value.width = item.width;
+    }
+    if (patch.arrow !== undefined) {
+      item.arrow = patch.arrow;
+      lastPolyStyle.value.arrow = patch.arrow;
+    }
+    persistLastPolyStyle();
     persistPolys();
   }
 
@@ -681,6 +773,8 @@ export const useDrawingsStore = defineStore("drawings", () => {
     positions,
     singles,
     lastRectStyle,
+    lastLineStyle,
+    lastPolyStyle,
     activeTool,
     magnet,
     toggleMagnet,

@@ -2405,15 +2405,17 @@ function recalcRectsNow(): void {
     const x2 = adapter.timeToX(drawingState.value.time2);
     const y2 = adapter.getPriceY(drawingState.value.price2);
     if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
+      // Match the style the finished trendline will get (last-edited style).
+      const st = drawingsStore.lastLineStyle;
       trendsOut.push({
         id: "__preview",
         x1,
         y1,
         x2,
         y2,
-        color: "#2962ff",
-        width: 2,
-        dash: "solid",
+        color: st.color,
+        width: st.width,
+        dash: st.dash,
         selected: false,
       });
     }
@@ -2549,7 +2551,9 @@ const buildPolyPixel = (
     const cur = polyState.value.cursor ? projectPt(polyState.value.cursor) : null;
     if (ok && cur) pts.push({ ...cur, src: pts.length });
     if (ok && cur && pts.length >= 2) {
-      polysOut.push(buildPolyPixel("__preview", pts, "#2962ff", 2, "solid", false, false));
+      // Match the style the finished polyline will get (last-edited style).
+      const st = drawingsStore.lastPolyStyle;
+      polysOut.push(buildPolyPixel("__preview", pts, st.color, st.width, st.dash, st.arrow, false));
     }
   }
   setPixels(polyPixels, polysOut);
