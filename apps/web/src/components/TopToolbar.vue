@@ -13,11 +13,13 @@ import type { Timeframe } from "@traderkomak/shared";
 const props = defineProps<{
   instrument: string;
   timeframe: Timeframe;
+  fullscreen: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "update:instrument", value: string): void;
   (e: "update:timeframe", value: Timeframe): void;
+  (e: "toggle-fullscreen"): void;
 }>();
 
 const replay = useReplayStore();
@@ -262,6 +264,24 @@ function toggleReplay(): void {
     </Teleport>
 
     <div class="right">
+      <!-- Fullscreen chart toggle (TradingView-style): hides the header and
+           the right rail so only the chart + drawing tools remain. -->
+      <button
+        class="fs-btn"
+        type="button"
+        :class="{ active: props.fullscreen }"
+        :title="props.fullscreen ? 'Exit fullscreen (ESC)' : 'Fullscreen chart'"
+        :aria-label="props.fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'"
+        :aria-pressed="props.fullscreen"
+        @click="emit('toggle-fullscreen')"
+      >
+        <svg v-if="!props.fullscreen" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" />
+        </svg>
+        <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" />
+        </svg>
+      </button>
       <!-- Telegram channel link -->
       <a
         class="telegram-btn"
@@ -504,6 +524,34 @@ function toggleReplay(): void {
   color: #2aabee;
   background: var(--btn-bg);
   box-shadow: 0 4px 14px rgba(42, 171, 238, 0.25);
+}
+/* Fullscreen toggle — same shell as the Telegram/theme buttons */
+.fs-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 200ms;
+  flex-shrink: 0;
+  padding: 0;
+}
+.fs-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--btn-bg);
+  box-shadow: var(--glow-accent);
+}
+.fs-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-gradient);
+  color: #fff;
+  box-shadow: 0 4px 16px rgba(59, 130, 246, 0.4);
 }
 .theme-btn {
   display: inline-flex;
@@ -754,6 +802,7 @@ function toggleReplay(): void {
   }
   .profile-name { max-width: 72px; }
   .telegram-btn,
+  .fs-btn,
   .theme-btn {
     width: 40px;
     height: 40px;

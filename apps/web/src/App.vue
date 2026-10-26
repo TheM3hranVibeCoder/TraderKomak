@@ -41,7 +41,9 @@ const auth = useAuthStore();
 const isPhone = ref(false);
 const RAIL_KEY = "tk-rail-open";
 const TOOLS_KEY = "tk-tools-open";
-const toolsOpen = ref(localStorage.getItem(TOOLS_KEY) === "1");
+// Default OPEN on desktop (the toolbar has always been visible there);
+// phones still start collapsed via onResize() below.
+const toolsOpen = ref(localStorage.getItem(TOOLS_KEY) !== "0");
 const railOpen = ref(
   localStorage.getItem(RAIL_KEY) === "1" ||
   chat.open || watchlist.isOpen || news.open
@@ -109,6 +111,69 @@ function toggleRail(): void {
     news.setOpen(false);
   }
 }
+
+// ── Fullscreen chart mode (TradingView-style) ────────────────────────────
+// Hides the header and the whole right side (rail + watchlist/chat/news)
+// so the chart fills the viewport; only the drawing toolbar (and its
+// collapse tab) stay. Uses the native Fullscreen API where supported
+// (desktop + Android — ESC then works out of the box) and falls back to a
+// CSS-only mode elsewhere (iOS Safari), where our own ESC listener and the
+// floating exit button take over.
+const chartFullscreen = ref(false);
+const showFsHint = ref(false);
+/** The "press ESC" hint appears on the FIRST fullscreen entry per page load. */
+let fsHintShown = false;
+let fsHintTimer: ReturnType<typeof setTimeout> | undefined;
+
+function enterChartFullscreen(): void {
+  chartFullscreen.value = true;
+  // The drawing toolbar is the one thing that stays — make sure it is open
+  // (the tab can still collapse it from inside fullscreen).
+  toolsOpen.value = true;
+  // The right rail disappears, so its panels must go with it — nothing may
+  // hang orphaned over the chart.
+  railOpen.value = false;
+  watchlist.isOpen = false;
+  chat.setOpen(false);
+  news.setOpen(false);
+  if (document.fullscreenEnabled) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  }
+  if (!fsHintShown) {
+    fsHintShown = true;
+    showFsHint.value = true;
+    if (fsHintTimer) clearTimeout(fsHintTimer);
+    fsHintTimer = setTimeout(() => (showFsHint.value = false), 4500);
+  }
+}
+
+function exitChartFullscreen(): void {
+  chartFullscreen.value = false;
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+}
+
+function toggleChartFullscreen(): void {
+  if (chartFullscreen.value) exitChartFullscreen();
+  else enterChartFullscreen();
+}
+
+// Native fullscreen can also end without us (ESC, Android back gesture) —
+// stay in sync so the layout never stays stuck hidden.
+function onFsChange(): void {
+  if (!document.fullscreenElement && chartFullscreen.value) chartFullscreen.value = false;
+}
+function onFsKeydown(e: KeyboardEvent): void {
+  if (e.key === "Escape" && chartFullscreen.value) exitChartFullscreen();
+}
+onMounted(() => {
+  document.addEventListener("fullscreenchange", onFsChange);
+  window.addEventListener("keydown", onFsKeydown);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener("fullscreenchange", onFsChange);
+  window.removeEventListener("keydown", onFsKeydown);
+  if (fsHintTimer) clearTimeout(fsHintTimer);
+});
 onBeforeUnmount(() => {
   window.removeEventListener("resize", onResize);
   if (downTimer) clearInterval(downTimer);
@@ -270,15 +335,20 @@ function onTimeframeChange(next: Timeframe): void {
     </div>
     <template v-if="!gate">
     <TopToolbar
+      v-if="!chartFullscreen"
       :instrument="market.instrument"
       :timeframe="market.timeframe"
+      :fullscreen="chartFullscreen"
       @update:instrument="onInstrumentChange"
       @update:timeframe="onTimeframeChange"
+      @toggle-fullscreen="toggleChartFullscreen"
     />
     <main class="main" :class="{ 'tools-open': toolsOpen, 'rail-open': railOpen }">
+      <!-- Drawing-toolbar collapse tab: rides the toolbar's lower edge
+           (20% up from the bottom) in every mode — desktop, phone and
+           fullscreen chart. Click to hide the tools, click again to show. -->
       <button
-        v-if="isPhone"
-        class="edge-handle left"
+        class="tools-tab"
         type="button"
         :aria-label="toolsOpen ? 'Hide drawing tools' : 'Show drawing tools'"
         :title="toolsOpen ? 'Hide drawing tools' : 'Show drawing tools'"
@@ -289,7 +359,7 @@ function onTimeframeChange(next: Timeframe): void {
         </svg>
       </button>
       <button
-        v-if="isPhone"
+        v-if="isPhone && !chartFullscreen"
         class="edge-handle right"
         type="button"
         :aria-label="railOpen ? 'Hide panels' : 'Show watchlist / chat / news'"
@@ -304,8 +374,9 @@ function onTimeframeChange(next: Timeframe): void {
       <WatchlistPanel />
       <ChatPanel />
       <NewsPanel />
-      <!-- Right rail: watchlist (top half) + live chat (bottom half) -->
-      <nav class="right-rail" aria-label="Panels">
+      <!-- Right rail: watchlist (top half) + live chat (bottom half) —
+           hidden entirely in fullscreen chart mode -->
+      <nav v-if="!chartFullscreen" class="right-rail" aria-label="Panels">
         <button
           class="rail-half"
           :class="{ active: watchlist.isOpen }"
@@ -346,6 +417,27 @@ function onTimeframeChange(next: Timeframe): void {
         </button>
       </nav>
     </main>
+    <!-- Fullscreen chart affordances: a small floating exit button (the
+         touch-friendly way out on phones) + the one-time ESC hint toast at
+         the top middle of the chart. -->
+    <Transition name="fs-hint">
+      <div v-if="showFsHint" class="fs-hint" role="status">
+        <span>Press <kbd>ESC</kbd> to exit fullscreen</span>
+        <span class="fs-hint-fa" dir="rtl">برای خروج از حالت تمام‌صفحه ESC را بزنید</span>
+      </div>
+    </Transition>
+    <button
+      v-if="chartFullscreen"
+      class="fs-exit"
+      type="button"
+      title="Exit fullscreen (ESC)"
+      aria-label="Exit fullscreen"
+      @click="exitChartFullscreen"
+    >
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" />
+      </svg>
+    </button>
     </template>
     <footer class="sr-only">TraderKomak — traderkomak.ir</footer>
   </div>
@@ -367,6 +459,44 @@ function onTimeframeChange(next: Timeframe): void {
   50% { opacity: 1; transform: scale(1); }
 }
 .edge-handle { display: none; }
+/* Drawing-toolbar collapse now works on EVERY screen size (the tools-tab
+   below toggles it) — same slide animation as the phone rail. */
+.main :deep(.drawing-toolbar) {
+  transition: width 280ms cubic-bezier(0.32, 0.72, 0, 1), min-width 280ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.main:not(.tools-open) :deep(.drawing-toolbar) {
+  width: 0;
+  min-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  border-right-color: transparent;
+  overflow: hidden;
+}
+/* Open/close tab riding the toolbar's lower edge — sits 20% up from the
+   bottom of the chart area. Toolbar open → arrow points left (collapse);
+   collapsed → tab hugs the screen edge, arrow points right (expand). */
+.tools-tab {
+  position: absolute;
+  bottom: 20%;
+  left: 42px;
+  z-index: 70;
+  width: 22px;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 10px 10px 0;
+  background: var(--bg-panel-solid);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  transition: left 280ms cubic-bezier(0.32, 0.72, 0, 1), color 150ms;
+}
+.main:not(.tools-open) .tools-tab { left: 0; }
+.tools-tab:hover { color: var(--text); }
 @media (max-width: 640px) {
   .edge-handle {
     display: flex;
@@ -385,23 +515,15 @@ function onTimeframeChange(next: Timeframe): void {
     padding: 0;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
   }
-  .edge-handle.left { left: 0; border-radius: 0 10px 10px 0; border-left: none; }
   .edge-handle.right { right: 0; border-radius: 10px 0 0 10px; border-right: none; }
   .edge-handle:active { color: var(--text); }
 
-  /* Collapse columns: drawing tools slide away to the left, the
-     watchlist/chat/news rail to the right — chart gets the full width. */
-  :deep(.drawing-toolbar) {
-    transition: width 280ms cubic-bezier(0.32, 0.72, 0, 1), min-width 280ms cubic-bezier(0.32, 0.72, 0, 1);
-  }
-  .main:not(.tools-open) :deep(.drawing-toolbar) {
-    width: 0;
-    min-width: 0;
-    padding-left: 0;
-    padding-right: 0;
-    border-right-color: transparent;
-    overflow: hidden;
-  }
+  .tools-tab { left: 36px; }
+  .main:not(.tools-open) .tools-tab { left: 0; }
+
+  /* Collapse columns: the watchlist/chat/news rail slides away to the
+     right — chart gets the full width. (The drawing toolbar collapses on
+     every screen size via the rules above.) */
   .right-rail {
     transition: width 280ms cubic-bezier(0.32, 0.72, 0, 1), min-width 280ms cubic-bezier(0.32, 0.72, 0, 1);
     overflow: hidden;
@@ -411,6 +533,75 @@ function onTimeframeChange(next: Timeframe): void {
     min-width: 0;
     border-left-color: transparent;
   }
+}
+/* ── Fullscreen chart mode ─────────────────────────────────────────────── */
+.fs-exit {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 340;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-panel-solid);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  transition: color 150ms, border-color 150ms;
+}
+.fs-exit:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+/* One-time hint toast, top middle of the chart */
+.fs-hint {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 350;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-panel-solid);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  text-align: center;
+  pointer-events: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.fs-hint kbd {
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--btn-hover);
+  font-family: inherit;
+  font-size: 11px;
+}
+.fs-hint-fa {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.fs-hint-enter-active,
+.fs-hint-leave-active {
+  transition: opacity 250ms, transform 250ms;
+}
+.fs-hint-enter-from,
+.fs-hint-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(-8px);
 }
 /* Screen-reader-only: present for landmarks/SEO, invisible on screen */
 .sr-only {
