@@ -769,19 +769,18 @@ function toggleReplay(): void {
   .profile-name { max-width: 90px; }
 
   /* Phone header: two tidy lines, everything visible —
-     line 1: profile · timeframe · Demo · Replay · Indicators · Fullscreen
-     line 2 (hugging the RIGHT edge): Telegram · theme.
-     .left/.right become transparent wrappers (display: contents) so every
-     button lays out in one wrapping flow; DOM order already puts Fullscreen
-     right after the tools and Telegram/theme after it, so once line 1 is
-     full the last two wrap onto line 2 and margin-left:auto pins them
-     right. Far more compact than the old stacked icon column. */
+     line 1: profile · timeframe · [Demo · Replay · Indicators · Fullscreen]
+     line 2: [Telegram · theme], flush right.
+     The auto margin sits on the FIRST button of each right-aligned group
+     (Demo, then Telegram), so each group hugs the right edge as a block
+     with equal 6px gaps between its buttons — theme lands exactly under
+     fullscreen and telegram exactly under indicators. */
   .toolbar {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    /* pack each line from the left; Telegram/theme pin right via their
-       own margin-left:auto */
+    /* pack each line from the left; the Demo and Telegram groups pin
+       right via their own margin-left:auto */
     justify-content: flex-start;
     gap: 6px;
     padding: 8px 10px;
@@ -804,18 +803,16 @@ function toggleReplay(): void {
     justify-content: center;
     flex-shrink: 0;
   }
-  /* Fullscreen sits at the RIGHT end of line 1; Telegram/theme wrap to
-     line 2 pinned to the SAME right edge — the theme button lands exactly
-     under fullscreen and Telegram exactly left of it. */
-  .fs-btn {
+  /* Right-aligned button groups: the leftover space of each line goes
+     BEFORE the group (between timeframe and Demo on line 1, and before
+     Telegram on line 2) — never inside it. */
+  .demo-btn {
     margin-left: auto;
   }
   .telegram-btn {
     width: 36px;
     height: 36px;
     min-width: 36px;
-    /* absorb the free space on line 2 so Telegram+theme hug the right
-       edge, flush under fullscreen */
     margin: 0 0 0 auto;
     padding: 0;
     display: inline-flex;
