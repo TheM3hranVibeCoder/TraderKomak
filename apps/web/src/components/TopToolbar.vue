@@ -768,39 +768,49 @@ function toggleReplay(): void {
   }
   .profile-name { max-width: 90px; }
 
-  /* Phone header: TWO tidy lines max — profile + timeframe on the first
-     line next to the fullscreen/Telegram/theme icon row, and the Demo/
-     Replay/Indicators buttons wrap onto a short second line instead of
-     being scrolled out of view. Far more compact than the old stacked
-     icon column (~30% of the screen) and nothing is hidden. */
+  /* Phone header: two tidy lines, everything visible —
+     line 1: profile · timeframe · Demo · Replay · Indicators · Fullscreen
+     line 2 (hugging the RIGHT edge): Telegram · theme.
+     .left/.right become transparent wrappers (display: contents) so every
+     button lays out in one wrapping flow; DOM order already puts Fullscreen
+     right after the tools and Telegram/theme after it, so once line 1 is
+     full the last two wrap onto line 2 and margin-left:auto pins them
+     right. Far more compact than the old stacked icon column. */
   .toolbar {
     display: flex;
-    align-items: flex-start;
+    flex-wrap: wrap;
+    align-items: center;
+    /* pack each line from the left; Telegram/theme pin right via their
+       own margin-left:auto */
+    justify-content: flex-start;
     gap: 6px;
     padding: 8px 10px;
   }
-  .left {
-    flex: 1;
-    min-width: 0;
-    flex-wrap: wrap;
-    align-content: flex-start;
-    gap: 6px;
+  .left,
+  .right {
+    display: contents;
   }
   .left > *, .right > * { flex-shrink: 0; }
-  .right {
-    flex-direction: row;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-  }
   .profile-name { max-width: 72px; }
-  .telegram-btn,
   .fs-btn,
   .theme-btn {
-    width: 40px;
-    height: 40px;
-    min-width: 40px;
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
     margin: 0;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .telegram-btn {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    /* push Telegram (and the theme button after it) to the right edge of
+       their line */
+    margin: 0 0 0 auto;
     padding: 0;
     display: inline-flex;
     align-items: center;
@@ -824,7 +834,7 @@ function toggleReplay(): void {
   .replay-btn,
   .ind-btn {
     padding: 0 9px;
-    height: 40px; /* comfortable tap target on touch screens */
+    height: 36px; /* comfortable tap target on touch screens */
   }
   /* the dropdown spans nearly the full width so items are easy to tap */
   .indicators-pop {
