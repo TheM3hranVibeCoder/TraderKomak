@@ -768,20 +768,18 @@ function toggleReplay(): void {
   }
   .profile-name { max-width: 90px; }
 
-  /* Phone header: a two-column grid — the tool group wraps on the left,
-     the Telegram/theme icons sit as a tidy aligned column on the right
-     (with flex-wrap they used to scatter across rows, misaligned). */
+  /* Phone header: ONE compact row — the tool group scrolls horizontally on
+     the left, the fullscreen/Telegram/theme icons sit fixed as a small row
+     on the right. (A stacked icon column used to make the header eat ~30%
+     of the screen and left dead space under the tools.) */
   .toolbar {
     display: flex;
-    /* Top-align: tools hug the top of the header, the stacked
-       telegram/theme column hangs below — free space stays at the BOTTOM. */
-    align-items: flex-start;
+    align-items: center;
     gap: 6px;
     padding: 8px 10px;
   }
-  /* One compact row for EVERYTHING — tools then telegram/theme. No stacked
-     column = no dead vertical space in the header. Narrow phones scroll
-     the row horizontally (scrollbar hidden). */
+  /* One compact row for EVERYTHING — tools then the icon row. Narrow phones
+     scroll the tools horizontally (scrollbar hidden). */
   .left {
     flex: 1;
     min-width: 0;
@@ -795,10 +793,10 @@ function toggleReplay(): void {
   .left::-webkit-scrollbar { display: none; }
   .left > *, .right > * { flex-shrink: 0; }
   .right {
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
     gap: 6px;
-    height: max-content;
+    flex-shrink: 0;
   }
   .profile-name { max-width: 72px; }
   .telegram-btn,

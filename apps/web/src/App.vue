@@ -120,6 +120,9 @@ function toggleRail(): void {
 // CSS-only mode elsewhere (iOS Safari), where our own ESC listener and the
 // floating exit button take over.
 const chartFullscreen = ref(false);
+/** Touch devices have no ESC key — they get the floating exit button in
+ *  fullscreen; desktops (fine pointer) exit with ESC alone. */
+const touchDevice = window.matchMedia("(pointer: coarse)").matches;
 const showFsHint = ref(false);
 /** The "press ESC" hint appears on the FIRST fullscreen entry per page load. */
 let fsHintShown = false;
@@ -358,9 +361,11 @@ function onTimeframeChange(next: Timeframe): void {
           <path :d="toolsOpen ? 'M14 6l-6 6 6 6' : 'M10 6l6 6-6 6'" />
         </svg>
       </button>
+      <!-- Rail open/close tab (phone): mirrors the tools-tab on the right
+           edge — same size, same 20%-up-from-bottom position. -->
       <button
         v-if="isPhone && !chartFullscreen"
-        class="edge-handle right"
+        class="rail-tab"
         type="button"
         :aria-label="railOpen ? 'Hide panels' : 'Show watchlist / chat / news'"
         @click="toggleRail"
@@ -417,17 +422,14 @@ function onTimeframeChange(next: Timeframe): void {
         </button>
       </nav>
     </main>
-    <!-- Fullscreen chart affordances: a small floating exit button (the
-         touch-friendly way out on phones) + the one-time ESC hint toast at
-         the top middle of the chart. -->
+    <!-- Fullscreen chart affordances: the one-time ESC hint toast at the
+         top middle of the chart, plus a floating exit button that only
+         exists on touch devices (phones/tablets have no ESC key). -->
     <Transition name="fs-hint">
-      <div v-if="showFsHint" class="fs-hint" role="status">
-        <span>Press <kbd>ESC</kbd> to exit fullscreen</span>
-        <span class="fs-hint-fa" dir="rtl">برای خروج از حالت تمام‌صفحه ESC را بزنید</span>
-      </div>
+      <div v-if="showFsHint" class="fs-hint" role="status">To exit fullscreen press ESC</div>
     </Transition>
     <button
-      v-if="chartFullscreen"
+      v-if="chartFullscreen && (isPhone || touchDevice)"
       class="fs-exit"
       type="button"
       title="Exit fullscreen (ESC)"
@@ -458,7 +460,6 @@ function onTimeframeChange(next: Timeframe): void {
   0%, 100% { opacity: 0.55; transform: scale(0.96); }
   50% { opacity: 1; transform: scale(1); }
 }
-.edge-handle { display: none; }
 /* Drawing-toolbar collapse now works on EVERY screen size (the tools-tab
    below toggles it) — same slide animation as the phone rail. */
 .main :deep(.drawing-toolbar) {
@@ -497,27 +498,31 @@ function onTimeframeChange(next: Timeframe): void {
 }
 .main:not(.tools-open) .tools-tab { left: 0; }
 .tools-tab:hover { color: var(--text); }
+/* Right-side twin of the tools-tab (phone): toggles the watchlist/chat/
+   news rail, rides its edge at the same 20%-up-from-bottom height. */
+.rail-tab {
+  position: absolute;
+  bottom: 20%;
+  right: 0;
+  z-index: 70;
+  width: 22px;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: 10px 0 0 10px;
+  background: var(--bg-panel-solid);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  transition: right 280ms cubic-bezier(0.32, 0.72, 0, 1), color 150ms;
+}
+.main.rail-open .rail-tab { right: 36px; }
+.rail-tab:hover { color: var(--text); }
 @media (max-width: 640px) {
-  .edge-handle {
-    display: flex;
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    z-index: 56;
-    width: 22px;
-    height: 46px;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--border);
-    background: var(--bg-panel-solid);
-    color: var(--text-muted);
-    cursor: pointer;
-    padding: 0;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
-  }
-  .edge-handle.right { right: 0; border-radius: 10px 0 0 10px; border-right: none; }
-  .edge-handle:active { color: var(--text); }
-
   .tools-tab { left: 36px; }
   .main:not(.tools-open) .tools-tab { left: 0; }
 
@@ -579,20 +584,6 @@ function onTimeframeChange(next: Timeframe): void {
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
-}
-.fs-hint kbd {
-  padding: 1px 6px;
-  border: 1px solid var(--border-strong);
-  border-bottom-width: 2px;
-  border-radius: 5px;
-  background: var(--btn-hover);
-  font-family: inherit;
-  font-size: 11px;
-}
-.fs-hint-fa {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-muted);
 }
 .fs-hint-enter-active,
 .fs-hint-leave-active {
