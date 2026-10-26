@@ -768,29 +768,24 @@ function toggleReplay(): void {
   }
   .profile-name { max-width: 90px; }
 
-  /* Phone header: ONE compact row — the tool group scrolls horizontally on
-     the left, the fullscreen/Telegram/theme icons sit fixed as a small row
-     on the right. (A stacked icon column used to make the header eat ~30%
-     of the screen and left dead space under the tools.) */
+  /* Phone header: TWO tidy lines max — profile + timeframe on the first
+     line next to the fullscreen/Telegram/theme icon row, and the Demo/
+     Replay/Indicators buttons wrap onto a short second line instead of
+     being scrolled out of view. Far more compact than the old stacked
+     icon column (~30% of the screen) and nothing is hidden. */
   .toolbar {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 6px;
     padding: 8px 10px;
   }
-  /* One compact row for EVERYTHING — tools then the icon row. Narrow phones
-     scroll the tools horizontally (scrollbar hidden). */
   .left {
     flex: 1;
     min-width: 0;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
+    align-content: flex-start;
     gap: 6px;
-    overflow-x: auto;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-    padding-bottom: 2px;
   }
-  .left::-webkit-scrollbar { display: none; }
   .left > *, .right > * { flex-shrink: 0; }
   .right {
     flex-direction: row;
