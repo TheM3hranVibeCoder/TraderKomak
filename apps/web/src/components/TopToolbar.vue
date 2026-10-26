@@ -804,13 +804,17 @@ function toggleReplay(): void {
     justify-content: center;
     flex-shrink: 0;
   }
+  /* Fullscreen sits at the RIGHT end of line 1; Telegram/theme then wrap to
+     line 2 flush with the same right edge — the theme button lands exactly
+     under fullscreen and Telegram exactly left of it. */
+  .fs-btn {
+    margin-left: auto;
+  }
   .telegram-btn {
     width: 36px;
     height: 36px;
     min-width: 36px;
-    /* push Telegram (and the theme button after it) to the right edge of
-       their line */
-    margin: 0 0 0 auto;
+    margin: 0;
     padding: 0;
     display: inline-flex;
     align-items: center;
