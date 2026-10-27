@@ -486,6 +486,9 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
   justify-content: center;
   background: rgba(20, 18, 45, 0.45);
   backdrop-filter: blur(6px);
+  /* light-designed surface teleported outside the themed .app — keep the
+     UA's form-control rendering (select popups, spinners, caret) light */
+  color-scheme: light;
 }
 .admin-panel {
   width: min(560px, calc(100vw - 28px));
@@ -789,6 +792,12 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
   align-items: center;
   justify-content: center;
   background: rgba(20, 18, 45, 0.5);
+  /* The admin panel is teleported to <body>, OUTSIDE the themed .app — so
+     it inherits the app-wide dark color-scheme and the browser paints
+     form controls (the DM textarea) with a near-black canvas under its
+     near-black text. The panel is a light-designed surface: opt its
+     controls into light UA rendering explicitly. */
+  color-scheme: light;
 }
 .mini-modal {
   width: min(380px, calc(100vw - 32px));
@@ -842,6 +851,10 @@ onUnmounted(() => window.removeEventListener("keydown", onKey));
   font-size: 13px;
   font-family: inherit;
   color: #23283a;
+  /* explicit light canvas: without it the textarea takes the UA's dark
+     color-scheme canvas (the panel lives outside the themed .app) and the
+     dark text becomes unreadable */
+  background: #fff;
   resize: vertical;
   min-height: 96px;
 }
