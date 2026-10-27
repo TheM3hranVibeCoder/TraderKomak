@@ -7951,12 +7951,12 @@ onBeforeUnmount(() => {
 .xhair-line.v {
   top: 0;
   width: 0;
-  border-left: 1px dashed rgba(117, 134, 150, 0.75);
+  border-left: 2px dashed rgba(117, 134, 150, 0.95);
 }
 .xhair-line.h {
   left: 0;
   height: 0;
-  border-top: 1px dashed rgba(117, 134, 150, 0.75);
+  border-top: 2px dashed rgba(117, 134, 150, 0.95);
 }
 .single-time-tag {
   transform: translateX(-50%);
