@@ -1908,6 +1908,49 @@ const magnetActive = computed(() => drawingsStore.magnetActive);
 /** Snapping crosshair: when a drawing tool + magnet are active the native
  *  crosshair hides and this one draws stuck to the snapped candle level. */
 const snapXhair = ref<{ x: number; y: number; priceText: string; timeText: string } | null>(null);
+/** Shift-angle-snapping a trendline: the crosshair h/v lines ride the
+ *  line's snapped free end (TradingView-style) instead of the raw cursor. */
+const shiftSnapping = computed(
+  () => !!drawingState.value && drawingsStore.activeTool === "trendline" && shiftHeld.value
+);
+
+/** Crosshair state for the current pointer: magnet mode sticks it to the
+ *  nearest candle high/low; while Shift-snapping a trendline it sits on the
+ *  line's snapped second endpoint. Hoisted to setup scope so both the chart
+ *  pointermove listener and the trendline preview move handler drive it. */
+const computeSnapXhair = (clientX: number, clientY: number): void => {
+  if (!adapter || !containerRef.value) {
+    snapXhair.value = null;
+    return;
+  }
+  if (shiftSnapping.value && drawingState.value) {
+    const d = drawingState.value;
+    const x = adapter.timeToX(d.time2);
+    const y = adapter.getPriceY(d.price2);
+    snapXhair.value = x !== null && y !== null
+      ? { x, y, priceText: fmtPrice(d.price2, instrumentPrecision(market.instrument)), timeText: fmtAxisTime(d.time2) }
+      : null;
+    return;
+  }
+  if (!drawingToolActive.value || !magnetActive.value) {
+    snapXhair.value = null;
+    return;
+  }
+  const r = containerRef.value.getBoundingClientRect();
+  const fake = { clientX, clientY, button: 0, buttons: 0 } as MouseEvent;
+  if (!isInChartArea(fake)) {
+    snapXhair.value = null;
+    return;
+  }
+  const t = adapter.xToTime(clientX - r.left);
+  const p = adapter.yToPrice(clientY - r.top);
+  const s = t !== null && p !== null ? snapToCandle(t, p, true) : null;
+  const x = s ? adapter.timeToX(s.time) : null;
+  const y = s ? adapter.getPriceY(s.price) : null;
+  snapXhair.value = x !== null && y !== null && s
+    ? { x, y, priceText: fmtPrice(s.price, instrumentPrecision(market.instrument)), timeText: fmtAxisTime(s.time) }
+    : null;
+};
 
 // When the magnet turns ON mid-drawing (e.g. Ctrl pressed while the cursor
 // is stationary), re-snap every in-progress anchor immediately — otherwise
@@ -1932,12 +1975,20 @@ watch(magnetActive, (on) => {
       const d = drawingState.value;
       preSnap = { drawingObj: d, drawing: { ...d }, polyObj: null, polyCursor: null, posObj: null, pos: null };
       // Mutate in place — the OFF branch restores via object identity
-      const s1 = snapToCandle(d.time1, d.price1, true);
-      const s2 = snapToCandle(d.time2, d.price2, true);
-      d.time1 = s1.time;
-      d.price1 = s1.price;
-      d.time2 = s2.time;
-      d.price2 = s2.price;
+      if (drawingsStore.activeTool === "trendline") {
+        // The trendline's first anchor stays exactly where it was clicked;
+        // only the free second end snaps to the candle.
+        const s2 = snapToCandle(d.time2, d.price2, true);
+        d.time2 = s2.time;
+        d.price2 = s2.price;
+      } else {
+        const s1 = snapToCandle(d.time1, d.price1, true);
+        const s2 = snapToCandle(d.time2, d.price2, true);
+        d.time1 = s1.time;
+        d.price1 = s1.price;
+        d.time2 = s2.time;
+        d.price2 = s2.price;
+      }
     } else if (polyState.value) {
       preSnap = { drawingObj: null, drawing: null, polyObj: polyState.value, polyCursor: polyState.value.cursor ? { ...polyState.value.cursor } : null, posObj: null, pos: null };
       // Placed vertices stay as clicked; the moving cursor snaps.
@@ -2811,7 +2862,10 @@ function beginDraw(e: MouseEvent): void {
       drawingState.value.time2 = s2.time;
       drawingState.value.price2 = s2.price;
     }
-    if (drawingsStore.activeTool === "trendline" && shiftHeld.value) snapTrendlineAngle();
+    if (drawingsStore.activeTool === "trendline" && shiftHeld.value) {
+      snapTrendlineAngle();
+      computeSnapXhair(ev.clientX, ev.clientY);
+    }
     recalcRects();
   };
 
@@ -4675,7 +4729,7 @@ onMounted(async () => {
   const onShiftKey = (e: KeyboardEvent) => {
     if (e.key === "Shift") {
       shiftHeld.value = e.type === "keydown";
-      if (e.type === "keyup") snapTrendlineAngle();
+      if (drawingState.value && drawingsStore.activeTool === "trendline") snapTrendlineAngle();
     }
   };
   const onShiftBlur = () => {
@@ -4697,29 +4751,10 @@ onMounted(async () => {
   magnetAnyMoveCb = onAnyMove;
 
   // Snapping crosshair tracking: while a drawing tool + magnet are active,
-  // the native crosshair is hidden and this one sticks to candle high/low.
-  // The last pointer position is kept so the snapped crosshair appears the
-  // INSTANT Ctrl is held / the magnet latches — before any mouse movement.
-  const computeSnapXhair = (clientX: number, clientY: number): void => {
-    if (!drawingToolActive.value || !magnetActive.value || !adapter || !containerRef.value) {
-      snapXhair.value = null;
-      return;
-    }
-    const r = containerRef.value.getBoundingClientRect();
-    const fake = { clientX, clientY, button: 0, buttons: 0 } as MouseEvent;
-    if (!isInChartArea(fake)) {
-      snapXhair.value = null;
-      return;
-    }
-    const t = adapter.xToTime(clientX - r.left);
-    const p = adapter.yToPrice(clientY - r.top);
-    const s = t !== null && p !== null ? snapToCandle(t, p, true) : null;
-    const x = s ? adapter.timeToX(s.time) : null;
-    const y = s ? adapter.getPriceY(s.price) : null;
-    snapXhair.value = x !== null && y !== null && s
-      ? { x, y, priceText: fmtPrice(s.price, instrumentPrecision(market.instrument)), timeText: fmtAxisTime(s.time) }
-      : null;
-  };
+  // the native crosshair is hidden and this one sticks to candle high/low
+  // (or to the Shift-snapped trendline end). The last pointer position is
+  // kept so the snapped crosshair appears the INSTANT Ctrl or Shift is
+  // held — before any mouse movement.
   const onXhairMove = (e: MouseEvent) => {
     lastPtrClient = { clientX: e.clientX, clientY: e.clientY };
     computeSnapXhair(e.clientX, e.clientY);
@@ -4736,13 +4771,13 @@ onMounted(async () => {
 
   // Swap the native crosshair for the snapping one only while needed
   const syncCrosshairMode = () => {
-    const custom = drawingToolActive.value && magnetActive.value;
+    const custom = (drawingToolActive.value && magnetActive.value) || shiftSnapping.value;
     adapter?.setCrosshairVisible(!custom);
     if (custom && lastPtrClient) computeSnapXhair(lastPtrClient.clientX, lastPtrClient.clientY);
     else if (!custom) snapXhair.value = null;
   };
   syncCrosshairMode();
-  crosshairModeStop = watch([drawingToolActive, magnetActive], syncCrosshairMode);
+  crosshairModeStop = watch([drawingToolActive, magnetActive, shiftSnapping], syncCrosshairMode);
 
   // A mouseup released OUTSIDE the browser window never reaches us — without
   // this, the half-drawn preview stays alive and the next chart click
@@ -5468,7 +5503,7 @@ onBeforeUnmount(() => {
     <!-- Magnet snapping crosshair: replaces the native crosshair while a
          drawing tool + magnet are active — sticks to candle high/low and
          shows the snapped price/time on the axes. -->
-    <template v-if="snapXhair && drawingToolActive && magnetActive">
+    <template v-if="snapXhair && (shiftSnapping || (drawingToolActive && magnetActive))">
       <div
         class="xhair-line v"
         :style="{ left: snapXhair.x + 'px', bottom: overlayBottom + 'px' }"
