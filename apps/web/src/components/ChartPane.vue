@@ -7950,13 +7950,17 @@ onBeforeUnmount(() => {
 }
 .xhair-line.v {
   top: 0;
-  width: 0;
-  border-left: 2px dashed rgba(117, 134, 150, 0.95);
+  bottom: 0;
+  width: 2px;
+  /* explicit 4px dash / 4px gap — identical to the native crosshair's
+     LineStyle.Dashed at width 2, so both crosshairs look the same */
+  background-image: repeating-linear-gradient(to bottom, #758696 0 4px, transparent 4px 8px);
 }
 .xhair-line.h {
   left: 0;
-  height: 0;
-  border-top: 2px dashed rgba(117, 134, 150, 0.95);
+  right: 0;
+  height: 2px;
+  background-image: repeating-linear-gradient(to right, #758696 0 4px, transparent 4px 8px);
 }
 .single-time-tag {
   transform: translateX(-50%);
