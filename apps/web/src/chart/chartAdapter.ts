@@ -222,8 +222,8 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     },
     crosshair: {
       mode: CrosshairMode.Normal,
-      vertLine: { color: "#758696", width: 2, style: LineStyle.LargeDashed, labelBackgroundColor: "#2962ff" },
-      horzLine: { color: "#758696", width: 2, style: LineStyle.LargeDashed, labelBackgroundColor: "#2962ff" },
+      vertLine: { color: "#758696", width: 2, style: LineStyle.Dashed, labelBackgroundColor: "#2962ff" },
+      horzLine: { color: "#758696", width: 2, style: LineStyle.Dashed, labelBackgroundColor: "#2962ff" },
     },
     rightPriceScale: {
       visible: true,
