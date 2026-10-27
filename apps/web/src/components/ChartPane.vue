@@ -4727,9 +4727,17 @@ onMounted(async () => {
   magnetBlurCb = onMagnetBlur;
 
   const onShiftKey = (e: KeyboardEvent) => {
-    if (e.key === "Shift") {
-      shiftHeld.value = e.type === "keydown";
-      if (drawingState.value && drawingsStore.activeTool === "trendline") snapTrendlineAngle();
+    if (e.key !== "Shift") return;
+    shiftHeld.value = e.type === "keydown";
+    if (!drawingState.value || drawingsStore.activeTool !== "trendline") return;
+    if (e.type === "keydown") {
+      snapTrendlineAngle();
+      syncCrosshairMode();
+      recalcRects();
+    } else {
+      replayPointerAt(lastPtrClient);
+      syncCrosshairMode();
+      recalcRects();
     }
   };
   const onShiftBlur = () => {
