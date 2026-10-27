@@ -1774,6 +1774,8 @@ const rectPixels = ref<RectPixel[]>([]);
 const hitRects = computed(() => rectPixels.value.filter((r) => r.id !== "__preview"));
 const drawingState = ref<{ time1: number; price1: number; time2: number; price2: number } | null>(null);
 const shiftHeld = ref(false);
+/** The trendline endpoint handle currently being dragged (for Shift-snapping). */
+const lineResize = ref<{ id: string; which: 1 | 2 } | null>(null);
 /** Measure tool (TradingView-style): two clicks — start, end. Ephemeral:
  *  never persisted, disappears on the third chart press / new drawing. */
 const measure = ref<{ t1: number; p1: number; t2: number; p2: number; done: boolean } | null>(null);
@@ -1908,10 +1910,13 @@ const magnetActive = computed(() => drawingsStore.magnetActive);
 /** Snapping crosshair: when a drawing tool + magnet are active the native
  *  crosshair hides and this one draws stuck to the snapped candle level. */
 const snapXhair = ref<{ x: number; y: number; priceText: string; timeText: string } | null>(null);
-/** Shift-angle-snapping a trendline: the crosshair h/v lines ride the
- *  line's snapped free end (TradingView-style) instead of the raw cursor. */
+/** Shift-angle-snapping a trendline (drawing or endpoint resize): the
+ *  crosshair h/v lines ride the line's snapped free end (TradingView-style)
+ *  instead of the raw cursor. */
 const shiftSnapping = computed(
-  () => !!drawingState.value && drawingsStore.activeTool === "trendline" && shiftHeld.value
+  () =>
+    shiftHeld.value &&
+    ((!!drawingState.value && drawingsStore.activeTool === "trendline") || !!lineResize.value)
 );
 
 /** Crosshair state for the current pointer: magnet mode sticks it to the
@@ -1923,13 +1928,30 @@ const computeSnapXhair = (clientX: number, clientY: number): void => {
     snapXhair.value = null;
     return;
   }
-  if (shiftSnapping.value && drawingState.value) {
+  if (shiftSnapping.value) {
+    const lr = lineResize.value;
     const d = drawingState.value;
-    const x = adapter.timeToX(d.time2);
-    const y = adapter.getPriceY(d.price2);
-    snapXhair.value = x !== null && y !== null
-      ? { x, y, priceText: fmtPrice(d.price2, instrumentPrecision(market.instrument)), timeText: fmtAxisTime(d.time2) }
-      : null;
+    let time: number | null = null;
+    let price: number | null = null;
+    if (d) {
+      time = d.time2;
+      price = d.price2;
+    } else if (lr) {
+      const line = drawingsStore.getLinesFor(market.instrument).find((l) => l.id === lr.id);
+      if (line) {
+        time = lr.which === 1 ? line.time1 : line.time2;
+        price = lr.which === 1 ? line.price1 : line.price2;
+      }
+    }
+    if (time !== null && price !== null) {
+      const x = adapter.timeToX(time);
+      const y = adapter.getPriceY(price);
+      snapXhair.value = x !== null && y !== null
+        ? { x, y, priceText: fmtPrice(price, instrumentPrecision(market.instrument)), timeText: fmtAxisTime(time) }
+        : null;
+    } else {
+      snapXhair.value = null;
+    }
     return;
   }
   if (!drawingToolActive.value || !magnetActive.value) {
@@ -2832,6 +2854,26 @@ function snapTrendlineAngle(): void {
   if (p !== null) d.price2 = p;
 }
 
+/** Shift pressed mid-resize: snap the dragged endpoint of the stored line
+ *  to the nearest 45-degree step around its anchored end. */
+function snapLineHandleAngle(): void {
+  if (!adapter || !lineResize.value) return;
+  const { id, which } = lineResize.value;
+  const line = drawingsStore.getLinesFor(market.instrument).find((l) => l.id === id);
+  if (!line) return;
+  const fx = adapter.timeToX(which === 1 ? line.time2 : line.time1);
+  const fy = adapter.getPriceY(which === 1 ? line.price2 : line.price1);
+  const mx = adapter.timeToX(which === 1 ? line.time1 : line.time2);
+  const my = adapter.getPriceY(which === 1 ? line.price1 : line.price2);
+  if (fx === null || fy === null || mx === null || my === null) return;
+  const sp = snapAngleToPoint(fx, fy, mx, my);
+  if (!sp) return;
+  const nt = adapter.xToTime(sp.x);
+  const np = adapter.yToPrice(sp.y);
+  if (nt === null || np === null) return;
+  drawingsStore.updateLine(market.instrument, id, which === 1 ? { time1: nt, price1: np } : { time2: nt, price2: np });
+}
+
 /** Begin a rectangle: corner 1 at the pointer, preview follows the mouse. */
 function beginDraw(e: MouseEvent): void {
   if (!adapter || !containerRef.value) return;
@@ -3510,6 +3552,7 @@ function onTrendHandleStart(e: MouseEvent, id: string, which: 1 | 2): void {
   e.stopPropagation();
   rectMenu.value = null;
   closePalette();
+  lineResize.value = { id, which };
 
   const onMove = (ev: MouseEvent) => {
     if (!adapter || !containerRef.value) return;
@@ -3539,6 +3582,7 @@ function onTrendHandleStart(e: MouseEvent, id: string, which: 1 | 2): void {
     drawingsStore.updateLine(market.instrument, id, which === 1 ? { time1: ft, price1: fp } : { time2: ft, price2: fp });
     const updated = drawingsStore.getLinesFor(market.instrument).find((x) => x.id === id);
     if (updated) selectedLine.value = updated;
+    if (ev.shiftKey) computeSnapXhair(ev.clientX, ev.clientY);
     recalcRects();
     positionLinePanel(id);
   };
@@ -3546,6 +3590,7 @@ function onTrendHandleStart(e: MouseEvent, id: string, which: 1 | 2): void {
   const onUp = () => {
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
+    lineResize.value = null;
   };
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onUp);
@@ -4753,9 +4798,11 @@ onMounted(async () => {
   const onShiftKey = (e: KeyboardEvent) => {
     if (e.key !== "Shift") return;
     shiftHeld.value = e.type === "keydown";
-    if (!drawingState.value || drawingsStore.activeTool !== "trendline") return;
+    const drawingTrend = !!drawingState.value && drawingsStore.activeTool === "trendline";
+    if (!drawingTrend && !lineResize.value) return;
     if (e.type === "keydown") {
-      snapTrendlineAngle();
+      if (drawingTrend) snapTrendlineAngle();
+      else snapLineHandleAngle();
       syncCrosshairMode();
       recalcRects();
     } else {
