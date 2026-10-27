@@ -43,6 +43,7 @@ const flyoutTop = ref(80);
  *  selected tool) so the user can see Shift+click is ready. */
 const shiftHeld = ref(false);
 const onShiftKeyDown = (e: KeyboardEvent) => {
+  if (drawings.trendlineDrawing) return;
   if (e.key === "Shift") shiftHeld.value = true;
 };
 const onShiftKeyUp = (e: KeyboardEvent) => {

@@ -1575,6 +1575,8 @@ let paneCtxCb: ((e: MouseEvent) => void) | null = null;
 let escCb: ((e: KeyboardEvent) => void) | null = null;
 let magnetKeyCb: ((e: KeyboardEvent) => void) | null = null;
 let magnetBlurCb: (() => void) | null = null;
+let shiftKeyCb: ((e: KeyboardEvent) => void) | null = null;
+let shiftBlurCb: (() => void) | null = null;
 let magnetAnyMoveCb: ((e: PointerEvent) => void) | null = null;
 let xhairMoveEl: HTMLElement | null = null;
 let xhairMoveCb: ((e: MouseEvent) => void) | null = null;
@@ -1771,6 +1773,7 @@ const rectPixels = ref<RectPixel[]>([]);
  *  real (stored) rectangles. */
 const hitRects = computed(() => rectPixels.value.filter((r) => r.id !== "__preview"));
 const drawingState = ref<{ time1: number; price1: number; time2: number; price2: number } | null>(null);
+const shiftHeld = ref(false);
 /** Measure tool (TradingView-style): two clicks — start, end. Ephemeral:
  *  never persisted, disappears on the third chart press / new drawing. */
 const measure = ref<{ t1: number; p1: number; t2: number; p2: number; done: boolean } | null>(null);
@@ -2751,12 +2754,34 @@ function extendRecalcFrames(ms: number): void {
   if (!recalcRaf) recalcRaf = requestAnimationFrame(recalcFrame);
 }
 
+function snapTrendlineAngle(): void {
+  if (!adapter) return;
+  const d = drawingState.value;
+  if (!d) return;
+  const x1 = adapter.timeToX(d.time1);
+  const y1 = adapter.getPriceY(d.price1);
+  const x2 = adapter.timeToX(d.time2);
+  const y2 = adapter.getPriceY(d.price2);
+  if (x1 === null || y1 === null || x2 === null || y2 === null) return;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  if (dx === 0 && dy === 0) return;
+  const step = Math.PI / 4;
+  const ang = Math.round(Math.atan2(dy, dx) / step) * step;
+  const len = Math.hypot(dx, dy);
+  const t = adapter.xToTime(x1 + Math.cos(ang) * len);
+  const p = adapter.yToPrice(y1 + Math.sin(ang) * len);
+  if (t !== null) d.time2 = t;
+  if (p !== null) d.price2 = p;
+}
+
 /** Begin a rectangle: corner 1 at the pointer, preview follows the mouse. */
 function beginDraw(e: MouseEvent): void {
   if (!adapter || !containerRef.value) return;
   // Starting another drawing dismisses a finished measure
   measure.value = null;
   stopMeasureFollow();
+  drawingsStore.trendlineDrawing = drawingsStore.activeTool === "trendline";
   const crect = containerRef.value.getBoundingClientRect();
   const x = e.clientX - crect.left;
   const y = e.clientY - crect.top;
@@ -2786,6 +2811,7 @@ function beginDraw(e: MouseEvent): void {
       drawingState.value.time2 = s2.time;
       drawingState.value.price2 = s2.price;
     }
+    if (drawingsStore.activeTool === "trendline" && shiftHeld.value) snapTrendlineAngle();
     recalcRects();
   };
 
@@ -2813,6 +2839,7 @@ function beginDraw(e: MouseEvent): void {
 function finalizeDraw(): void {
   const d = drawingState.value;
   drawingState.value = null;
+  drawingsStore.trendlineDrawing = false;
   if (onMouseMoveRef) {
     window.removeEventListener("pointermove", onMouseMoveRef);
     onMouseMoveRef = null;
@@ -2843,6 +2870,7 @@ function finalizeDraw(): void {
 function cancelDraw(): void {
   const had = drawingState.value !== null || polyState.value !== null || posState.value !== null;
   drawingState.value = null;
+  drawingsStore.trendlineDrawing = false;
   polyState.value = null;
   posState.value = null;
   posCursor.value = null;
@@ -4476,6 +4504,7 @@ onMounted(async () => {
           drawingState.value.price2 = s2.price;
         }
       }
+      if (tool === "trendline" && shiftHeld.value) snapTrendlineAngle();
       finalizeDraw(); // second click of click -> move -> click
     } else {
       beginDraw(e);
@@ -4643,6 +4672,21 @@ onMounted(async () => {
   magnetKeyCb = onMagnetKey;
   magnetBlurCb = onMagnetBlur;
 
+  const onShiftKey = (e: KeyboardEvent) => {
+    if (e.key === "Shift") {
+      shiftHeld.value = e.type === "keydown";
+      if (e.type === "keyup") snapTrendlineAngle();
+    }
+  };
+  const onShiftBlur = () => {
+    shiftHeld.value = false;
+  };
+  window.addEventListener("keydown", onShiftKey);
+  window.addEventListener("keyup", onShiftKey);
+  window.addEventListener("blur", onShiftBlur);
+  shiftKeyCb = onShiftKey;
+  shiftBlurCb = onShiftBlur;
+
   // Track the cursor globally (not just over the chart) so the magnet
   // toggle replay always uses the CURRENT pointer position, even when it
   // last passed over the edit panel or a toolbar.
@@ -4796,6 +4840,13 @@ onBeforeUnmount(() => {
   }
   if (magnetBlurCb) {
     window.removeEventListener("blur", magnetBlurCb);
+  }
+  if (shiftKeyCb) {
+    window.removeEventListener("keydown", shiftKeyCb);
+    window.removeEventListener("keyup", shiftKeyCb);
+  }
+  if (shiftBlurCb) {
+    window.removeEventListener("blur", shiftBlurCb);
   }
   if (magnetAnyMoveCb) {
     window.removeEventListener("pointermove", magnetAnyMoveCb);

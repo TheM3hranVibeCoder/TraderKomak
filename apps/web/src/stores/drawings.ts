@@ -400,6 +400,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
   /** Effective magnet state — drives snapping AND the toolbar highlight. */
   const magnetActive = computed(() => magnet.value || ctrlHeld.value);
   const selectedId = ref<string | null>(null);
+  const trendlineDrawing = ref(false);
   const selectedLineId = ref<string | null>(null);
   const selectedPolyId = ref<string | null>(null);
   const selectedPositionId = ref<string | null>(null);
@@ -825,6 +826,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
     setCtrlHeld,
     magnetActive,
     selectedId,
+    trendlineDrawing,
     selectedLineId,
     selectedPolyId,
     selectedPositionId,
