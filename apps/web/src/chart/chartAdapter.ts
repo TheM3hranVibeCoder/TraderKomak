@@ -222,8 +222,8 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     },
     crosshair: {
       mode: CrosshairMode.Normal,
-      vertLine: { color: "#758696", width: 2, style: LineStyle.Dashed, labelBackgroundColor: "#2962ff" },
-      horzLine: { color: "#758696", width: 2, style: LineStyle.Dashed, labelBackgroundColor: "#2962ff" },
+      vertLine: { color: "rgba(117, 134, 150, 0.75)", width: 2, style: LineStyle.Dashed, labelBackgroundColor: "#2962ff" },
+      horzLine: { color: "rgba(117, 134, 150, 0.75)", width: 2, style: LineStyle.Dashed, labelBackgroundColor: "#2962ff" },
     },
     rightPriceScale: {
       visible: true,
@@ -764,8 +764,8 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     setCrosshairColors(o: { vert: string | null; horz: string | null }): void {
       chart.applyOptions({
         crosshair: {
-          vertLine: { color: o.vert ?? "#758696" },
-          horzLine: { color: o.horz ?? "#758696" },
+          vertLine: { color: o.vert ?? "rgba(117, 134, 150, 0.75)" },
+          horzLine: { color: o.horz ?? "rgba(117, 134, 150, 0.75)" },
         },
       });
     },

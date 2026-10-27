@@ -821,9 +821,11 @@ function applyChartStyle(): void {
     text: s.axisText ?? autoInk,
     border: s.axisBorder ?? autoBorder,
   });
+  // crosshair ink is the axis ink at ~75% — a touch more subtle than axes
+  const autoCross = autoInk + "bf";
   adapter?.setCrosshairColors({
-    vert: s.crossVert ?? autoInk,
-    horz: s.crossHorz ?? autoInk,
+    vert: s.crossVert ?? autoCross,
+    horz: s.crossHorz ?? autoCross,
   });
   // Persist ONLY on a real change: applyChartStyle also runs on every boot,
   // and an unconditional write counted as a local edit — which made the cloud
