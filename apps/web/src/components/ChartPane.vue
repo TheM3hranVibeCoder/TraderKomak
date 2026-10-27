@@ -2805,6 +2805,16 @@ function extendRecalcFrames(ms: number): void {
   if (!recalcRaf) recalcRaf = requestAnimationFrame(recalcFrame);
 }
 
+function snapAngleToPoint(ax: number, ay: number, x: number, y: number): { x: number; y: number } | null {
+  const dx = x - ax;
+  const dy = y - ay;
+  if (dx === 0 && dy === 0) return null;
+  const step = Math.PI / 4;
+  const ang = Math.round(Math.atan2(dy, dx) / step) * step;
+  const len = Math.hypot(dx, dy);
+  return { x: ax + Math.cos(ang) * len, y: ay + Math.sin(ang) * len };
+}
+
 function snapTrendlineAngle(): void {
   if (!adapter) return;
   const d = drawingState.value;
@@ -2814,14 +2824,10 @@ function snapTrendlineAngle(): void {
   const x2 = adapter.timeToX(d.time2);
   const y2 = adapter.getPriceY(d.price2);
   if (x1 === null || y1 === null || x2 === null || y2 === null) return;
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  if (dx === 0 && dy === 0) return;
-  const step = Math.PI / 4;
-  const ang = Math.round(Math.atan2(dy, dx) / step) * step;
-  const len = Math.hypot(dx, dy);
-  const t = adapter.xToTime(x1 + Math.cos(ang) * len);
-  const p = adapter.yToPrice(y1 + Math.sin(ang) * len);
+  const sp = snapAngleToPoint(x1, y1, x2, y2);
+  if (!sp) return;
+  const t = adapter.xToTime(sp.x);
+  const p = adapter.yToPrice(sp.y);
   if (t !== null) d.time2 = t;
   if (p !== null) d.price2 = p;
 }
@@ -3512,7 +3518,25 @@ function onTrendHandleStart(e: MouseEvent, id: string, which: 1 | 2): void {
     const p = adapter.yToPrice(ev.clientY - r.top);
     if (t === null || p === null) return;
     const s = snapToCandle(t, p, magnetActive.value);
-    drawingsStore.updateLine(market.instrument, id, which === 1 ? { time1: s.time, price1: s.price } : { time2: s.time, price2: s.price });
+    let ft = s.time;
+    let fp = s.price;
+    if (ev.shiftKey) {
+      const cur = drawingsStore.getLinesFor(market.instrument).find((x) => x.id === id);
+      const ax = cur ? adapter.timeToX(which === 1 ? cur.time2 : cur.time1) : null;
+      const ay = cur ? adapter.getPriceY(which === 1 ? cur.price2 : cur.price1) : null;
+      const mx = adapter.timeToX(ft);
+      const my = adapter.getPriceY(fp);
+      if (ax !== null && ay !== null && mx !== null && my !== null) {
+        const sp = snapAngleToPoint(ax, ay, mx, my);
+        if (sp) {
+          const nt = adapter.xToTime(sp.x);
+          const np = adapter.yToPrice(sp.y);
+          if (nt !== null) ft = nt;
+          if (np !== null) fp = np;
+        }
+      }
+    }
+    drawingsStore.updateLine(market.instrument, id, which === 1 ? { time1: ft, price1: fp } : { time2: ft, price2: fp });
     const updated = drawingsStore.getLinesFor(market.instrument).find((x) => x.id === id);
     if (updated) selectedLine.value = updated;
     recalcRects();
