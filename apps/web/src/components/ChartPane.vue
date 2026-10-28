@@ -2266,17 +2266,17 @@ function snapToCandle(time: number, price: number, snap: boolean): { time: numbe
   return { time: c.time, price: Math.abs(yP - yH) <= Math.abs(yP - yL) ? c.high : c.low };
 }
 
-/** Format a time for the vertical-line tag on the time scale. Lightweight
- *  Charts treats its times as UTC, so the tag is formatted in UTC too —
- *  otherwise it would disagree with the chart's own axis labels. */
+/** Visitor-local time for drawing tags — same clock as the chart's own
+ *  axis ticks (tickMarkFormatter uses local hours), so a vline tag, the
+ *  cursor tag and the axis always agree. */
 const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function fmtAxisTime(t: number): string {
   const d = new Date(t * 1000);
   const p2 = (n: number) => String(n).padStart(2, "0");
-  const date = `${p2(d.getUTCDate())} ${MONTHS_SHORT[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  const date = `${p2(d.getDate())} ${MONTHS_SHORT[d.getMonth()]} ${d.getFullYear()}`;
   const sec = TIMEFRAME_SECONDS[market.timeframe as keyof typeof TIMEFRAME_SECONDS] ?? 60;
   if (sec >= 86400) return date;
-  return `${date} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`;
+  return `${date} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
 }
 
 /** Width of the price scale / height of the time scale (measured from the
