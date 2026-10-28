@@ -221,7 +221,10 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       horzLines: { visible: false },
     },
     crosshair: {
-      mode: CrosshairMode.Normal,
+      // Hidden: the app draws its own overlay crosshair (with the gap at the
+      // cursor) — the native one is fully disabled, lines and axis labels
+      // alike, so no second time tag can appear on the scales.
+      mode: CrosshairMode.Hidden,
       vertLine: { color: "rgba(117, 134, 150, 0.75)", width: 2, style: LineStyle.Dashed, labelBackgroundColor: "#2962ff" },
       horzLine: { color: "rgba(117, 134, 150, 0.75)", width: 2, style: LineStyle.Dashed, labelBackgroundColor: "#2962ff" },
     },
