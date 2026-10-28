@@ -1931,6 +1931,12 @@ const shiftSnapping = computed(
  *  crosshair lines stop short of the pointer so the cross stays visible. */
 const XHAIR_GAP = 12;
 
+/** True only while the pointer is over the chart surface itself. Overlays
+ *  that cover the chart (admin panel, demo panel, replay controls, indicator
+ *  settings, header) all sit OUTSIDE .chart-container, so this flag kills
+ *  the crosshair there — clicks on them can no longer light it up. */
+const pointerInChart = ref(false);
+
 /** Crosshair state for the current pointer: magnet mode sticks it to the
  *  nearest candle high/low; while Shift-snapping a trendline it sits on the
  *  line's snapped second endpoint; in default mode it tracks the raw cursor
@@ -1968,7 +1974,7 @@ const computeSnapXhair = (clientX: number, clientY: number): void => {
     }
     return;
   }
-  if (chartDragActive.value) {
+  if (!pointerInChart.value || chartDragActive.value) {
     snapXhair.value = null;
     return;
   }
@@ -4938,11 +4944,13 @@ onMounted(async () => {
   };
   const onXhairMove = (e: MouseEvent) => {
     lastPtrClient = { clientX: e.clientX, clientY: e.clientY };
+    pointerInChart.value = true;
     xhairPending = { x: e.clientX, y: e.clientY };
     if (!xhairRaf) xhairRaf = requestAnimationFrame(flushXhair);
   };
   const onXhairLeave = () => {
     lastPtrClient = null;
+    pointerInChart.value = false;
     xhairPending = null;
     if (xhairRaf) {
       cancelAnimationFrame(xhairRaf);
@@ -4958,11 +4966,15 @@ onMounted(async () => {
 
   // The overlay crosshair replaces the native one EVERYWHERE — the default
   // mode draws it with a gap at the pointer so the OS cross cursor stays
-  // clearly visible on top of the lines.
+  // clearly visible on top of the lines. It only computes while the pointer
+  // is over the chart surface (never over overlays or the header).
   const syncCrosshairMode = () => {
     adapter?.setCrosshairVisible(false);
-    if (lastPtrClient) computeSnapXhair(lastPtrClient.clientX, lastPtrClient.clientY);
-    else snapXhair.value = null;
+    if ((shiftSnapping.value || pointerInChart.value) && lastPtrClient) {
+      computeSnapXhair(lastPtrClient.clientX, lastPtrClient.clientY);
+    } else {
+      snapXhair.value = null;
+    }
   };
   syncCrosshairMode();
   crosshairModeStop = watch(
