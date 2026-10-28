@@ -2316,14 +2316,21 @@ function updateAxisSizes(): void {
   axisBottomH.value = bottomH;
   if (changed) requestAnimationFrame(updateAxisSizes);
 }
-/** True when the event is inside the drawable chart area (not on an axis). */
+/** True when the event is inside the drawable chart area (not on an axis,
+ *  and not outside the pane — positions above/left of the chart used to
+ *  pass the upper-bound-only check and leak the lines over the header). */
 function isInChartArea(e: MouseEvent): boolean {
   const c = containerRef.value;
   if (!c) return false;
   const r = c.getBoundingClientRect();
   const lx = e.clientX - r.left;
   const ly = e.clientY - r.top;
-  return lx <= c.clientWidth - axisRightW.value && ly <= c.clientHeight - axisBottomH.value;
+  return (
+    lx >= 0 &&
+    ly >= 0 &&
+    lx <= c.clientWidth - axisRightW.value &&
+    ly <= c.clientHeight - axisBottomH.value
+  );
 }
 
 /** Replace a pixel-array ref only when a value actually changed — keeps the
