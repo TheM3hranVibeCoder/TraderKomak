@@ -2012,29 +2012,36 @@ function vlineTagDup(x: number): boolean {
  *  line placed with transform and cropped with clip-path — paint-only
  *  updates (no layout/reflow) so fast cursor moves never stall the lines
  *  behind layout work; the dash rhythm also stays continuous across the
- *  gap because both bands share the same full-length pattern. */
+ *  gap because both bands share the same full-length pattern.
+ *  Coordinates are viewport-absolute: the tags live in a fixed body-level
+ *  layer no chart canvas can ever paint over. */
 function xhairSeg(y: number, x: number) {
   const g = XHAIR_GAP;
+  const pr = paneRect.value;
   return {
     vTop: {
-      transform: `translateX(${x - 1}px)`,
-      bottom: overlayBottom.value + "px",
+      transform: `translateX(${pr.left + x - 1}px)`,
+      top: pr.top + "px",
+      bottom: innerH.value - pr.bottom + overlayBottom.value + "px",
       clipPath: `inset(0 0 calc(100% - ${Math.max(0, y - g)}px) 0)`,
     },
     vBottom: {
-      transform: `translateX(${x - 1}px)`,
-      bottom: overlayBottom.value + "px",
-      clipPath: `inset(${y + g}px 0 0 0)`,
+      transform: `translateX(${pr.left + x - 1}px)`,
+      top: pr.top + (y + g) + "px",
+      bottom: innerH.value - pr.bottom + overlayBottom.value + "px",
+      clipPath: "none",
     },
     hLeft: {
-      transform: `translateY(${y - 1}px)`,
-      right: axisRightW.value + "px",
+      transform: `translateY(${pr.top + y - 1}px)`,
+      left: pr.left + "px",
+      right: innerW.value - pr.right + axisRightW.value + "px",
       clipPath: `inset(0 calc(100% - ${Math.max(0, x - g)}px) 0 0)`,
     },
     hRight: {
-      transform: `translateY(${y - 1}px)`,
-      right: axisRightW.value + "px",
-      clipPath: `inset(0 0 0 ${x + g}px)`,
+      transform: `translateY(${pr.top + y - 1}px)`,
+      left: pr.left + (x + g) + "px",
+      right: innerW.value - pr.right + axisRightW.value + "px",
+      clipPath: "none",
     },
   };
 }
@@ -2284,6 +2291,19 @@ function fmtAxisTime(t: number): string {
  *  can be drawn on the axes. */
 const axisRightW = ref(0);
 const axisBottomH = ref(0);
+/** The chart pane's viewport position — the axis tags render in a fixed
+ *  body-level layer (immune to any stacking inside the chart), so every
+ *  tag coordinate is the pane box + the drawing-relative offset. */
+const paneRect = ref({ left: 0, top: 0, right: 0, bottom: 0 });
+const innerW = ref(0);
+const innerH = ref(0);
+function updatePaneRect(): void {
+  const r = paneRef.value?.getBoundingClientRect();
+  if (!r) return;
+  paneRect.value = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+  innerW.value = window.innerWidth;
+  innerH.value = window.innerHeight;
+}
 let axisRetry = 0;
 function updateAxisSizes(): void {
   if (!adapter) return;
@@ -5000,11 +5020,16 @@ onMounted(async () => {
       if (!adapter) return;
       flush?.();
       updateBadgePosition();
+      updatePaneRect();
       recalcRects();
       extendRecalcFrames(300);
     });
   });
   ro.observe(containerRef.value);
+  // The fixed body-level tag layer tracks the pane's viewport position on
+  // every resize (fullscreen, panel toggles, orientation) as well.
+  window.addEventListener("resize", updatePaneRect);
+  updatePaneRect();
 });
 
 onBeforeUnmount(() => {
@@ -5072,6 +5097,7 @@ onBeforeUnmount(() => {
     window.removeEventListener("pointerup", dragProbeCb, true);
     window.removeEventListener("pointercancel", dragProbeCb as AnyListener, true);
   }
+  window.removeEventListener("resize", updatePaneRect);
   if (magnetAnyMoveCb) {
     window.removeEventListener("pointermove", magnetAnyMoveCb);
   }
@@ -5674,45 +5700,67 @@ onBeforeUnmount(() => {
       </template>
     </div>
 
-    <!-- Magnet snapping crosshair: replaces the native crosshair while a
-         drawing tool + magnet are active — sticks to candle high/low and
-         shows the snapped price/time on the axes. -->
-    <template v-if="snapXhair && (shiftSnapping || (drawingToolActive && magnetActive))">
-      <div
-        class="xhair-line v"
-        :style="{ transform: `translateX(${snapXhair.x - 1}px)`, bottom: overlayBottom + 'px' }"
-      ></div>
-      <div
-        class="xhair-line h"
-        :style="{ transform: `translateY(${snapXhair.y - 1}px)`, right: axisRightW + 'px' }"
-      ></div>
-      <div
-        class="single-price-tag"
-        :style="{ top: snapXhair.y - 9 + 'px', background: '#2962ff' }"
-      >{{ snapXhair.priceText }}</div>
-      <div
-        class="single-time-tag"
-        :style="{ left: snapXhair.x + 'px', bottom: Math.max(2, axisBottomH / 2 - 9) + 'px' }"
-      >{{ snapXhair.timeText }}</div>
-    </template>
+    <!-- Axis tags + crosshair, rendered in a FIXED body-level layer: nothing
+         inside the chart's stacking tree (canvases included) can ever paint
+         over them, on any browser. Coordinates = pane box + drawing offset. -->
+    <Teleport to="body">
+      <div class="axis-tag-layer-fixed">
+        <template v-if="snapXhair && (shiftSnapping || (drawingToolActive && magnetActive))">
+          <div
+            class="xhair-line v"
+            :style="{ transform: `translateX(${paneRect.left + snapXhair.x - 1}px)`, top: paneRect.top + 'px', bottom: innerH - paneRect.bottom + overlayBottom + 'px' }"
+          ></div>
+          <div
+            class="xhair-line h"
+            :style="{ transform: `translateY(${paneRect.top + snapXhair.y - 1}px)`, left: paneRect.left + 'px', right: innerW - paneRect.right + axisRightW + 'px' }"
+          ></div>
+          <div
+            class="single-price-tag"
+            :style="{ top: paneRect.top + snapXhair.y - 9 + 'px', right: innerW - paneRect.right + 'px', background: '#2962ff' }"
+          >{{ snapXhair.priceText }}</div>
+          <div
+            class="single-time-tag"
+            :style="{ left: paneRect.left + snapXhair.x + 'px', bottom: innerH - paneRect.bottom + Math.max(2, axisBottomH / 2 - 9) + 'px' }"
+          >{{ snapXhair.timeText }}</div>
+        </template>
 
-    <!-- Default overlay crosshair: four full-length lines cropped by
-         clip-path to stop short of the pointer, leaving an empty band where
-         the OS cross cursor sits alone — clearly on top, never swallowed. -->
-    <template v-else-if="snapXhair">
-      <div class="xhair-line v" :style="xhairSeg(snapXhair.y, snapXhair.x).vTop"></div>
-      <div class="xhair-line v" :style="xhairSeg(snapXhair.y, snapXhair.x).vBottom"></div>
-      <div class="xhair-line h" :style="xhairSeg(snapXhair.y, snapXhair.x).hLeft"></div>
-      <div class="xhair-line h" :style="xhairSeg(snapXhair.y, snapXhair.x).hRight"></div>
-      <div
-        class="single-price-tag"
-        :style="{ top: snapXhair.y - 9 + 'px', background: '#2962ff' }"
-      >{{ snapXhair.priceText }}</div>
-      <div
-        class="single-time-tag"
-        :style="{ left: snapXhair.x + 'px', bottom: Math.max(2, axisBottomH / 2 - 9) + 'px' }"
-      >{{ snapXhair.timeText }}</div>
-    </template>
+        <!-- Default overlay crosshair: four full-length lines cropped by
+             clip-path to stop short of the pointer, leaving an empty band
+             where the OS cross cursor sits alone — clearly on top, never
+             swallowed. -->
+        <template v-else-if="snapXhair">
+          <div class="xhair-line v" :style="xhairSeg(snapXhair.y, snapXhair.x).vTop"></div>
+          <div class="xhair-line v" :style="xhairSeg(snapXhair.y, snapXhair.x).vBottom"></div>
+          <div class="xhair-line h" :style="xhairSeg(snapXhair.y, snapXhair.x).hLeft"></div>
+          <div class="xhair-line h" :style="xhairSeg(snapXhair.y, snapXhair.x).hRight"></div>
+          <div
+            class="single-price-tag"
+            :style="{ top: paneRect.top + snapXhair.y - 9 + 'px', right: innerW - paneRect.right + 'px', background: '#2962ff' }"
+          >{{ snapXhair.priceText }}</div>
+          <div
+            class="single-time-tag"
+            :style="{ left: paneRect.left + snapXhair.x + 'px', bottom: innerH - paneRect.bottom + Math.max(2, axisBottomH / 2 - 9) + 'px' }"
+          >{{ snapXhair.timeText }}</div>
+        </template>
+
+        <!-- Axis tags for one-click lines: vertical line → time/date tag on
+             the time scale (always); horizontal line / ray → current price
+             tag on the price scale while selected. -->
+        <template v-for="s in singlePixels" :key="'tag-' + s.id">
+          <div
+            v-if="s.kind === 'vline' && !vlineTagDup(s.x)"
+            class="single-time-tag"
+            :class="{ selected: s.selected }"
+            :style="{ left: paneRect.left + s.x + 'px', bottom: innerH - paneRect.bottom + Math.max(2, axisBottomH / 2 - 9) + 'px' }"
+          >{{ fmtAxisTime(s.time) }}</div>
+          <div
+            v-else-if="s.selected"
+            class="single-price-tag"
+            :style="{ top: paneRect.top + s.y - 9 + 'px', right: innerW - paneRect.right + 'px', background: s.color }"
+          >{{ fmtPrice(s.price, instrumentPrecision(market.instrument)) }}</div>
+        </template>
+      </div>
+    </Teleport>
 
     <!-- Edit panel for selected rectangle -->
     <div
@@ -6290,27 +6338,6 @@ onBeforeUnmount(() => {
       :class="{ 'rect-mode': drawingToolActive }"
       @click="onChartClick"
     />
-
-    <!-- Axis tags for one-click lines (unclipped so they sit ON the scales):
-         vertical line → time/date tag on the time scale (always); horizontal
-         line / ray → current price tag on the price scale while selected.
-         Placed AFTER the chart container in the DOM + z-index above the LWC
-         canvases so the tick labels never paint over the tags. -->
-    <div class="single-tag-layer">
-      <template v-for="s in singlePixels" :key="'tag-' + s.id">
-        <div
-          v-if="s.kind === 'vline' && !vlineTagDup(s.x)"
-          class="single-time-tag"
-          :class="{ selected: s.selected }"
-          :style="{ left: s.x + 'px', bottom: Math.max(2, axisBottomH / 2 - 9) + 'px' }"
-        >{{ fmtAxisTime(s.time) }}</div>
-        <div
-          v-else-if="s.selected"
-          class="single-price-tag"
-          :style="{ top: s.y - 9 + 'px', background: s.color }"
-        >{{ fmtPrice(s.price, instrumentPrecision(market.instrument)) }}</div>
-      </template>
-    </div>
 
     <!-- Demo positions / history / stats panel (under the chart) -->
     <div v-if="demo.active" class="demo-bottom">
@@ -8051,14 +8078,12 @@ onBeforeUnmount(() => {
 .single-handle.hray {
   cursor: move;
 }
-/* Tags rendered ON the price/time scales (unclipped layer) */
-.single-tag-layer {
-  position: absolute;
+/* Axis tags + crosshair rendered in a fixed body-level layer (teleported
+   out of the chart's stacking tree — no canvas can ever paint over them) */
+.axis-tag-layer-fixed {
+  position: fixed;
   inset: 0;
-  /* Above every internal Lightweight-Charts canvas (series/axis z1-2, pane
-     top canvas z2) — the tags sit ON the scales and must stay readable
-     over the axis tick labels. */
-  z-index: 30;
+  z-index: 9999;
   pointer-events: none;
 }
 .single-price-tag,
