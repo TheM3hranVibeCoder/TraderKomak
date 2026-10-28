@@ -2001,6 +2001,13 @@ const computeSnapXhair = (clientX: number, clientY: number): void => {
   };
 };
 
+/** True when the cursor's blue time tag is covering this x — the vline's
+ *  own tag hides so the same time is never shown twice side by side. */
+function vlineTagDup(x: number): boolean {
+  const cx = snapXhair.value?.x;
+  return cx !== undefined && Math.abs(cx - x) < 40;
+}
+
 /** Styles for the four default-crosshair segments. Each is a full-length
  *  line placed with transform and cropped with clip-path — paint-only
  *  updates (no layout/reflow) so fast cursor moves never stall the lines
@@ -5673,7 +5680,7 @@ onBeforeUnmount(() => {
     <div class="single-tag-layer">
       <template v-for="s in singlePixels" :key="'tag-' + s.id">
         <div
-          v-if="s.kind === 'vline'"
+          v-if="s.kind === 'vline' && !vlineTagDup(s.x)"
           class="single-time-tag"
           :class="{ selected: s.selected }"
           :style="{ left: s.x + 'px', bottom: Math.max(2, overlayBottom + axisBottomH / 2 - 9) + 'px' }"
@@ -8090,13 +8097,6 @@ onBeforeUnmount(() => {
 }
 .single-time-tag {
   transform: translateX(-50%);
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  color: var(--text);
-}
-.single-time-tag.selected {
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 /* ── Replay mode ─────────────────────────────────────────────────────── */
