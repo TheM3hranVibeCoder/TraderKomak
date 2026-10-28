@@ -6821,10 +6821,8 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   width: 100%;
-  /* Plain arrow cursor (TradingView-style): the OS crosshair pointer's thin
-     arms used to sit exactly under the drawn dashed h/v lines and vanish
-     into them — the crosshair LINES are the pointer here. */
-  cursor: default;
+  /* cross cursor over the chart at all times (TradingView-style) */
+  cursor: crosshair;
   /* Chart gestures (pan, pinch, price-axis drag, drawing drags) are handled
      by Lightweight Charts and the drawing pointer handlers. With the default
      `auto`, the phone/tablet browser claims the touch for scroll arbitration
