@@ -6821,13 +6821,8 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   width: 100%;
-  /* The drawn dashed crosshair IS the cursor here (cursor: none): a visible
-     OS cursor would always race the canvas lines by one frame (hardware
-     cursors composite instantly, canvas repaints next frame) and show as a
-     double cross while moving. With no OS cursor there is nothing to trail —
-     the h/v intersection is the pointer position by definition. Handles,
-     panels and the drawing modes keep their own cursor rules. */
-  cursor: none;
+  /* cross cursor over the chart at all times (TradingView-style) */
+  cursor: crosshair;
   /* Chart gestures (pan, pinch, price-axis drag, drawing drags) are handled
      by Lightweight Charts and the drawing pointer handlers. With the default
      `auto`, the phone/tablet browser claims the touch for scroll arbitration
