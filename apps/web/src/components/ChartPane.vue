@@ -2297,14 +2297,16 @@ function fmtAxisTime(t: number): string {
  *  can be drawn on the axes. */
 const axisRightW = ref(0);
 const axisBottomH = ref(0);
-/** The chart pane's viewport position — the axis tags render in a fixed
- *  body-level layer (immune to any stacking inside the chart), so every
- *  tag coordinate is the pane box + the drawing-relative offset. */
+/** The chart container's viewport position — the axis tags render in a fixed
+ *  body-level layer (immune to any stacking inside the chart), so every tag
+ *  coordinate is the container box + the drawing-relative offset. Reading
+ *  the CONTAINER (not the whole pane) keeps the tags anchored to the axes
+ *  when the demo panel opens and shrinks the chart above them. */
 const paneRect = ref({ left: 0, top: 0, right: 0, bottom: 0 });
 const innerW = ref(0);
 const innerH = ref(0);
 function updatePaneRect(): void {
-  const r = paneRef.value?.getBoundingClientRect();
+  const r = containerRef.value?.getBoundingClientRect();
   if (!r) return;
   paneRect.value = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
   innerW.value = window.innerWidth;
