@@ -5674,25 +5674,6 @@ onBeforeUnmount(() => {
       </template>
     </div>
 
-    <!-- Axis tags for one-click lines (unclipped so they sit ON the scales):
-         vertical line → time/date tag on the time scale (always); horizontal
-         line / ray → current price tag on the price scale while selected. -->
-    <div class="single-tag-layer">
-      <template v-for="s in singlePixels" :key="'tag-' + s.id">
-        <div
-          v-if="s.kind === 'vline' && !vlineTagDup(s.x)"
-          class="single-time-tag"
-          :class="{ selected: s.selected }"
-          :style="{ left: s.x + 'px', bottom: Math.max(2, axisBottomH / 2 - 9) + 'px' }"
-        >{{ fmtAxisTime(s.time) }}</div>
-        <div
-          v-else-if="s.selected"
-          class="single-price-tag"
-          :style="{ top: s.y - 9 + 'px', background: s.color }"
-        >{{ fmtPrice(s.price, instrumentPrecision(market.instrument)) }}</div>
-      </template>
-    </div>
-
     <!-- Magnet snapping crosshair: replaces the native crosshair while a
          drawing tool + magnet are active — sticks to candle high/low and
          shows the snapped price/time on the axes. -->
@@ -6309,6 +6290,27 @@ onBeforeUnmount(() => {
       :class="{ 'rect-mode': drawingToolActive }"
       @click="onChartClick"
     />
+
+    <!-- Axis tags for one-click lines (unclipped so they sit ON the scales):
+         vertical line → time/date tag on the time scale (always); horizontal
+         line / ray → current price tag on the price scale while selected.
+         Placed AFTER the chart container in the DOM + z-index above the LWC
+         canvases so the tick labels never paint over the tags. -->
+    <div class="single-tag-layer">
+      <template v-for="s in singlePixels" :key="'tag-' + s.id">
+        <div
+          v-if="s.kind === 'vline' && !vlineTagDup(s.x)"
+          class="single-time-tag"
+          :class="{ selected: s.selected }"
+          :style="{ left: s.x + 'px', bottom: Math.max(2, axisBottomH / 2 - 9) + 'px' }"
+        >{{ fmtAxisTime(s.time) }}</div>
+        <div
+          v-else-if="s.selected"
+          class="single-price-tag"
+          :style="{ top: s.y - 9 + 'px', background: s.color }"
+        >{{ fmtPrice(s.price, instrumentPrecision(market.instrument)) }}</div>
+      </template>
+    </div>
 
     <!-- Demo positions / history / stats panel (under the chart) -->
     <div v-if="demo.active" class="demo-bottom">
