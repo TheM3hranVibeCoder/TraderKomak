@@ -1585,6 +1585,8 @@ let xhairMoveEl: HTMLElement | null = null;
 let xhairMoveCb: ((e: MouseEvent) => void) | null = null;
 let xhairLeaveCb: (() => void) | null = null;
 let crosshairModeStop: (() => void) | null = null;
+/** Pending crosshair rAF handle (coalesced pointermove updates). */
+let xhairRaf = 0;
 let windowLostCb: (() => void) | null = null;
 // addEventListener requires EventListener, not a specific MouseEvent handler
 type AnyListener = EventListener;
@@ -1998,6 +2000,37 @@ const computeSnapXhair = (clientX: number, clientY: number): void => {
     timeText: fmtAxisTime(t),
   };
 };
+
+/** Styles for the four default-crosshair segments. Each is a full-length
+ *  line placed with transform and cropped with clip-path — paint-only
+ *  updates (no layout/reflow) so fast cursor moves never stall the lines
+ *  behind layout work; the dash rhythm also stays continuous across the
+ *  gap because both bands share the same full-length pattern. */
+function xhairSeg(y: number, x: number) {
+  const g = XHAIR_GAP;
+  return {
+    vTop: {
+      transform: `translateX(${x - 1}px)`,
+      bottom: overlayBottom.value + "px",
+      clipPath: `inset(0 0 calc(100% - ${Math.max(0, y - g)}px) 0)`,
+    },
+    vBottom: {
+      transform: `translateX(${x - 1}px)`,
+      bottom: overlayBottom.value + "px",
+      clipPath: `inset(${y + g}px 0 0 0)`,
+    },
+    hLeft: {
+      transform: `translateY(${y - 1}px)`,
+      right: axisRightW.value + "px",
+      clipPath: `inset(0 calc(100% - ${Math.max(0, x - g)}px) 0 0)`,
+    },
+    hRight: {
+      transform: `translateY(${y - 1}px)`,
+      right: axisRightW.value + "px",
+      clipPath: `inset(0 0 0 ${x + g}px)`,
+    },
+  };
+}
 
 // When the magnet turns ON mid-drawing (e.g. Ctrl pressed while the cursor
 // is stationary), re-snap every in-progress anchor immediately — otherwise
@@ -4858,13 +4891,29 @@ onMounted(async () => {
   // the native crosshair is hidden and this one sticks to candle high/low
   // (or to the Shift-snapped trendline end). The last pointer position is
   // kept so the snapped crosshair appears the INSTANT Ctrl or Shift is
-  // held — before any mouse movement.
+  // held — before any mouse movement. Position updates are coalesced to
+  // one per animation frame: high-polling mice fire many pointermove
+  // events per frame and per-event reactive flushes would waste the frame
+  // budget and stall the lines behind fast moves.
+  let xhairPending: { x: number; y: number } | null = null;
+  const flushXhair = () => {
+    xhairRaf = 0;
+    if (!xhairPending) return;
+    computeSnapXhair(xhairPending.x, xhairPending.y);
+    xhairPending = null;
+  };
   const onXhairMove = (e: MouseEvent) => {
     lastPtrClient = { clientX: e.clientX, clientY: e.clientY };
-    computeSnapXhair(e.clientX, e.clientY);
+    xhairPending = { x: e.clientX, y: e.clientY };
+    if (!xhairRaf) xhairRaf = requestAnimationFrame(flushXhair);
   };
   const onXhairLeave = () => {
     lastPtrClient = null;
+    xhairPending = null;
+    if (xhairRaf) {
+      cancelAnimationFrame(xhairRaf);
+      xhairRaf = 0;
+    }
     snapXhair.value = null;
   };
   el.addEventListener("pointermove", onXhairMove);
@@ -5024,6 +5073,10 @@ onBeforeUnmount(() => {
     xhairMoveEl.removeEventListener("pointerleave", xhairLeaveCb!);
   }
   crosshairModeStop?.();
+  if (xhairRaf) {
+    cancelAnimationFrame(xhairRaf);
+    xhairRaf = 0;
+  }
   adapter?.setCrosshairVisible(true);
   if (windowLostCb) {
     window.removeEventListener("blur", windowLostCb);
@@ -5639,11 +5692,11 @@ onBeforeUnmount(() => {
     <template v-if="snapXhair && (shiftSnapping || (drawingToolActive && magnetActive))">
       <div
         class="xhair-line v"
-        :style="{ left: snapXhair.x + 'px', bottom: overlayBottom + 'px' }"
+        :style="{ transform: `translateX(${snapXhair.x - 1}px)`, bottom: overlayBottom + 'px' }"
       ></div>
       <div
         class="xhair-line h"
-        :style="{ top: snapXhair.y + 'px', right: axisRightW + 'px' }"
+        :style="{ transform: `translateY(${snapXhair.y - 1}px)`, right: axisRightW + 'px' }"
       ></div>
       <div
         class="single-price-tag"
@@ -5655,26 +5708,14 @@ onBeforeUnmount(() => {
       >{{ snapXhair.timeText }}</div>
     </template>
 
-    <!-- Default overlay crosshair: four line segments that stop short of the
-         pointer, leaving an empty band where the OS cross cursor sits alone —
-         clearly on top, never swallowed by the lines. -->
+    <!-- Default overlay crosshair: four full-length lines cropped by
+         clip-path to stop short of the pointer, leaving an empty band where
+         the OS cross cursor sits alone — clearly on top, never swallowed. -->
     <template v-else-if="snapXhair">
-      <div
-        class="xhair-line v"
-        :style="{ left: snapXhair.x - 1 + 'px', top: '0px', height: Math.max(0, snapXhair.y - XHAIR_GAP) + 'px' }"
-      ></div>
-      <div
-        class="xhair-line v"
-        :style="{ left: snapXhair.x - 1 + 'px', top: snapXhair.y + XHAIR_GAP + 'px', bottom: overlayBottom + 'px', height: 'auto' }"
-      ></div>
-      <div
-        class="xhair-line h"
-        :style="{ top: snapXhair.y - 1 + 'px', left: '0px', width: Math.max(0, snapXhair.x - XHAIR_GAP) + 'px' }"
-      ></div>
-      <div
-        class="xhair-line h"
-        :style="{ top: snapXhair.y - 1 + 'px', left: snapXhair.x + XHAIR_GAP + 'px', right: axisRightW + 'px', width: 'auto' }"
-      ></div>
+      <div class="xhair-line v" :style="xhairSeg(snapXhair.y, snapXhair.x).vTop"></div>
+      <div class="xhair-line v" :style="xhairSeg(snapXhair.y, snapXhair.x).vBottom"></div>
+      <div class="xhair-line h" :style="xhairSeg(snapXhair.y, snapXhair.x).hLeft"></div>
+      <div class="xhair-line h" :style="xhairSeg(snapXhair.y, snapXhair.x).hRight"></div>
       <div
         class="single-price-tag"
         :style="{ top: snapXhair.y - 9 + 'px', background: '#2962ff' }"
@@ -8031,6 +8072,7 @@ onBeforeUnmount(() => {
   position: absolute;
   z-index: 6;
   pointer-events: none;
+  will-change: transform;
 }
 .xhair-line.v {
   top: 0;
