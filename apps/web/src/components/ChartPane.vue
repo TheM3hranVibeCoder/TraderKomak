@@ -5683,7 +5683,7 @@ onBeforeUnmount(() => {
           v-if="s.kind === 'vline' && !vlineTagDup(s.x)"
           class="single-time-tag"
           :class="{ selected: s.selected }"
-          :style="{ left: s.x + 'px', bottom: Math.max(2, overlayBottom + axisBottomH / 2 - 9) + 'px' }"
+          :style="{ left: s.x + 'px', bottom: Math.max(2, axisBottomH / 2 - 9) + 'px' }"
         >{{ fmtAxisTime(s.time) }}</div>
         <div
           v-else-if="s.selected"
@@ -5711,7 +5711,7 @@ onBeforeUnmount(() => {
       >{{ snapXhair.priceText }}</div>
       <div
         class="single-time-tag"
-        :style="{ left: snapXhair.x + 'px', bottom: Math.max(2, overlayBottom + axisBottomH / 2 - 9) + 'px' }"
+        :style="{ left: snapXhair.x + 'px', bottom: Math.max(2, axisBottomH / 2 - 9) + 'px' }"
       >{{ snapXhair.timeText }}</div>
     </template>
 
@@ -5729,7 +5729,7 @@ onBeforeUnmount(() => {
       >{{ snapXhair.priceText }}</div>
       <div
         class="single-time-tag"
-        :style="{ left: snapXhair.x + 'px', bottom: Math.max(2, overlayBottom + axisBottomH / 2 - 9) + 'px' }"
+        :style="{ left: snapXhair.x + 'px', bottom: Math.max(2, axisBottomH / 2 - 9) + 'px' }"
       >{{ snapXhair.timeText }}</div>
     </template>
 
