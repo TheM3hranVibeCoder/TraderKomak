@@ -1925,10 +1925,16 @@ const shiftSnapping = computed(
     ((!!drawingState.value && drawingsStore.activeTool === "trendline") || !!lineResize.value)
 );
 
+/** Half-size of the empty band around the OS cursor in default mode — the
+ *  crosshair lines stop short of the pointer so the cross stays visible. */
+const XHAIR_GAP = 12;
+
 /** Crosshair state for the current pointer: magnet mode sticks it to the
  *  nearest candle high/low; while Shift-snapping a trendline it sits on the
- *  line's snapped second endpoint. Hoisted to setup scope so both the chart
- *  pointermove listener and the trendline preview move handler drive it. */
+ *  line's snapped second endpoint; in default mode it tracks the raw cursor
+ *  with a gap so the OS cross cursor stays clearly visible on top. Hoisted
+ *  to setup scope so both the chart pointermove listener and the trendline
+ *  preview move handler drive it. */
 const computeSnapXhair = (clientX: number, clientY: number): void => {
   if (!adapter || !containerRef.value) {
     snapXhair.value = null;
@@ -1960,7 +1966,7 @@ const computeSnapXhair = (clientX: number, clientY: number): void => {
     }
     return;
   }
-  if (!drawingToolActive.value || !magnetActive.value) {
+  if (chartDragActive.value) {
     snapXhair.value = null;
     return;
   }
@@ -1972,12 +1978,25 @@ const computeSnapXhair = (clientX: number, clientY: number): void => {
   }
   const t = adapter.xToTime(clientX - r.left);
   const p = adapter.yToPrice(clientY - r.top);
-  const s = t !== null && p !== null ? snapToCandle(t, p, true) : null;
-  const x = s ? adapter.timeToX(s.time) : null;
-  const y = s ? adapter.getPriceY(s.price) : null;
-  snapXhair.value = x !== null && y !== null && s
-    ? { x, y, priceText: fmtPrice(s.price, instrumentPrecision(market.instrument)), timeText: fmtAxisTime(s.time) }
-    : null;
+  if (t === null || p === null) {
+    snapXhair.value = null;
+    return;
+  }
+  if (drawingToolActive.value && magnetActive.value) {
+    const s = snapToCandle(t, p, true);
+    const x = s ? adapter.timeToX(s.time) : null;
+    const y = s ? adapter.getPriceY(s.price) : null;
+    snapXhair.value = x !== null && y !== null && s
+      ? { x, y, priceText: fmtPrice(s.price, instrumentPrecision(market.instrument)), timeText: fmtAxisTime(s.time) }
+      : null;
+    return;
+  }
+  snapXhair.value = {
+    x: clientX - r.left,
+    y: clientY - r.top,
+    priceText: fmtPrice(p, instrumentPrecision(market.instrument)),
+    timeText: fmtAxisTime(t),
+  };
 };
 
 // When the magnet turns ON mid-drawing (e.g. Ctrl pressed while the cursor
@@ -4854,13 +4873,13 @@ onMounted(async () => {
   xhairMoveCb = onXhairMove;
   xhairLeaveCb = onXhairLeave;
 
-  // Swap the native crosshair for the snapping one only while needed
+  // The overlay crosshair replaces the native one EVERYWHERE — the default
+  // mode draws it with a gap at the pointer so the OS cross cursor stays
+  // clearly visible on top of the lines.
   const syncCrosshairMode = () => {
-    const custom =
-      (drawingToolActive.value && magnetActive.value) || shiftSnapping.value || chartDragActive.value;
-    adapter?.setCrosshairVisible(!custom);
-    if (custom && lastPtrClient) computeSnapXhair(lastPtrClient.clientX, lastPtrClient.clientY);
-    else if (!custom) snapXhair.value = null;
+    adapter?.setCrosshairVisible(false);
+    if (lastPtrClient) computeSnapXhair(lastPtrClient.clientX, lastPtrClient.clientY);
+    else snapXhair.value = null;
   };
   syncCrosshairMode();
   crosshairModeStop = watch(
@@ -5625,6 +5644,36 @@ onBeforeUnmount(() => {
       <div
         class="xhair-line h"
         :style="{ top: snapXhair.y + 'px', right: axisRightW + 'px' }"
+      ></div>
+      <div
+        class="single-price-tag"
+        :style="{ top: snapXhair.y - 9 + 'px', background: '#2962ff' }"
+      >{{ snapXhair.priceText }}</div>
+      <div
+        class="single-time-tag"
+        :style="{ left: snapXhair.x + 'px', bottom: Math.max(2, overlayBottom + axisBottomH / 2 - 9) + 'px' }"
+      >{{ snapXhair.timeText }}</div>
+    </template>
+
+    <!-- Default overlay crosshair: four line segments that stop short of the
+         pointer, leaving an empty band where the OS cross cursor sits alone —
+         clearly on top, never swallowed by the lines. -->
+    <template v-else-if="snapXhair">
+      <div
+        class="xhair-line v"
+        :style="{ left: snapXhair.x - 1 + 'px', top: '0px', height: Math.max(0, snapXhair.y - XHAIR_GAP) + 'px' }"
+      ></div>
+      <div
+        class="xhair-line v"
+        :style="{ left: snapXhair.x - 1 + 'px', top: snapXhair.y + XHAIR_GAP + 'px', bottom: overlayBottom + 'px', height: 'auto' }"
+      ></div>
+      <div
+        class="xhair-line h"
+        :style="{ top: snapXhair.y - 1 + 'px', left: '0px', width: Math.max(0, snapXhair.x - XHAIR_GAP) + 'px' }"
+      ></div>
+      <div
+        class="xhair-line h"
+        :style="{ top: snapXhair.y - 1 + 'px', left: snapXhair.x + XHAIR_GAP + 'px', right: axisRightW + 'px', width: 'auto' }"
       ></div>
       <div
         class="single-price-tag"
