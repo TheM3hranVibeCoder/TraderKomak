@@ -8053,7 +8053,10 @@ onBeforeUnmount(() => {
 .single-tag-layer {
   position: absolute;
   inset: 0;
-  z-index: 5;
+  /* Above every internal Lightweight-Charts canvas (series/axis z1-2, pane
+     top canvas z2) — the tags sit ON the scales and must stay readable
+     over the axis tick labels. */
+  z-index: 30;
   pointer-events: none;
 }
 .single-price-tag,
