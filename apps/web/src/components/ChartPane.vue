@@ -8836,4 +8836,65 @@ onBeforeUnmount(() => {
   background: var(--border);
   flex-shrink: 0;
 }
+
+/* ── Phone touch targets: fingers need fat hit areas ────────────────────
+   Desktop aiming is fine with 4px edge strips, 9px line bands and 14px
+   strokes; a finger is not — taps on rectangles/lines kept missing and
+   the edit panel needed several touches to open. Only COARSE pointers
+   (phones/tablets) get enlarged INVISIBLE hit areas; the drawn visuals
+   and desktop geometry are untouched. Bands extend mostly INWARD so the
+   chart between drawings still pans, and the deep interior of an
+   unfilled rectangle stays pan-through. */
+@media (pointer: coarse) {
+  /* Rectangle edges: 4px strips → ~26px bands straddling the border */
+  .rect-edge-hit.top {
+    top: -8px;
+    height: 26px;
+  }
+  .rect-edge-hit.bottom {
+    bottom: -8px;
+    height: 26px;
+  }
+  .rect-edge-hit.left {
+    left: -8px;
+    width: 26px;
+  }
+  .rect-edge-hit.right {
+    right: -8px;
+    width: 26px;
+  }
+  /* Trendline / polyline: 14px → 30px fat transparent stroke */
+  .trend-hit {
+    stroke-width: 30px;
+  }
+  /* Horizontal line / ray / vertical line: inline `top`/`left` position the
+     band, so the enlargement re-centers with transform instead of fighting
+     the inline styles: 9px bands → 28px centered on the drawn line. */
+  .single-hit.hline,
+  .single-hit.hray {
+    height: 28px;
+    transform: translateY(-10px);
+  }
+  .single-hit.vline {
+    width: 28px;
+    transform: translateX(-10px);
+  }
+  /* Position levels/edges (selected-state resize affordances); inline
+     `top`/`left`/`right` stay authoritative — widen and re-center. */
+  .pos-level-hit {
+    height: 26px;
+    transform: translateY(-9px);
+  }
+  .pos-edge-hit {
+    width: 20px;
+  }
+  /* Handles: keep the 8px visual anchor, grow only the invisible grab
+     halo so the corner anchors never shift. */
+  .resize-handle::before {
+    inset: -9px;
+  }
+  .trend-handle {
+    r: 9px;
+  }
+}
 </style>
