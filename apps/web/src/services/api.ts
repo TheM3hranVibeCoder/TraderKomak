@@ -2,9 +2,9 @@
  * Historical candles HTTP client.
  *
  * Routing (candle delivery off the market server):
- *   - Binance symbols → fetched DIRECTLY from Binance by the browser
- *     (binanceDirect.ts, public endpoints; server fallback on geo-block —
- *     a Cloudflare relay is not viable, Binance blocks datacenter IPs).
+ *   - Binance symbols → fetched DIRECTLY by the browser from Binance's
+ *     public endpoints, falling back to HTX/Gate public mirrors when
+ *     Binance geo-blocks the visitor (binanceDirect.ts; never the server).
  *   - OANDA symbols   → DIRECTLY to OANDA's practice API with a practice-account
  *     token from the pool in oandaAccounts.ts (browser CORS is allowed), with the
  *     oanda-proxy Cloudflare Worker as fallback for ISPs that block OANDA.
