@@ -1588,6 +1588,10 @@ let crosshairModeStop: (() => void) | null = null;
 /** Pending crosshair rAF handle (coalesced pointermove updates). */
 let xhairRaf = 0;
 let windowLostCb: (() => void) | null = null;
+let touchHoldDownEl: HTMLElement | null = null;
+let touchHoldDownCb: ((e: PointerEvent) => void) | null = null;
+let touchHoldMoveCb: ((e: PointerEvent) => void) | null = null;
+let touchHoldUpCb: ((e: PointerEvent) => void) | null = null;
 // addEventListener requires EventListener, not a specific MouseEvent handler
 type AnyListener = EventListener;
 const countdown = ref("");
@@ -1937,6 +1941,21 @@ const XHAIR_GAP = 12;
  *  the crosshair there — clicks on them can no longer light it up. */
 const pointerInChart = ref(false);
 
+/* Touch crosshair gate — on phones the overlay crosshair must only show
+ * while the finger is pressed AND held (TradingView-style long-press),
+ * never while panning, and it must vanish on release. `touchXhairLive` is
+ * true for the whole gesture (any finger on the chart surface);
+ * `touchXhairHold` flips on once a hold timer fires without pan-scale
+ * movement. Mice bypass this entirely — hover shows the crosshair as
+ * before. Drawing tools bypass it too: their strokes start at pointerdown
+ * and are not pans. */
+const touchXhairLive = ref(false);
+const touchXhairHold = ref(false);
+let touchHoldTimer: ReturnType<typeof setTimeout> | null = null;
+let touchHoldStart: { x: number; y: number } | null = null;
+let touchLast: { x: number; y: number } | null = null;
+let touchPointers = 0;
+
 /** Crosshair state for the current pointer: magnet mode sticks it to the
  *  nearest candle high/low; while Shift-snapping a trendline it sits on the
  *  line's snapped second endpoint; in default mode it tracks the raw cursor
@@ -1974,7 +1993,13 @@ const computeSnapXhair = (clientX: number, clientY: number): void => {
     }
     return;
   }
-  if (!pointerInChart.value || chartDragActive.value) {
+  // Touch gate: while fingers are on the chart the crosshair only draws
+  // once the press has qualified as a hold — never during a pan.
+  if (
+    !pointerInChart.value ||
+    chartDragActive.value ||
+    (touchXhairLive.value && !touchXhairHold.value && !drawingToolActive.value)
+  ) {
     snapXhair.value = null;
     return;
   }
@@ -4766,6 +4791,74 @@ onMounted(async () => {
   tapDownCb = onTapDown;
   tapUpCb = onTapUp;
 
+  // Touch crosshair hold: panning must never light the crosshair — only a
+  // press-and-hold does (TradingView-style), and it disappears again on
+  // release. A hold that then drags keeps the crosshair riding the finger;
+  // drift beyond the slack before the timer fires cancels it (that was a
+  // pan); a second finger (pinch-zoom) cancels it too.
+  const XHAIR_HOLD_MS = 350;
+  const XHAIR_HOLD_SLACK = 10; // px of drift still counted as a hold
+  const cancelTouchHold = () => {
+    if (touchHoldTimer) {
+      clearTimeout(touchHoldTimer);
+      touchHoldTimer = null;
+    }
+    touchXhairHold.value = false;
+  };
+  const onTouchHoldDown = (e: PointerEvent) => {
+    if (e.pointerType === "mouse") return;
+    touchPointers++;
+    if (touchPointers > 1) {
+      cancelTouchHold();
+      return;
+    }
+    touchHoldStart = { x: e.clientX, y: e.clientY };
+    touchLast = { ...touchHoldStart };
+    touchXhairLive.value = true;
+    touchXhairHold.value = false;
+    touchHoldTimer = setTimeout(() => {
+      touchHoldTimer = null;
+      if (!touchXhairLive.value || !touchLast) return;
+      // A stationary touch generates no pointermove — drive the crosshair
+      // to the held position directly.
+      touchXhairHold.value = true;
+      pointerInChart.value = true;
+      computeSnapXhair(touchLast.x, touchLast.y);
+    }, XHAIR_HOLD_MS);
+  };
+  const onTouchHoldMove = (e: PointerEvent) => {
+    if (e.pointerType === "mouse") return;
+    touchLast = { x: e.clientX, y: e.clientY };
+    if (
+      touchHoldTimer &&
+      touchHoldStart &&
+      Math.hypot(e.clientX - touchHoldStart.x, e.clientY - touchHoldStart.y) > XHAIR_HOLD_SLACK
+    ) {
+      cancelTouchHold(); // moving before the hold fires = pan
+    }
+  };
+  const onTouchHoldUp = (e: PointerEvent) => {
+    if (e.pointerType === "mouse") return;
+    touchPointers = Math.max(0, touchPointers - 1);
+    if (touchPointers > 0) return; // pinch still in progress
+    cancelTouchHold();
+    touchHoldStart = null;
+    touchXhairLive.value = false;
+    // Deterministic hide on release — drawing interactions manage their
+    // own crosshair (magnet snapping), so leave those alone.
+    if (!drawingToolActive.value && !shiftSnapping.value) {
+      snapXhair.value = null;
+    }
+  };
+  el.addEventListener("pointerdown", onTouchHoldDown, true);
+  el.addEventListener("pointermove", onTouchHoldMove, true);
+  window.addEventListener("pointerup", onTouchHoldUp, true);
+  window.addEventListener("pointercancel", onTouchHoldUp, true);
+  touchHoldDownEl = el;
+  touchHoldDownCb = onTouchHoldDown;
+  touchHoldMoveCb = onTouchHoldMove;
+  touchHoldUpCb = onTouchHoldUp;
+
   // Double-click finishes an in-progress polyline (TradingView-style);
   // the second press of the double-click adds no vertex (see handlePolyClick).
   const onChartDblClick = (e: MouseEvent) => {
@@ -5007,6 +5100,14 @@ onMounted(async () => {
   const onWindowLost = () => {
     cancelDraw();
     chartDragActive.value = false;
+    touchPointers = 0;
+    touchHoldStart = null;
+    touchXhairLive.value = false;
+    if (touchHoldTimer) {
+      clearTimeout(touchHoldTimer);
+      touchHoldTimer = null;
+    }
+    touchXhairHold.value = false;
   };
   window.addEventListener("blur", onWindowLost);
   window.addEventListener("pointercancel", onWindowLost as AnyListener);
@@ -5125,6 +5226,18 @@ onBeforeUnmount(() => {
   if (xhairMoveEl && xhairMoveCb) {
     xhairMoveEl.removeEventListener("pointermove", xhairMoveCb);
     xhairMoveEl.removeEventListener("pointerleave", xhairLeaveCb!);
+  }
+  if (touchHoldDownEl && touchHoldDownCb) {
+    touchHoldDownEl.removeEventListener("pointerdown", touchHoldDownCb, true);
+    touchHoldDownEl.removeEventListener("pointermove", touchHoldMoveCb!, true);
+  }
+  if (touchHoldUpCb) {
+    window.removeEventListener("pointerup", touchHoldUpCb, true);
+    window.removeEventListener("pointercancel", touchHoldUpCb, true);
+  }
+  if (touchHoldTimer) {
+    clearTimeout(touchHoldTimer);
+    touchHoldTimer = null;
   }
   crosshairModeStop?.();
   if (xhairRaf) {
