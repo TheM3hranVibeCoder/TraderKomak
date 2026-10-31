@@ -19,6 +19,7 @@ import {
   CandlestickSeries,
   LineSeries,
   TickMarkType,
+  TrackingModeExitMode,
 } from "lightweight-charts";
 import type { Candle } from "@traderkomak/shared";
 import { instrumentPrecision } from "@traderkomak/shared";
@@ -227,6 +228,15 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
       mode: CrosshairMode.Hidden,
       vertLine: { color: "rgba(117, 134, 150, 0.75)", width: 2, style: LineStyle.Dashed, labelBackgroundColor: "#2962ff" },
       horzLine: { color: "rgba(117, 134, 150, 0.75)", width: 2, style: LineStyle.Dashed, labelBackgroundColor: "#2962ff" },
+    },
+    trackingMode: {
+      // LWC's native long-press (240ms) starts crosshair "tracking mode",
+      // which by default (OnNextTap) survives the release and STEALS the
+      // next drag — the chart won't pan until a tap dismisses it. Since
+      // the native crosshair is hidden anyway, tracking delivers nothing,
+      // so exit it on every touch end; the touch-hold crosshair UX lives
+      // in ChartPane (touchXhairHold gate on the overlay crosshair).
+      exitMode: TrackingModeExitMode.OnTouchEnd,
     },
     rightPriceScale: {
       visible: true,
