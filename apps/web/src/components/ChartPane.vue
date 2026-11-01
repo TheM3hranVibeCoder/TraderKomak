@@ -2039,6 +2039,22 @@ function vlineTagDup(x: number): boolean {
   return cx !== undefined && Math.abs(cx - x) < 40;
 }
 
+/** Replay twin of vlineTagDup, on the price scale: after the cut the green
+ *  replay tag owns the scale slot at the cut price, and the cursor usually
+ *  rests right on the last cut candle — the crosshair's blue price pill
+ *  would stack on the tag showing the same number twice. The pill hides
+ *  while it overlaps the tag's slot; away from it the pill keeps its
+ *  normal hovered-price readout. */
+const xhairPriceTagDup = computed(() => {
+  if (!replay.active || replay.picking) return false;
+  const tag = replayTag.value;
+  const xh = snapXhair.value;
+  if (!tag || !xh) return false;
+  // Pill top sits at y-9, the tag's at tag.y (already offset +label/2+1):
+  // within 24px of the tag anchor the two collide on the scale.
+  return Math.abs(xh.y - tag.y) < 24;
+});
+
 /** Styles for the four default-crosshair segments. Each is a full-length
  *  line placed with transform and cropped with clip-path — paint-only
  *  updates (no layout/reflow) so fast cursor moves never stall the lines
@@ -5849,6 +5865,7 @@ onBeforeUnmount(() => {
             :style="{ transform: `translateY(${paneRect.top + snapXhair.y - 1}px)`, left: paneRect.left + 'px', right: innerW - paneRect.right + axisRightW + 'px' }"
           ></div>
           <div
+            v-if="!xhairPriceTagDup"
             class="single-price-tag"
             :style="{ top: paneRect.top + snapXhair.y - 9 + 'px', right: innerW - paneRect.right + 'px', background: '#2962ff' }"
           >{{ snapXhair.priceText }}</div>
@@ -5868,6 +5885,7 @@ onBeforeUnmount(() => {
           <div class="xhair-line h" :style="xhairSeg(snapXhair.y, snapXhair.x).hLeft"></div>
           <div class="xhair-line h" :style="xhairSeg(snapXhair.y, snapXhair.x).hRight"></div>
           <div
+            v-if="!xhairPriceTagDup"
             class="single-price-tag"
             :style="{ top: paneRect.top + snapXhair.y - 9 + 'px', right: innerW - paneRect.right + 'px', background: '#2962ff' }"
           >{{ snapXhair.priceText }}</div>
