@@ -1967,6 +1967,13 @@ const computeSnapXhair = (clientX: number, clientY: number): void => {
     snapXhair.value = null;
     return;
   }
+  // Picking the replay cut: the amber line is the pointer's echo — the
+  // crosshair (v/h lines + price/time tags) would only clutter it. The
+  // crosshair comes back the moment the cut is made.
+  if (replay.active && replay.picking) {
+    snapXhair.value = null;
+    return;
+  }
   if (shiftSnapping.value) {
     const lr = lineResize.value;
     const d = drawingState.value;
@@ -2038,22 +2045,6 @@ function vlineTagDup(x: number): boolean {
   const cx = snapXhair.value?.x;
   return cx !== undefined && Math.abs(cx - x) < 40;
 }
-
-/** Replay twin of vlineTagDup, on the price scale: after the cut the green
- *  replay tag owns the scale slot at the cut price, and the cursor usually
- *  rests right on the last cut candle — the crosshair's blue price pill
- *  would stack on the tag showing the same number twice. The pill hides
- *  while it overlaps the tag's slot; away from it the pill keeps its
- *  normal hovered-price readout. */
-const xhairPriceTagDup = computed(() => {
-  if (!replay.active || replay.picking) return false;
-  const tag = replayTag.value;
-  const xh = snapXhair.value;
-  if (!tag || !xh) return false;
-  // Pill top sits at y-9, the tag's at tag.y (already offset +label/2+1):
-  // within 24px of the tag anchor the two collide on the scale.
-  return Math.abs(xh.y - tag.y) < 24;
-});
 
 /** Styles for the four default-crosshair segments. Each is a full-length
  *  line placed with transform and cropped with clip-path — paint-only
@@ -5865,7 +5856,6 @@ onBeforeUnmount(() => {
             :style="{ transform: `translateY(${paneRect.top + snapXhair.y - 1}px)`, left: paneRect.left + 'px', right: innerW - paneRect.right + axisRightW + 'px' }"
           ></div>
           <div
-            v-if="!xhairPriceTagDup"
             class="single-price-tag"
             :style="{ top: paneRect.top + snapXhair.y - 9 + 'px', right: innerW - paneRect.right + 'px', background: '#2962ff' }"
           >{{ snapXhair.priceText }}</div>
@@ -5885,7 +5875,6 @@ onBeforeUnmount(() => {
           <div class="xhair-line h" :style="xhairSeg(snapXhair.y, snapXhair.x).hLeft"></div>
           <div class="xhair-line h" :style="xhairSeg(snapXhair.y, snapXhair.x).hRight"></div>
           <div
-            v-if="!xhairPriceTagDup"
             class="single-price-tag"
             :style="{ top: paneRect.top + snapXhair.y - 9 + 'px', right: innerW - paneRect.right + 'px', background: '#2962ff' }"
           >{{ snapXhair.priceText }}</div>
@@ -8378,6 +8367,10 @@ onBeforeUnmount(() => {
 .replay-price-tag {
   position: absolute;
   right: 0;
+  /* Above LWC's canvases (series 1, crosshair 2) — like the countdown
+     .axis-tag (5): the badge's solid background must paint OVER the axis
+     text, or the black gridline prices show through it on the scale. */
+  z-index: 5;
   background: #26a69a;
   color: #fff;
   font-size: 11px;
