@@ -6,7 +6,7 @@
 import { ref, watch } from "vue";
 import { isInstrument, isTimeframe } from "@traderkomak/shared";
 import type { Timeframe } from "@traderkomak/shared";
-import { supabase, supabaseReady } from "./supabase";
+import { supabase, supabaseReady, SUPABASE_URL, SUPABASE_ANON_KEY, getAccessTokenSync } from "./supabase";
 import { useAuthStore } from "@/stores/auth";
 import { useWatchlistStore } from "@/stores/watchlist";
 import { useDrawingsStore } from "@/stores/drawings";
@@ -180,19 +180,56 @@ function snapshot(): CloudData {
   };
 }
 
-async function push(userId: string, retried = false): Promise<void> {
-  const payload = snapshot();
-  const stamp = new Date().toISOString();
-  const { error } = await supabase()
+/** Consecutive failed pushes — indexes PUSH_RETRY_DELAYS_MS and resets on
+ *  success, so a flaky link gets a bounded second/third/fourth chance instead
+ *  of silently dropping the change (a stale cloud row then wins on the next
+ *  boot and reverts what the user did). */
+let pushFailures = 0;
+const PUSH_RETRY_DELAYS_MS = [3_000, 8_000, 20_000];
+
+function isAuthError(error: { message?: string; code?: string }): boolean {
+  // PGRST301 = PostgREST "JWT expired"; the message test also covers the
+  // 401/403 wording variants supabase-js surfaces for a dead token.
+  return error.code === "PGRST301" || /jwt|401|403|expired/i.test(error.message ?? "");
+}
+
+async function pushOnce(userId: string, payload: CloudData, stamp: string): Promise<{ error: { message?: string; code?: string } | null }> {
+  return supabase()
     .from("user_settings")
     .upsert({ user_id: userId, data: payload, updated_at: stamp });
+}
+
+async function push(userId: string): Promise<void> {
+  const payload = snapshot();
+  const stamp = new Date().toISOString();
+  let { error } = await pushOnce(userId, payload, stamp);
+  // An access token left expired by a throttled background tab (browsers
+  // pause the refresh timers — the reported "drawings stop saving after an
+  // hour") reads as a JWT error: refresh once and retry NOW instead of
+  // burning the backoff on a second 401.
+  if (error && isAuthError(error)) {
+    try { await supabase().auth.refreshSession(); } catch {}
+    ({ error } = await pushOnce(userId, payload, stamp));
+  }
   if (error) {
     console.error("cloud push failed", error);
-    // One quiet retry — flaky links drop the upsert, and a stale cloud row
-    // would otherwise win on the next boot.
-    if (!retried) setTimeout(() => { void push(userId, true); }, 3000);
+    const delay = PUSH_RETRY_DELAYS_MS[pushFailures];
+    if (delay !== undefined) {
+      pushFailures++;
+      setTimeout(() => {
+        // A sign-out (or account switch) while the retry waits must not
+        // write into the previous account's row.
+        const auth = useAuthStore();
+        if (auth.status !== "ready" || auth.userId !== userId) {
+          pushFailures = 0;
+          return;
+        }
+        void push(userId);
+      }, delay);
+    }
     return;
   }
+  pushFailures = 0;
   // Confirmed: everything local up to this stamp is now safely in the cloud.
   try { localStorage.setItem(SYNCED_AT_KEY, String(Date.parse(stamp))); } catch {}
 }
@@ -206,6 +243,62 @@ function schedulePush(userId: string): void {
     pushTimer = null;
     void push(userId);
   }, PUSH_DEBOUNCE_MS);
+}
+
+/** Fire-and-forget upsert with fetch keepalive — the ONLY way a pending
+ *  change reaches the cloud when the tab is closing or the app is being
+ *  backgrounded (the debounced push dies with the page; iOS also suspends
+ *  background timers before the debounce fires). Deliberately does NOT set
+ *  SYNCED_AT_KEY: keepalive delivery is not confirmable, and a false
+ *  "synced" stamp would disable the boot-time local-wins heal that recovers
+ *  a lost flush. */
+function flushPendingNow(userId: string): void {
+  try {
+    if (applying) return; // mid-restore snapshot would be half-applied
+    const localAt = Number(localStorage.getItem(LOCAL_CHANGE_KEY)) || 0;
+    const syncedAt = Number(localStorage.getItem(SYNCED_AT_KEY)) || 0;
+    const pending = pushTimer !== null || localAt > syncedAt;
+    if (!pending) return;
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
+    const token = getAccessTokenSync();
+    if (!token) return;
+    const stamp = new Date().toISOString();
+    void fetch(`${SUPABASE_URL}/rest/v1/user_settings?on_conflict=user_id`, {
+      method: "POST",
+      keepalive: true,
+      headers: {
+        "Content-Type": "application/json",
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${token}`,
+        Prefer: "resolution=merge-duplicates,return=minimal",
+      },
+      body: JSON.stringify({ user_id: userId, data: snapshot(), updated_at: stamp }),
+    }).catch(() => {});
+  } catch {}
+}
+
+let lastFreshCheckAt = 0;
+
+/** Coming back to a tab that was backgrounded: browsers throttle the token
+ *  refresh timers, so the access token may sit expired until the next call
+ *  fails. Refresh if it is (near-)expired, then re-push anything an earlier
+ *  attempt dropped. */
+function recoverAfterBackground(userId: string): void {
+  void (async () => {
+    try {
+      if (Date.now() - lastFreshCheckAt > 60_000) {
+        lastFreshCheckAt = Date.now();
+        const { data } = await supabase().auth.getSession();
+        const exp = typeof data.session?.expires_at === "number" ? data.session.expires_at * 1000 : 0;
+        if (exp && exp - Date.now() < 5 * 60_000) await supabase().auth.refreshSession();
+      }
+    } catch {}
+    let localAt = 0;
+    let syncedAt = 0;
+    try { localAt = Number(localStorage.getItem(LOCAL_CHANGE_KEY)) || 0; } catch {}
+    try { syncedAt = Number(localStorage.getItem(SYNCED_AT_KEY)) || 0; } catch {}
+    if (localAt > syncedAt) void push(userId);
+  })();
 }
 
 /** Phase 1 — the account's LOOK: light/dark + chart colors and templates.
@@ -234,8 +327,86 @@ function applyLook(cloud: CloudData): void {
   }
 }
 
-function applyLocal(cloud: CloudData): void {
+/** Deep copy of every drawing list in the store — taken just before the
+ *  cloud row replaces them, so drawings the user made while the row was
+ *  still in flight can be merged back instead of being wiped. */
+interface LocalDrawingsSnapshot {
+  rects: Record<string, { id: string }[]>;
+  lines: Record<string, { id: string }[]>;
+  polys: Record<string, { id: string }[]>;
+  positions: Record<string, { id: string }[]>;
+  singles: Record<string, Record<string, { id: string }[]>>;
+}
+
+function snapshotLocalDrawings(): LocalDrawingsSnapshot {
+  const d = useDrawingsStore();
+  return {
+    rects: JSON.parse(JSON.stringify(d.drawings)),
+    lines: JSON.parse(JSON.stringify(d.lines)),
+    polys: JSON.parse(JSON.stringify(d.polys)),
+    positions: JSON.parse(JSON.stringify(d.positions)),
+    singles: JSON.parse(JSON.stringify(d.singles)),
+  };
+}
+
+/** Union by id: the cloud row wins for ids it already knows; anything that
+ *  exists ONLY in the local state (drawn while the row was fetching) is
+ *  appended. Drawing ids are unique per creation (timestamp + random), so
+ *  two devices can never legitimately hold DIFFERENT versions of one id —
+ *  a plain union is safe. Tradeoff: a drawing deleted during the fetch
+ *  window comes back; that beats losing a just-drawn one. Returns how many
+ *  local-only items were merged so the caller can push the union up. */
+function rescueById<T extends { id: string }>(
+  cloud: Record<string, T[]> | null | undefined,
+  localBefore: Record<string, T[]> | null | undefined
+): { merged: Record<string, T[]>; added: number } {
+  const merged: Record<string, T[]> = {};
+  const seen = new Set<string>();
+  if (cloud && typeof cloud === "object") {
+    for (const [symbol, list] of Object.entries(cloud)) {
+      if (!Array.isArray(list)) continue;
+      const target = (merged[symbol] ??= []);
+      for (const item of list) {
+        if (!item || typeof item.id !== "string" || seen.has(item.id)) continue;
+        seen.add(item.id);
+        target.push(item);
+      }
+    }
+  }
+  let added = 0;
+  if (localBefore && typeof localBefore === "object") {
+    for (const [symbol, list] of Object.entries(localBefore)) {
+      if (!Array.isArray(list)) continue;
+      for (const item of list) {
+        if (!item || typeof item.id !== "string" || seen.has(item.id)) continue;
+        seen.add(item.id);
+        (merged[symbol] ??= []).push(item);
+        added++;
+      }
+    }
+  }
+  return { merged, added };
+}
+
+function rescueSingles(
+  cloud: Record<string, Record<string, { id: string }[]>> | null | undefined,
+  localBefore: Record<string, Record<string, { id: string }[]>> | null | undefined
+): { merged: Record<string, Record<string, { id: string }[]>>; added: number } {
+  const merged: Record<string, Record<string, { id: string }[]>> = {};
+  let added = 0;
+  for (const kind of ["hline", "hray", "vline"]) {
+    const r = rescueById(cloud?.[kind], localBefore?.[kind]);
+    merged[kind] = r.merged;
+    added += r.added;
+  }
+  return { merged, added };
+}
+
+/** Returns how many local-only drawings were rescued into the merged state
+ *  (0 on a normal restore). */
+function applyLocal(cloud: CloudData, localBefore?: LocalDrawingsSnapshot): number {
   applying = true;
+  let rescued = 0;
   try {
     const d = useDrawingsStore();
     const w = useWatchlistStore();
@@ -254,11 +425,32 @@ function applyLocal(cloud: CloudData): void {
 
     if (cloud.drawings && typeof cloud.drawings === "object") {
       const src = cloud.drawings;
-      if (src.rects && typeof src.rects === "object") d.drawings = src.rects as typeof d.drawings;
-      if (src.lines && typeof src.lines === "object") d.lines = src.lines as typeof d.lines;
-      if (src.polys && typeof src.polys === "object") d.polys = src.polys as typeof d.polys;
-      if (src.positions && typeof src.positions === "object") d.positions = src.positions as typeof d.positions;
-      if (src.singles && typeof src.singles === "object") d.singles = src.singles as typeof d.singles;
+      const before = localBefore ?? snapshotLocalDrawings();
+      if (src.rects && typeof src.rects === "object") {
+        const r = rescueById(src.rects as typeof before.rects, before.rects);
+        d.drawings = r.merged as typeof d.drawings;
+        rescued += r.added;
+      }
+      if (src.lines && typeof src.lines === "object") {
+        const r = rescueById(src.lines as typeof before.lines, before.lines);
+        d.lines = r.merged as typeof d.lines;
+        rescued += r.added;
+      }
+      if (src.polys && typeof src.polys === "object") {
+        const r = rescueById(src.polys as typeof before.polys, before.polys);
+        d.polys = r.merged as typeof d.polys;
+        rescued += r.added;
+      }
+      if (src.positions && typeof src.positions === "object") {
+        const r = rescueById(src.positions as typeof before.positions, before.positions);
+        d.positions = r.merged as typeof d.positions;
+        rescued += r.added;
+      }
+      if (src.singles && typeof src.singles === "object") {
+        const r = rescueSingles(src.singles as typeof before.singles, before.singles);
+        d.singles = r.merged as typeof d.singles;
+        rescued += r.added;
+      }
       // The store keeps its persist helpers private — write the same
       // localStorage keys directly so a refresh keeps the cloud state.
       try {
@@ -286,6 +478,7 @@ function applyLocal(cloud: CloudData): void {
         void m.setTimeframe(cloud.timeframe as Timeframe);
       }
     }
+    return rescued;
   } finally {
     // Let the watchers we just triggered settle before re-enabling pushes.
     setTimeout(() => (applying = false), 100);
@@ -366,118 +559,168 @@ export function startCloudSync(): void {
       // in the default colors and only then hides when the row lands — the
       // "chart appears, disappears, appears again" flicker.
       if (accountCacheIsEmpty()) beginRestore();
-      const sb = supabase();
-      const { data, error } = await sb
-        .from("user_settings")
-        .select("data, updated_at")
-        .eq("user_id", userId)
-        .maybeSingle();
-      if (error) {
-        console.error("cloud load failed", error);
-        applying = false;
-        endRestore();
-        return;
-      }
-      if (data?.data && typeof data.data === "object") {
-        // Last-write-wins WITHOUT cross-device clock comparison: pushes fail
-        // silently on flaky links, so the cloud row can be OLDER than this
-        // device's state (it reverted timeframe/indicators after refresh).
-        // If anything changed locally after the last CONFIRMED sync, local
-        // is definitively newer — keep it and heal the cloud row. Otherwise
-        // the cloud row already contains every local change: apply it.
-        let localAt = 0;
-        let syncedAt = 0;
-        try { localAt = Number(localStorage.getItem(LOCAL_CHANGE_KEY)) || 0; } catch {}
-        try { syncedAt = Number(localStorage.getItem(SYNCED_AT_KEY)) || 0; } catch {}
-        if (!syncedAt && typeof data.updated_at === "string") {
-          // First boot after this update: baseline from the row itself so
-          // existing users don't shove an old local snapshot over a newer
-          // cloud row once.
-          syncedAt = Date.parse(data.updated_at) || 0;
-        }
-        if (!forceApply && localAt > syncedAt) {
-          // Local wins and is already on screen: nothing to wait for.
-          endRestore();
-          await push(userId);
-          return;
-        }
-        // The apply churns the chart (indicator series add/remove → pane
-        // rebuilds, drawings replaced). Landing it during the chart's
-        // initial layout/resize window crashed LWC's render loop ("Value
-        // is null") — defer until the chart has fully settled.
-        // Colors and light/dark land NOW (recolour only, never a pane
-        // rebuild), so the account's saved look appears as soon as its row
-        // arrives instead of after the settle delay. The change-guard is held
-        // across both phases so nothing pushes half-restored state upstream.
-        let changesBefore = 0;
-        try { changesBefore = Number(localStorage.getItem(LOCAL_CHANGE_KEY)) || 0; } catch {}
-        // Nothing to change visually (e.g. a brand-new account whose setup is
-        // all defaults): the chart already on screen is correct — show it now.
-        if (!lookDiffers(data.data as CloudData)) endRestore();
-        applying = true;
-        applyLook(data.data as CloudData);
-        await new Promise((r) => setTimeout(r, 1500));
-        if (auth.status !== "ready" || activeUserId !== userId) {
+
+      const stillActive = (): boolean => auth.status === "ready" && activeUserId === userId;
+
+      /** Register the push watchers + unload listeners ONCE per activation.
+       *  EVERY path below ends here — a failed cloud fetch or a "local wins"
+       *  boot previously RETURNED before this point, leaving the whole
+       *  session without any sync: edits still reached localStorage but were
+       *  never pushed, so other devices never saw them. */
+      const registerWatchers = (): void => {
+        const d = useDrawingsStore();
+        const w = useWatchlistStore();
+        const m = useMarketStore();
+        const ind = useIndicatorsStore();
+        const onChange = () => {
+          if (applying) return;
+          schedulePush(userId);
+        };
+        stops.push(
+          watch(() => [d.drawings, d.lines, d.polys, d.positions, d.singles], onChange, { deep: true }),
+          watch(() => [...w.instruments], onChange),
+          watch(() => [m.instrument, m.timeframe], onChange),
+          // Light/dark is part of the account's setup: a toggle pushes it so the
+          // other devices restore the same look.
+          watch(() => useThemeStore().theme, onChange),
+          watch(() => ind.addedMap, onChange, { deep: true }),
+          watch(
+            () => [
+              ind.sessionsVisible, ind.sessionsLabels, ind.sessionsEnabled, ind.defs, ind.customs,
+              ind.rsiVisible, ind.rsiLength, ind.rsiColor, ind.rsiLevelColor, ind.rsiUpper, ind.rsiLower,
+              ind.smaVisible, ind.smaLength, ind.smaColor, ind.emaVisible, ind.emaLength, ind.emaColor,
+            ],
+            onChange,
+            { deep: true }
+          )
+        );
+        const onLocalChange = () => {
+          if (applying) return;
+          schedulePush(userId);
+        };
+        window.addEventListener("tk-local-change", onLocalChange as EventListener);
+        stops.push(() => window.removeEventListener("tk-local-change", onLocalChange as EventListener));
+        // Tab hidden / closed / app backgrounded: the debounced push dies with
+        // the page (and iOS suspends background timers before it fires), so
+        // flush the pending change with a keepalive fetch instead. Coming
+        // BACK to a backgrounded tab: the token may have sat expired (the
+        // "drawings stop saving after an hour" report) — refresh it and
+        // re-push anything an earlier attempt dropped.
+        const onVisibility = () => {
+          if (document.visibilityState === "hidden") flushPendingNow(userId);
+          else recoverAfterBackground(userId);
+        };
+        const onPageHide = () => flushPendingNow(userId);
+        const onOnline = () => recoverAfterBackground(userId);
+        document.addEventListener("visibilitychange", onVisibility);
+        window.addEventListener("pagehide", onPageHide);
+        window.addEventListener("online", onOnline);
+        stops.push(
+          () => document.removeEventListener("visibilitychange", onVisibility),
+          () => window.removeEventListener("pagehide", onPageHide),
+          () => window.removeEventListener("online", onOnline)
+        );
+      };
+
+      /** Fetch the account's row and apply it. Returns false ONLY on a fetch
+       *  error so the caller can schedule exactly one quiet retry. */
+      const fetchAndApply = async (): Promise<boolean> => {
+        const sb = supabase();
+        const { data, error } = await sb
+          .from("user_settings")
+          .select("data, updated_at")
+          .eq("user_id", userId)
+          .maybeSingle();
+        if (error) {
+          console.error("cloud load failed", error);
           applying = false;
           endRestore();
-          return;
+          return false;
         }
-        applyLocal(data.data as CloudData);
-        // Anything the user touched while the restore was landing never made
-        // it into the cloud row: push it once the guard releases.
-        let changesAfter = 0;
-        try { changesAfter = Number(localStorage.getItem(LOCAL_CHANGE_KEY)) || 0; } catch {}
-        if (changesAfter !== changesBefore) schedulePush(userId);
-        endRestore();
-      } else {
-        // First login for this account — seed the cloud with local state.
-        await push(userId);
-        // A forced switch holds the change-guard while the cloud row lands;
-        // the seed push above already stored the defaults, so release it or
-        // every later edit of this account would be blocked from syncing.
-        // A brand-new account has nothing to restore: the defaults already on
-        // screen ARE its setup. Reveal before the seed push finishes.
-        endRestore();
-        if (forceApply) applying = false;
-      }
+        if (data?.data && typeof data.data === "object") {
+          // Last-write-wins WITHOUT cross-device clock comparison: pushes fail
+          // silently on flaky links, so the cloud row can be OLDER than this
+          // device's state (it reverted timeframe/indicators after refresh).
+          // If anything changed locally after the last CONFIRMED sync, local
+          // is definitively newer — keep it and heal the cloud row. Otherwise
+          // the cloud row already contains every local change: apply it.
+          let localAt = 0;
+          let syncedAt = 0;
+          try { localAt = Number(localStorage.getItem(LOCAL_CHANGE_KEY)) || 0; } catch {}
+          try { syncedAt = Number(localStorage.getItem(SYNCED_AT_KEY)) || 0; } catch {}
+          if (!syncedAt && typeof data.updated_at === "string") {
+            // First boot after this update: baseline from the row itself so
+            // existing users don't shove an old local snapshot over a newer
+            // cloud row once.
+            syncedAt = Date.parse(data.updated_at) || 0;
+          }
+          if (!forceApply && localAt > syncedAt) {
+            // Local wins and is already on screen: nothing to wait for.
+            endRestore();
+            await push(userId);
+            return true;
+          }
+          // The apply churns the chart (indicator series add/remove → pane
+          // rebuilds, drawings replaced). Landing it during the chart's
+          // initial layout/resize window crashed LWC's render loop ("Value
+          // is null") — defer until the chart has fully settled.
+          // Colors and light/dark land NOW (recolour only, never a pane
+          // rebuild), so the account's saved look appears as soon as its row
+          // arrives instead of after the settle delay. The change-guard is held
+          // across both phases so nothing pushes half-restored state upstream.
+          let changesBefore = 0;
+          try { changesBefore = Number(localStorage.getItem(LOCAL_CHANGE_KEY)) || 0; } catch {}
+          // Nothing to change visually (e.g. a brand-new account whose setup is
+          // all defaults): the chart already on screen is correct — show it now.
+          if (!lookDiffers(data.data as CloudData)) endRestore();
+          applying = true;
+          applyLook(data.data as CloudData);
+          await new Promise((r) => setTimeout(r, 1500));
+          if (!stillActive()) {
+            applying = false;
+            endRestore();
+            return true;
+          }
+          // Snapshot the local drawings BEFORE the row replaces them: anything
+          // the user drew while the fetch (or the settle wait) was still in
+          // flight exists only here — the union-merge inside applyLocal puts
+          // those back instead of wiping them.
+          const localDrawingsBefore = snapshotLocalDrawings();
+          const rescued = applyLocal(data.data as CloudData, localDrawingsBefore);
+          // Anything the user touched while the restore was landing never made
+          // it into the cloud row — and neither did rescued in-flight drawings:
+          // push the merged state once the guard releases.
+          let changesAfter = 0;
+          try { changesAfter = Number(localStorage.getItem(LOCAL_CHANGE_KEY)) || 0; } catch {}
+          if (changesAfter !== changesBefore || rescued > 0) schedulePush(userId);
+          endRestore();
+        } else {
+          // First login for this account — seed the cloud with local state.
+          await push(userId);
+          // A forced switch holds the change-guard while the cloud row lands;
+          // the seed push above already stored the defaults, so release it or
+          // every later edit of this account would be blocked from syncing.
+          // A brand-new account has nothing to restore: the defaults already on
+          // screen ARE its setup. Reveal before the seed push finishes.
+          endRestore();
+          if (forceApply) applying = false;
+        }
+        return true;
+      };
 
-      // Push subsequent local changes (debounced), skipping our own apply.
-      // Every watcher/listener is registered HERE (inside the ready effect)
-      // and torn down when auth leaves "ready" — re-logins must not stack
-      // duplicate watchers, and a signed-out browser must never push edits
-      // into the previous account's cloud row.
-      const d = useDrawingsStore();
-      const w = useWatchlistStore();
-      const m = useMarketStore();
-      const ind = useIndicatorsStore();
-      const onChange = () => {
-        if (applying) return;
-        schedulePush(userId);
-      };
-      stops.push(
-        watch(() => [d.drawings, d.lines, d.polys, d.positions, d.singles], onChange, { deep: true }),
-        watch(() => [...w.instruments], onChange),
-        watch(() => [m.instrument, m.timeframe], onChange),
-        // Light/dark is part of the account's setup: a toggle pushes it so the
-        // other devices restore the same look.
-        watch(() => useThemeStore().theme, onChange),
-        watch(() => ind.addedMap, onChange, { deep: true }),
-        watch(
-          () => [
-            ind.sessionsVisible, ind.sessionsLabels, ind.sessionsEnabled, ind.defs, ind.customs,
-            ind.rsiVisible, ind.rsiLength, ind.rsiColor, ind.rsiLevelColor, ind.rsiUpper, ind.rsiLower,
-            ind.smaVisible, ind.smaLength, ind.smaColor, ind.emaVisible, ind.emaLength, ind.emaColor,
-          ],
-          onChange,
-          { deep: true }
-        )
-      );
-      const onLocalChange = () => {
-        if (applying) return;
-        schedulePush(userId);
-      };
-      window.addEventListener("tk-local-change", onLocalChange as EventListener);
-      stops.push(() => window.removeEventListener("tk-local-change", onLocalChange as EventListener));
+      const loaded = await fetchAndApply();
+      if (stillActive()) registerWatchers();
+      if (!loaded && stillActive()) {
+        // One quiet retry — on a flaky link the row fetch can fail outright,
+        // and without the row this device never restores the account's
+        // other-device state (and its next "local wins" heal would overwrite
+        // it with a stale snapshot). The rescue-merge keeps a late apply from
+        // clobbering anything drawn in the meantime.
+        setTimeout(() => {
+          if (!stillActive()) return;
+          void fetchAndApply();
+        }, 10_000);
+      }
     },
     { immediate: true }
   );

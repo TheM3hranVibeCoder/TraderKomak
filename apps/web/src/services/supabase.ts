@@ -6,6 +6,10 @@ const URL = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim();
 const ANON = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim();
 
 export const supabaseReady = !!URL && !!ANON;
+/** Exported for cloudSync's keepalive unload flush, which issues a raw REST
+ *  upsert because the page is dying and cannot await the JS client. */
+export const SUPABASE_URL = URL;
+export const SUPABASE_ANON_KEY = ANON;
 
 let client: SupabaseClient | null = null;
 
@@ -31,14 +35,17 @@ function readCookie(name: string): string | null {
 
 function writeCookie(name: string, value: string | null): void {
   try {
+    // Secure on HTTPS only — a plain-HTTP dev origin would silently drop the
+    // cookie and break the session fallback.
+    const secure = document.location.protocol === "https:" ? "; Secure" : "";
     if (value === null) {
-      document.cookie = `${name}=; Max-Age=0; path=/; SameSite=Lax`;
+      document.cookie = `${name}=; Max-Age=0; path=/; SameSite=Lax${secure}`;
       return;
     }
     // Cookies cap at ~4KB — a session that can't fit intact must not be
     // written truncated (corrupt JSON would poison the fallback).
     if (value.length > 3500) return;
-    document.cookie = `${name}=${encodeURIComponent(value)}; Max-Age=${COOKIE_MAX_AGE}; path=/; SameSite=Lax`;
+    document.cookie = `${name}=${encodeURIComponent(value)}; Max-Age=${COOKIE_MAX_AGE}; path=/; SameSite=Lax${secure}`;
   } catch {}
 }
 
@@ -78,4 +85,35 @@ export function supabase(): SupabaseClient {
     });
   }
   return client;
+}
+
+/** Synchronous best-effort read of the current access token — used by the
+ *  unload flush in cloudSync, which cannot await getSession() before the tab
+ *  dies. Mirrors durableAuthStorage's localStorage-then-cookie order. */
+export function getAccessTokenSync(): string | null {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith("sb-") && k.endsWith("-auth-token")) {
+        const raw = localStorage.getItem(k);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw) as { access_token?: unknown; currentSession?: { access_token?: unknown } };
+        if (typeof parsed.access_token === "string" && parsed.access_token) return parsed.access_token;
+        if (typeof parsed.currentSession?.access_token === "string" && parsed.currentSession.access_token) {
+          return parsed.currentSession.access_token;
+        }
+      }
+    }
+  } catch {}
+  const cookie = readCookie(AUTH_COOKIE);
+  if (cookie) {
+    try {
+      const parsed = JSON.parse(cookie) as { access_token?: unknown; currentSession?: { access_token?: unknown } };
+      if (typeof parsed.access_token === "string" && parsed.access_token) return parsed.access_token;
+      if (typeof parsed.currentSession?.access_token === "string" && parsed.currentSession.access_token) {
+        return parsed.currentSession.access_token;
+      }
+    } catch {}
+  }
+  return null;
 }
