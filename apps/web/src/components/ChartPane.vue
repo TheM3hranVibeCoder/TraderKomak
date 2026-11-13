@@ -1579,7 +1579,6 @@ let magnetKeyCb: ((e: KeyboardEvent) => void) | null = null;
 let magnetBlurCb: (() => void) | null = null;
 let shiftKeyCb: ((e: KeyboardEvent) => void) | null = null;
 let shiftBlurCb: (() => void) | null = null;
-let dragProbeCb: ((e: PointerEvent) => void) | null = null;
 let magnetAnyMoveCb: ((e: PointerEvent) => void) | null = null;
 let xhairMoveEl: HTMLElement | null = null;
 let xhairMoveCb: ((e: MouseEvent) => void) | null = null;
@@ -1785,9 +1784,6 @@ const drawingState = ref<{ time1: number; price1: number; time2: number; price2:
 const shiftHeld = ref(false);
 /** The trendline endpoint handle currently being dragged (for Shift-snapping). */
 const lineResize = ref<{ id: string; which: 1 | 2 } | null>(null);
-/** A press is active on a drawing overlay (handle / body / edit panel) —
- *  the native crosshair must not flash while such a drag moves fast. */
-const chartDragActive = ref(false);
 /** Measure tool (TradingView-style): two clicks — start, end. Ephemeral:
  *  never persisted, disappears on the third chart press / new drawing. */
 const measure = ref<{ t1: number; p1: number; t2: number; p2: number; done: boolean } | null>(null);
@@ -2004,9 +2000,12 @@ const computeSnapXhair = (clientX: number, clientY: number): void => {
   }
   // Touch gate: while fingers are on the chart the crosshair only draws
   // once the press has qualified as a hold — never during a pan.
+  // Presses on drawing overlays (select click, move/resize drag) do NOT hide
+  // it: all chart surfaces are allow-listed, so the lines track continuously
+  // through the gesture (TradingView-style) instead of blinking off on every
+  // select click.
   if (
     !pointerInChart.value ||
-    chartDragActive.value ||
     (touchXhairLive.value && !touchXhairHold.value && !drawingToolActive.value)
   ) {
     snapXhair.value = null;
@@ -5098,33 +5097,15 @@ onMounted(async () => {
   };
   syncCrosshairMode();
   crosshairModeStop = watch(
-    [drawingToolActive, magnetActive, shiftSnapping, chartDragActive],
+    [drawingToolActive, magnetActive, shiftSnapping],
     syncCrosshairMode
   );
-
-  // Any press that starts on an overlay (resize handles, drawing bodies,
-  // edit panel) hides the native crosshair until release — moving fast
-  // during a resize would otherwise let the cursor slip onto the canvas
-  // and flash the h/v lines.
-  const onDragProbe = (e: PointerEvent) => {
-    if (e.type !== "pointerdown") {
-      chartDragActive.value = false;
-      return;
-    }
-    if (e.button !== 0) return;
-    chartDragActive.value = !(e.target instanceof HTMLCanvasElement);
-  };
-  window.addEventListener("pointerdown", onDragProbe, true);
-  window.addEventListener("pointerup", onDragProbe, true);
-  window.addEventListener("pointercancel", onDragProbe as AnyListener, true);
-  dragProbeCb = onDragProbe;
 
   // A mouseup released OUTSIDE the browser window never reaches us — without
   // this, the half-drawn preview stays alive and the next chart click
   // finalizes it as a duplicate rectangle.
   const onWindowLost = () => {
     cancelDraw();
-    chartDragActive.value = false;
     touchPointers = 0;
     touchHoldStart = null;
     touchXhairLive.value = false;
@@ -5238,11 +5219,6 @@ onBeforeUnmount(() => {
   }
   if (shiftBlurCb) {
     window.removeEventListener("blur", shiftBlurCb);
-  }
-  if (dragProbeCb) {
-    window.removeEventListener("pointerdown", dragProbeCb, true);
-    window.removeEventListener("pointerup", dragProbeCb, true);
-    window.removeEventListener("pointercancel", dragProbeCb as AnyListener, true);
   }
   window.removeEventListener("resize", updatePaneRect);
   if (magnetAnyMoveCb) {
