@@ -1935,10 +1935,12 @@ const shiftSnapping = computed(
  *  crosshair lines stop short of the pointer so the cross stays visible. */
 const XHAIR_GAP = 12;
 
-/** True only while the pointer is over the chart surface itself. Overlays
- *  that cover the chart (admin panel, demo panel, replay controls, indicator
- *  settings, header) all sit OUTSIDE .chart-container, so this flag kills
- *  the crosshair there — clicks on them can no longer light it up. */
+/** True while the pointer is over a chart surface — the container (canvases
+ *  + axes) OR the drawing/demo hit layers (hovering a drawing keeps the
+ *  crosshair, TradingView-style). Floating UI islands over the pane (edit
+ *  panels, menus, legend, settings, demo panel, header) sit OUTSIDE the
+ *  allow-list in onXhairMove, so this flag kills the crosshair there —
+ *  its body-level lines would otherwise paint over their controls. */
 const pointerInChart = ref(false);
 
 /* Touch crosshair gate — on phones the overlay crosshair must only show
@@ -5045,6 +5047,21 @@ onMounted(async () => {
     xhairPending = null;
   };
   const onXhairMove = (e: MouseEvent) => {
+    // TradingView-style: the crosshair keeps tracking while the cursor hovers
+    // a DRAWING. The drawing/demo hit layers are SIBLINGS of the chart
+    // container (their moves never bubble into it), so the listeners live on
+    // the pane and this allow-list decides what counts as chart surface.
+    // Floating UI islands (edit panels, context menus, legend, settings,
+    // demo panel) still hide it — a tracking crosshair would paint its
+    // body-level lines right over their controls.
+    const t = e.target;
+    if (
+      t instanceof Element &&
+      !t.closest(".chart-container, .drawing-hit-layer, .demo-hit-layer, .chart-symbol-label")
+    ) {
+      onXhairLeave();
+      return;
+    }
     lastPtrClient = { clientX: e.clientX, clientY: e.clientY };
     pointerInChart.value = true;
     xhairPending = { x: e.clientX, y: e.clientY };
@@ -5060,16 +5077,17 @@ onMounted(async () => {
     }
     snapXhair.value = null;
   };
-  el.addEventListener("pointermove", onXhairMove);
-  el.addEventListener("pointerleave", onXhairLeave);
-  xhairMoveEl = el;
+  paneEl.addEventListener("pointermove", onXhairMove);
+  paneEl.addEventListener("pointerleave", onXhairLeave);
+  xhairMoveEl = paneEl;
   xhairMoveCb = onXhairMove;
   xhairLeaveCb = onXhairLeave;
 
   // The overlay crosshair replaces the native one EVERYWHERE — the default
   // mode draws it with a gap at the pointer so the OS cross cursor stays
   // clearly visible on top of the lines. It only computes while the pointer
-  // is over the chart surface (never over overlays or the header).
+  // is over a chart surface (container or drawing/demo hit layers — hovering
+  // a drawing keeps the lines) and hides over floating UI islands/header.
   const syncCrosshairMode = () => {
     adapter?.setCrosshairVisible(false);
     if ((shiftSnapping.value || pointerInChart.value) && lastPtrClient) {
