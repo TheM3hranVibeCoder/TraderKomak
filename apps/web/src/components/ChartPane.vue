@@ -3004,6 +3004,16 @@ let panShiftActive = false;
 const drawingLayerEl = ref<HTMLElement | null>(null);
 const hitLayerEl = ref<HTMLElement | null>(null);
 const sessionLayerEl = ref<HTMLElement | null>(null);
+/** Position chips (ENTRY/TP/SL) render in their own layer — shifted too, or
+ *  they would freeze mid-pan while their boxes move pixel-locked. */
+const posLabelLayerEl = ref<HTMLElement | null>(null);
+/** One-click lines' axis tags live in the FIXED body-level layer (outside
+ *  every shifted layer): a vline's date tag is always visible and an
+ *  hline/ray's price tag shows while selected — without a compensating
+ *  shift they freeze mid-pan while the line moves pixel-locked. Time tags
+ *  follow the horizontal delta, price tags the vertical one. */
+const singleTimeTagBandEl = ref<HTMLElement | null>(null);
+const singlePriceTagBandEl = ref<HTMLElement | null>(null);
 
 /** Remember the time/price anchors the CURRENT projection was built on. */
 function capturePanAnchors(): void {
@@ -3029,7 +3039,7 @@ function capturePanAnchors(): void {
 function clearPanShift(): void {
   if (!panShiftActive) return;
   panShiftActive = false;
-  for (const el of [drawingLayerEl.value, hitLayerEl.value, sessionLayerEl.value]) {
+  for (const el of [drawingLayerEl.value, hitLayerEl.value, sessionLayerEl.value, posLabelLayerEl.value, singleTimeTagBandEl.value, singlePriceTagBandEl.value]) {
     if (el) el.style.transform = "";
   }
 }
@@ -3055,6 +3065,9 @@ function tryPanShift(): boolean {
   if (drawingLayerEl.value) drawingLayerEl.value.style.transform = t;
   if (hitLayerEl.value) hitLayerEl.value.style.transform = t;
   if (sessionLayerEl.value) sessionLayerEl.value.style.transform = t;
+  if (posLabelLayerEl.value) posLabelLayerEl.value.style.transform = t;
+  if (singleTimeTagBandEl.value) singleTimeTagBandEl.value.style.transform = `translate3d(${dx.toFixed(2)}px, 0, 0)`;
+  if (singlePriceTagBandEl.value) singlePriceTagBandEl.value.style.transform = `translate3d(0, ${dy.toFixed(2)}px, 0)`;
   panShiftActive = true;
   return true;
 }
@@ -5915,6 +5928,7 @@ onBeforeUnmount(() => {
          is narrower than a label the % stats move just INSIDE the box —
          below the TP line and above the SL line — instead of beside it. -->
     <div
+      ref="posLabelLayerEl"
       class="pos-label-layer drawing-clip"
       :style="{
         right: axisRightW + 'px',
@@ -6004,19 +6018,29 @@ onBeforeUnmount(() => {
         <!-- Axis tags for one-click lines: vertical line → time/date tag on
              the time scale (always); horizontal line / ray → current price
              tag on the price scale while selected. -->
-        <template v-for="s in singlePixels" :key="'tag-' + s.id">
-          <div
-            v-if="s.kind === 'vline' && !vlineTagDup(s.x)"
-            class="single-time-tag"
-            :class="{ selected: s.selected }"
-            :style="{ left: paneRect.left + s.x + 'px', bottom: innerH - paneRect.bottom + Math.max(2, axisBottomH / 2 - 9) + 'px' }"
-          >{{ fmtAxisTime(s.time) }}</div>
-          <div
-            v-else-if="s.selected"
-            class="single-price-tag"
-            :style="{ top: paneRect.top + s.y - 9 + 'px', right: innerW - paneRect.right + 'px', background: s.color }"
-          >{{ fmtPrice(s.price, instrumentPrecision(market.instrument)) }}</div>
-        </template>
+        <!-- One-click lines' axis tags, grouped by axis so the drag-pan shift
+             can move them with the line (time tags follow the horizontal
+             delta, price tags the vertical one) — without this they freeze
+             mid-pan while the line moves pixel-locked. -->
+        <div ref="singleTimeTagBandEl" class="single-tag-band">
+          <template v-for="s in singlePixels" :key="'timetag-' + s.id">
+            <div
+              v-if="s.kind === 'vline' && !vlineTagDup(s.x)"
+              class="single-time-tag"
+              :class="{ selected: s.selected }"
+              :style="{ left: paneRect.left + s.x + 'px', bottom: innerH - paneRect.bottom + Math.max(2, axisBottomH / 2 - 9) + 'px' }"
+            >{{ fmtAxisTime(s.time) }}</div>
+          </template>
+        </div>
+        <div ref="singlePriceTagBandEl" class="single-tag-band">
+          <template v-for="s in singlePixels" :key="'pricetag-' + s.id">
+            <div
+              v-if="s.kind !== 'vline' && s.selected"
+              class="single-price-tag"
+              :style="{ top: paneRect.top + s.y - 9 + 'px', right: innerW - paneRect.right + 'px', background: s.color }"
+            >{{ fmtPrice(s.price, instrumentPrecision(market.instrument)) }}</div>
+          </template>
+        </div>
       </div>
     </Teleport>
 
@@ -8338,6 +8362,15 @@ onBeforeUnmount(() => {
 }
 /* Axis tags + crosshair rendered in a fixed body-level layer (teleported
    out of the chart's stacking tree — no canvas can ever paint over them) */
+/* Shift bands for the one-click lines' axis tags: full-size static wrappers
+   inside the fixed layer, transformed by the drag-pan shift (time band
+   horizontally, price band vertically) so the tags move with their line
+   instead of freezing mid-pan. */
+.single-tag-band {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
 .axis-tag-layer-fixed {
   position: fixed;
   inset: 0;
@@ -8346,8 +8379,7 @@ onBeforeUnmount(() => {
 }
 .single-price-tag,
 .single-time-tag {
-  position: absolute;
-  font-size: 11px;
+  position: absolute;  font-size: 11px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: #fff;
