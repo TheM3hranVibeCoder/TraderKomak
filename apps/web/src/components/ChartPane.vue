@@ -2422,6 +2422,9 @@ function recalcRects(): void {
   });
 }
 function recalcRectsNow(): void {
+  // Any explicit re-projection supersedes the drag-pan shift — drop it so
+  // the freshly painted pixels aren't displaced by a stale translate.
+  clearPanShift();
   if (!adapter) {
     setPixels(rectPixels, []);
     measureView.value = null;
@@ -2907,6 +2910,10 @@ const buildPolyPixel = (
   if (selectedPos.value && posPanelPos.value) positionPosPanel(selectedPos.value.id);
   const selS = drawingsStore.selectedSingle;
   if (selS && singlePanelPos.value) positionSinglePanel(selS.kind, selS.id);
+  // Anchors for the drag-pan shift (see the pan-shift block): the pixels
+  // these anchors project to NOW are the baseline the next range change
+  // measures its exact pixel delta against.
+  capturePanAnchors();
 }
 
 /**
@@ -2919,7 +2926,14 @@ const buildPolyPixel = (
 function recalcFrame(): void {
   recalcRaf = 0;
   updateBadgePosition();
-  recalcRectsNow();
+  // While the drag-pan shift carries the overlays, their children stay
+  // untouched — re-projecting here would fight the shift (see the
+  // pan-shift block). The shift ends with the pan, which re-projects.
+  // Exception: demo lines are NOT in a shifted layer (their left-edge
+  // labels must not slide), so they keep re-projecting every frame —
+  // they're a handful of y-only projections, cheap even on weak hardware.
+  if (!panShiftActive) recalcRectsNow();
+  else if (demo.active) rebuildDemoLines();
   // After a fresh load the chart layout (time/price scales) may not be
   // settled when the first re-projection runs — some drawings then fail to
   // project (null coordinates) and would only render on the NEXT unrelated
@@ -2958,6 +2972,91 @@ function hasUnprojectedDrawings(): boolean {
 function extendRecalcFrames(ms: number): void {
   recalcDeadline = Math.max(recalcDeadline, performance.now() + ms);
   if (!recalcRaf) recalcRaf = requestAnimationFrame(recalcFrame);
+}
+
+/* ── Drag-pan shift: compositor-translate the overlay layers ───────────
+ * While the chart is panned by drag, re-projecting every drawing each
+ * frame re-rasterizes the whole overlay layer — on software-rendered
+ * (no-GPU) laptops that raster lands a frame or two AFTER the candle
+ * canvas, so drawings visibly detach from the chart and only snap back
+ * into place when the pan ends. Instead, while the pointer is held each
+ * visible-range change shifts the overlay LAYERS by the exact pixel
+ * delta (anchored on fixed times/prices through the adapter) with a
+ * compositor transform: changing a transform re-composites the existing
+ * layer texture WITHOUT re-rasterizing it, so overlays stay pixel-locked
+ * with the candles at near-zero cost. The full re-projection then runs
+ * when the pan ends or the scale changes (zoom) — every path below. */
+interface PanAnchors {
+  /** times of logical bar 0 and bar 1000 (the far pair detects zoom) */
+  tA: number;
+  tB: number;
+  /** their pixels at capture time */
+  xA: number;
+  xB: number;
+  /** prices at fixed screen heights, and those heights, at capture time */
+  pA: number;
+  pB: number;
+  yA: number;
+  yB: number;
+}
+let panAnchors: PanAnchors | null = null;
+let panShiftActive = false;
+const drawingLayerEl = ref<HTMLElement | null>(null);
+const hitLayerEl = ref<HTMLElement | null>(null);
+const sessionLayerEl = ref<HTMLElement | null>(null);
+
+/** Remember the time/price anchors the CURRENT projection was built on. */
+function capturePanAnchors(): void {
+  if (!adapter || !containerRef.value) {
+    panAnchors = null;
+    return;
+  }
+  const h = containerRef.value.clientHeight;
+  const tA = adapter.logicalToTime(0);
+  const tB = adapter.logicalToTime(1000);
+  const xA = tA !== null ? adapter.timeToX(tA) : null;
+  const xB = tB !== null ? adapter.timeToX(tB) : null;
+  const pA = adapter.yToPrice(h / 2);
+  const pB = adapter.yToPrice(h / 4);
+  if (tA === null || tB === null || xA === null || xB === null || pA === null || pB === null) {
+    panAnchors = null;
+    return;
+  }
+  panAnchors = { tA, tB, xA, xB, pA, pB, yA: h / 2, yB: h / 4 };
+}
+
+/** Drop the compositor shift — the next re-projection paints exact pixels. */
+function clearPanShift(): void {
+  if (!panShiftActive) return;
+  panShiftActive = false;
+  for (const el of [drawingLayerEl.value, hitLayerEl.value, sessionLayerEl.value]) {
+    if (el) el.style.transform = "";
+  }
+}
+
+/** Shift the overlay layers to their exact position under the CURRENT
+ *  scale, relative to the last projection. Returns false when the delta
+ *  can't be computed or the scale changed non-rigidly (zoom) — the caller
+ *  then re-projects fully. */
+function tryPanShift(): boolean {
+  if (!adapter || !panAnchors || panShiftActive) return false;
+  const { tA, tB, pA, pB, yA, yB } = panAnchors;
+  const xA = adapter.timeToX(tA);
+  const xB = adapter.timeToX(tB);
+  const nA = adapter.getPriceY(pA);
+  const nB = adapter.getPriceY(pB);
+  if (xA === null || xB === null || nA === null || nB === null) return false;
+  const dx = xA - panAnchors.xA;
+  const dy = nA - yA;
+  // A zoom changes pxPerBar, so the two time anchors move by different
+  // amounts — only a rigid pan passes this check.
+  if (Math.abs(dx - (xB - panAnchors.xB)) > 1 || Math.abs(dy - (nB - yB)) > 1) return false;
+  const t = `translate3d(${dx.toFixed(2)}px, ${dy.toFixed(2)}px, 0)`;
+  if (drawingLayerEl.value) drawingLayerEl.value.style.transform = t;
+  if (hitLayerEl.value) hitLayerEl.value.style.transform = t;
+  if (sessionLayerEl.value) sessionLayerEl.value.style.transform = t;
+  panShiftActive = true;
+  return true;
 }
 
 function snapAngleToPoint(ax: number, ay: number, x: number, y: number): { x: number; y: number } | null {
@@ -4521,7 +4620,17 @@ onMounted(async () => {
     // a deferred (next-frame) projection made overlays visibly detach
     // from the chart while panning.
     updateBadgePosition();
-    recalcRectsNow();
+    // Drag-pan fast path: shift the overlay layers by the exact pixel
+    // delta instead of re-projecting every drawing (see the pan-shift
+    // block) — keeps them pixel-locked with the candles even on machines
+    // where a full overlay re-raster can't keep up. Everything else (zoom,
+    // price-scale refit, pan end, replay) re-projects fully.
+    if (range && pointerHeld && !replay.active && tryPanShift()) {
+      // overlays moved by the compositor; children stale by exactly the shift
+    } else {
+      clearPanShift();
+      recalcRectsNow();
+    }
     if (!range) return;
     if (lazyThrottled) return;
     if (range.from > 15) return;
@@ -4625,6 +4734,11 @@ onMounted(async () => {
   };
   const onPointerUp = () => {
     pointerHeld = false;
+    // Pan ended: drop the compositor shift and re-project exact pixels for
+    // the final range SYNCHRONOUSLY (clearing without projecting would show
+    // one frame at pre-pan pixels), then keep the settle window fresh.
+    clearPanShift();
+    recalcRectsNow();
     extendRecalcFrames(200);
   };
   el.addEventListener("pointerdown", onPointerDown, { passive: true });
@@ -5106,6 +5220,9 @@ onMounted(async () => {
   // finalizes it as a duplicate rectangle.
   const onWindowLost = () => {
     cancelDraw();
+    // A lost pointer ends any drag-pan: re-project exact pixels immediately.
+    clearPanShift();
+    recalcRectsNow();
     touchPointers = 0;
     touchHoldStart = null;
     touchXhairLive.value = false;
@@ -5127,6 +5244,9 @@ onMounted(async () => {
     if (!containerRef.value || !adapter) return;
     const { clientWidth, clientHeight } = containerRef.value;
     if (clientWidth === 0 || clientHeight === 0) return; // hidden mid-layout
+    // A resize invalidates the pan-shift anchors (their screen heights and
+    // pixel baselines describe the OLD layout) — re-project exactly instead.
+    clearPanShift();
     // Mark a resize in flight: data commits (setData/update) from watchers
     // are deferred to the NEXT frame. Calling series.setData while LWC is
     // inside its own resize/render cycle crashes the render loop with
@@ -5447,6 +5567,7 @@ onBeforeUnmount(() => {
          Non-interactive. -->
     <div
       v-if="sessionPixels.length"
+      ref="sessionLayerEl"
       class="session-layer drawing-clip"
       :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }"
     >
@@ -5463,6 +5584,7 @@ onBeforeUnmount(() => {
          small rectangle drawn on a low timeframe never covers candle bodies
          on coarser timeframes (TradingView-style). Non-interactive. -->
     <div
+      ref="drawingLayerEl"
       class="drawing-layer drawing-clip"
       :class="{ 'drawing-mode': drawingToolActive }"
       :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }"
@@ -5592,6 +5714,7 @@ onBeforeUnmount(() => {
          the context-menu target — so a behind-the-candles rectangle stays
          selectable and resizable. -->
     <div
+      ref="hitLayerEl"
       class="drawing-hit-layer drawing-clip"
       :class="{ 'drawing-mode': drawingToolActive || replay.picking }"
       :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }"
