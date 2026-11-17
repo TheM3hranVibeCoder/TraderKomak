@@ -2,6 +2,9 @@
 import { ref, watch, onMounted, onBeforeUnmount, nextTick, computed, onUnmounted, type Ref } from "vue";
 import { createChartAdapter, type ChartAdapter } from "@/chart/chartAdapter";
 import { computeRsi, computeSma, computeEma } from "@/chart/indicators";
+import { computeVolumeProfile, type VpCandle } from "@/chart/volumeProfile";
+import { getVolume, missingCount } from "@/services/volumeFeed";
+import { fetchCandles } from "@/services/api";
 import { toTimeStr, pnlClass, fmtMoney, relLuma, mixHex } from "@/chart/format";
 import { useThemeStore } from "@/stores/theme";
 import { chartRestorePending } from "@/services/cloudSync";
@@ -45,6 +48,7 @@ const sessionPixels = ref<SessionBoxPx[]>([]);
 const indSettingsOpen = ref(false);
 const smaSettingsOpen = ref(false);
 const emaSettingsOpen = ref(false);
+const vpSettingsOpen = ref(false);
 
 /** While the settings popup is open, any pointerdown outside it (the chart,
  *  watchlist, news…) closes it. The legend buttons are excluded — the gear
@@ -57,8 +61,9 @@ function indSettingsOutside(e: PointerEvent): void {
   smaSettingsOpen.value = false;
   emaSettingsOpen.value = false;
   indSettingsOpen.value = false;
+  vpSettingsOpen.value = false;
 }
-watch([indSettingsOpen, smaSettingsOpen, emaSettingsOpen], (states) => {
+watch([indSettingsOpen, smaSettingsOpen, emaSettingsOpen, vpSettingsOpen], (states) => {
   if (states.some(Boolean)) document.addEventListener("pointerdown", indSettingsOutside, true);
   else document.removeEventListener("pointerdown", indSettingsOutside, true);
 });
@@ -428,6 +433,333 @@ watch(
   () => [indicators.sessionsAdded, indicators.sessionsVisible, indicators.sessionsLabels, indicators.sessionsEnabled, indicators.defs, indicators.customs],
   () => recalcRects(),
   { deep: true }
+);
+
+/* ── Fixed Range Volume Profile (TradingView-style) ──────────────────────
+ * Two draggable time anchors define the profile window; the up/down volume
+ * histogram grows LEFTWARD from the window's right edge, with the POC and
+ * Value Area lines spanning the window (like TV's Fixed Range VP). Volume
+ * comes from the sidecar (services/volumeFeed — Binance base volume /
+ * OANDA tick volume) and a lazy backfill fetches candles the registry is
+ * still missing. Visuals sit BEHIND the candles (.vp-layer, z-0 — same
+ * stacking as the session boxes); only the two anchor strips and the
+ * window body capture the pointer (.vp-hit-layer above the candles, below
+ * the drawing hit layer so selected drawings keep pointer priority). */
+
+interface VpBarPx {
+  key: string;
+  top: number;
+  height: number;
+  /** Bars anchor at the range's LEFT edge and grow rightward (TV style). */
+  left: number;
+  width: number;
+  /** Two-tone fill in one node: up-volume hard stop then down-volume. */
+  background: string;
+  /** Value Area rows render brighter than the rest (TV-style). */
+  opacity: number;
+}
+interface VpLinePx {
+  top: number;
+  left: number;
+  width: number;
+}
+interface VpPixels {
+  bars: VpBarPx[];
+  window: { left: number; width: number } | null;
+  anchors: { start: number; end: number } | null;
+  poc: VpLinePx | null;
+  vah: VpLinePx | null;
+  val: VpLinePx | null;
+  /** "POC <price>" tag at the line's right end (price already formatted). */
+  pocLabel: { top: number; text: string; ink: string } | null;
+  /** Sidecar has no volume for this window — hint instead of empty bars. */
+  noData: boolean;
+}
+const EMPTY_VP: VpPixels = { bars: [], window: null, anchors: null, poc: null, vah: null, val: null, pocLabel: null, noData: false };
+const vpPixels = ref<VpPixels>(EMPTY_VP);
+let vpPixelsJson = "";
+
+function setVpPixels(next: VpPixels): void {
+  const json = JSON.stringify(next);
+  if (json === vpPixelsJson) return;
+  vpPixelsJson = json;
+  vpPixels.value = next;
+}
+
+/** First-use default: the most recent 150 candles, clamped to the data. */
+const VP_DEFAULT_BARS = 150;
+function ensureVpRange(candles: Candle[]): { start: number; end: number } | null {
+  const n = candles.length;
+  if (n < 2) return null;
+  const stored = indicators.getVpRange(market.instrument, market.timeframe);
+  if (stored) {
+    const first = candles[0]!.time;
+    const last = candles[n - 1]!.time;
+    const start = Math.min(Math.max(stored.start, first), last);
+    const end = Math.min(Math.max(stored.end, first), last);
+    if (start !== stored.start || end !== stored.end) {
+      if (end > start) indicators.setVpRange(market.instrument, market.timeframe, start, end);
+    }
+    return end > start ? { start, end } : null;
+  }
+  const start = candles[Math.max(0, n - VP_DEFAULT_BARS)]!.time;
+  const end = candles[n - 1]!.time;
+  indicators.setVpRange(market.instrument, market.timeframe, start, end);
+  return { start, end };
+}
+
+function vpRangeTimes(): { start: number; end: number } | null {
+  if (vpDragRange.value) return vpDragRange.value;
+  return indicators.getVpRange(market.instrument, market.timeframe);
+}
+
+/* ── Volume backfill: candles inside the window whose volume the sidecar
+ *    is missing (localStorage-restored history, lazy-loaded bars, the
+ *    just-closed live candle on OANDA / sub-minute crypto). fetchCandles
+ *    routes through the direct services, which record volumes as they
+ *    parse — one fetch fills the gap. */
+let vpBackfillInFlight = false;
+let vpBackfillKey = "";
+let vpBackfillAt = 0;
+const VP_BACKFILL_MIN_MS = 10000;
+
+function vpVolumeProvider(): boolean {
+  const p = providerOf(market.instrument);
+  return p === "binance" || p === "oanda";
+}
+
+async function ensureVpVolumes(): Promise<void> {
+  if (!indicators.vpAdded || vpBackfillInFlight || !vpVolumeProvider()) return;
+  const inst = market.instrument;
+  const tf = market.timeframe;
+  const range = vpRangeTimes();
+  if (!range) return;
+  const inRange = displayCandles.value.filter((c) => c.time >= range.start && c.time <= range.end);
+  if (inRange.length === 0) return;
+  const missing = missingCount(inst, tf, inRange.map((c) => c.time));
+  if (missing === 0) return;
+  if (missing > 4000) return; // absurdly wide window — don't fetch
+  const key = `${inst}|${tf}|${range.start}|${range.end}|${inRange.length}`;
+  if (key === vpBackfillKey && Date.now() - vpBackfillAt < VP_BACKFILL_MIN_MS) return;
+  vpBackfillKey = key;
+  vpBackfillAt = Date.now();
+  vpBackfillInFlight = true;
+  try {
+    // A tiny tail gap (the candle that just closed) stays a tiny fetch.
+    const count = missing <= 3 ? 3 : Math.min(1500, inRange.length + 4);
+    const tfSec = (TIMEFRAME_SECONDS as Record<string, number>)[tf] ?? 60;
+    await fetchCandles(inst, tf, count, range.end + tfSec);
+  } catch {
+    // transient — the next data change re-arms the backfill
+  } finally {
+    vpBackfillInFlight = false;
+  }
+}
+
+/* ── Projection: profile math + pixel mapping, driven by the same
+ *    recalcRects flow as the sessions/drawings overlays. */
+function computeVpPixels(): void {
+  if (!adapter || !indicators.vpAdded || !indicators.vpVisible) {
+    setVpPixels(EMPTY_VP);
+    return;
+  }
+  const candles = displayCandles.value;
+  if (candles.length < 2) {
+    setVpPixels(EMPTY_VP);
+    return;
+  }
+  const inst = market.instrument;
+  const tf = market.timeframe;
+  const range = vpRangeTimes() ?? ensureVpRange(candles);
+  if (!range) {
+    setVpPixels(EMPTY_VP);
+    return;
+  }
+  // Slice the window (binary search the start; the window is contiguous)
+  let lo = 0;
+  let hi = candles.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (candles[mid]!.time < range.start) lo = mid + 1;
+    else hi = mid;
+  }
+  let endIdx = lo;
+  while (endIdx < candles.length && candles[endIdx]!.time <= range.end) endIdx++;
+  const vps: VpCandle[] = [];
+  for (let i = lo; i < endIdx; i++) {
+    const c = candles[i]!;
+    vps.push({ open: c.open, high: c.high, low: c.low, close: c.close, volume: getVolume(inst, tf, c.time) });
+  }
+  const profile = computeVolumeProfile(vps, { rowCount: indicators.vpRows, vaPercent: indicators.vpVaPercent });
+  if (!profile.hasVolume) {
+    setVpPixels({ ...EMPTY_VP, noData: true });
+    return;
+  }
+  const x1 = adapter.timeToX(range.start);
+  const x2 = adapter.timeToX(range.end);
+  if (x1 === null || x2 === null || x2 <= x1) {
+    setVpPixels({ ...EMPTY_VP, noData: false });
+    return;
+  }
+  const paneW = (containerRef.value?.clientWidth ?? 0) - axisRightW.value;
+  // The TV script caps the histogram at ~⅓ of the RANGE width (bars grow
+  // rightward from the range's left edge); the width% setting scales that.
+  const rangeW = x2 - x1;
+  const maxW = Math.max(20, (rangeW * indicators.vpWidthPercent) / 100);
+  const up = indicators.vpUpColor;
+  const down = indicators.vpDownColor;
+  const bars: VpBarPx[] = [];
+  for (let i = 0; i < profile.rows.length; i++) {
+    const row = profile.rows[i]!;
+    if (row.total <= 0) continue; // no node for an empty row
+    const yTop = adapter.getPriceY(row.pHigh);
+    const yBot = adapter.getPriceY(row.pLow);
+    if (yTop === null || yBot === null || yBot <= yTop) continue;
+    const w = (row.total / profile.maxTotal) * maxW;
+    const upPct = row.total > 0 ? Math.max(0, Math.min(100, (row.up / row.total) * 100)) : 100;
+    bars.push({
+      key: `r${i}`,
+      top: yTop + 0.5,
+      height: Math.max(1, yBot - yTop - 1), // 1px inset — the TV rows' thin gap
+      left: x1,
+      width: w,
+      background: `linear-gradient(to right, ${up} 0 ${upPct}%, ${down} ${upPct}% 100%)`,
+      opacity: profile.vaRows.has(i) ? 0.85 : 0.4,
+    });
+  }
+  const lineAt = (price: number | null): VpLinePx | null => {
+    if (price === null) return null;
+    const ad = adapter; // narrowed above; re-read inside the closure for TS
+    if (!ad) return null;
+    const y = ad.getPriceY(price);
+    if (y === null) return null;
+    return { top: y, left: x1, width: x2 - x1 };
+  };
+  const pocRow = profile.poc >= 0 ? profile.rows[profile.poc] : undefined;
+  const pocMid = pocRow ? (pocRow.pLow + pocRow.pHigh) / 2 : null;
+  // POC line spans the window AND extends right to the price axis
+  // (the TV script's extend.right) so price vs POC stays readable.
+  const pocLine = lineAt(pocMid);
+  if (pocLine && paneW > x1) pocLine.width = paneW - x1;
+  const pocLabel = (() => {
+    if (!pocLine || pocMid === null || !indicators.vpShowPocLabel) return null;
+    const text = `POC ${pocMid.toFixed(instrumentPrecision(market.instrument))}`;
+    return {
+      top: pocLine.top,
+      text,
+      ink: relLuma(indicators.vpPocColor) > 0.55 ? "#1e2430" : "#ffffff",
+    };
+  })();
+  setVpPixels({
+    bars,
+    window: { left: x1, width: x2 - x1 },
+    anchors: { start: x1, end: x2 },
+    poc: pocLine,
+    vah: lineAt(profile.vah),
+    val: lineAt(profile.val),
+    pocLabel,
+    noData: false,
+  });
+}
+
+/* ── Anchor dragging (start / end edges only — the window body stays
+ *    pointer-transparent so the chart's own crosshair/pan works there, per
+ *    visitor request). The window updates a LOCAL override per frame (the
+ *    store only sees the committed result on release — no localStorage
+ *    churn mid-drag). setDrawingMode freezes chart panning for the
+ *    duration, exactly like the drawing tools. */
+type VpDragKind = "start" | "end";
+let vpDrag: { kind: VpDragKind; grabTime: number; origStart: number; origEnd: number } | null = null;
+const vpDragRange = ref<{ start: number; end: number } | null>(null);
+
+function onVpDown(e: PointerEvent, kind: VpDragKind): void {
+  if (!adapter || !indicators.vpAdded) return;
+  const r = containerRef.value?.getBoundingClientRect();
+  if (!r) return;
+  const range = vpRangeTimes() ?? ensureVpRange(displayCandles.value);
+  if (!range) return;
+  const t = adapter.xToTime(e.clientX - r.left);
+  if (t === null) return;
+  vpDrag = { kind, grabTime: t, origStart: range.start, origEnd: range.end };
+  vpDragRange.value = { ...range };
+  adapter.setDrawingMode(true);
+  window.addEventListener("pointermove", onVpDragMove);
+  window.addEventListener("pointerup", onVpDragUp, { once: true });
+  window.addEventListener("pointercancel", onVpDragUp, { once: true });
+  e.preventDefault();
+  e.stopPropagation();
+}
+
+function onVpDragMove(e: PointerEvent): void {
+  if (!vpDrag || !adapter) return;
+  const r = containerRef.value?.getBoundingClientRect();
+  if (!r) return;
+  const candles = displayCandles.value;
+  if (candles.length < 2) return;
+  const t = adapter.xToTime(e.clientX - r.left);
+  if (t === null) return;
+  const first = candles[0]!.time;
+  const last = candles[candles.length - 1]!.time;
+  const barSec =
+    (TIMEFRAME_SECONDS as Record<string, number>)[market.timeframe] ??
+    Math.max(1, candles[candles.length - 1]!.time - candles[candles.length - 2]!.time);
+  const minSpan = 3 * barSec;
+  if (vpDrag.kind === "start") {
+    const s = Math.min(Math.max(t, first), vpDrag.origEnd - minSpan);
+    vpDragRange.value = { start: s, end: vpDrag.origEnd };
+  } else {
+    const en = Math.max(Math.min(t, last), vpDrag.origStart + minSpan);
+    vpDragRange.value = { start: vpDrag.origStart, end: en };
+  }
+  recalcRects();
+}
+
+function onVpDragUp(): void {
+  window.removeEventListener("pointermove", onVpDragMove);
+  if (vpDrag && vpDragRange.value && indicators.vpAdded) {
+    const { start, end } = vpDragRange.value;
+    if (end > start) indicators.setVpRange(market.instrument, market.timeframe, start, end);
+  }
+  vpDrag = null;
+  vpDragRange.value = null;
+  adapter?.setDrawingMode(false);
+  recalcRects();
+}
+
+watch(
+  () => [
+    indicators.vpAdded,
+    indicators.vpVisible,
+    indicators.vpRows,
+    indicators.vpVaPercent,
+    indicators.vpWidthPercent,
+    indicators.vpUpColor,
+    indicators.vpDownColor,
+    indicators.vpPocColor,
+    indicators.vpVaColor,
+    indicators.vpShowPocLabel,
+    indicators.vpShowVaLines,
+  ],
+  () => {
+    void ensureVpVolumes();
+    recalcRects();
+  }
+);
+watch(() => [market.instrument, market.timeframe], () => {
+  vpBackfillKey = ""; // new view — re-arm the backfill
+  void ensureVpVolumes();
+  recalcRects();
+});
+// A new bucket (candle close / lazy-load batch / replay step) may carry
+// volume the sidecar is missing — re-check, then re-project. (props.candles
+// rather than displayCandles: the computed is declared further down, and
+// replay clipping never changes the total length anyway.)
+watch(
+  () => props.candles.length,
+  () => {
+    void ensureVpVolumes();
+    recalcRects();
+  }
 );
 
 /** Price display precision of the active instrument (template + tags). */
@@ -2588,6 +2920,8 @@ function recalcRectsNow(): void {
 
   // Sessions indicator background boxes (same triggers as drawings)
   computeSessionBoxes();
+  // Fixed Range Volume Profile (same triggers; window anchors → histogram)
+  computeVpPixels();
   if (indicators.rsiAdded) rsiPaneH.value = adapter.rsiPaneHeight();
 
   // Trendlines: endpoints project directly (no min/max — a line keeps its
@@ -5295,6 +5629,10 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", indSettingsOutside, true);
+  // A VP anchor drag can't survive unmount — drop its listeners frozen.
+  window.removeEventListener("pointermove", onVpDragMove);
+  window.removeEventListener("pointerup", onVpDragUp);
+  window.removeEventListener("pointercancel", onVpDragUp);
   if (visibleCb && adapter) adapter.unsubscribeVisibleRange(visibleCb);
   if (dataCb && adapter) adapter.unsubscribeDataChanged(dataCb);
   if (countdownTimer) clearInterval(countdownTimer);
@@ -5547,6 +5885,51 @@ onBeforeUnmount(() => {
         </label>
       </div>
       </div>
+      <div v-if="indicators.vpAdded" class="legend-row">
+        <span class="ind-legend-name" :style="{ color: indicators.vpPocColor }" :class="{ off: !indicators.vpVisible }">VP</span>
+        <button class="ind-legend-btn" type="button" :title="indicators.vpVisible ? 'Hide' : 'Show'" @click="indicators.vpVisible = !indicators.vpVisible">
+          <svg v-if="indicators.vpVisible" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" /><circle cx="12" cy="12" r="2.6" /></svg>
+          <svg v-else viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5c2 0 3.7.6 5.1 1.5M22 12s-3.5 6.5-10 6.5c-2 0-3.7-.6-5.1-1.5" /><path d="M4 20L20 4" /></svg>
+        </button>
+        <button class="ind-legend-btn" type="button" title="Settings" @click="vpSettingsOpen = !vpSettingsOpen">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l-.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z" /></svg>
+        </button>
+        <button class="ind-legend-btn" type="button" title="Remove" @click="indicators.removeVp()">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+        <div v-if="vpSettingsOpen" class="ind-settings vp-settings" @click.stop>
+          <div class="ind-settings-title">Volume Profile — settings</div>
+          <div class="ind-set-row">
+            <input class="ind-set-color" type="color" v-model="indicators.vpUpColor" aria-label="Up volume color" title="Up volume" />
+            <input class="ind-set-color" type="color" v-model="indicators.vpDownColor" aria-label="Down volume color" title="Down volume" />
+            <span class="ma-len-hint">up / down</span>
+          </div>
+          <div class="ind-set-row">
+            <input class="ind-set-color" type="color" v-model="indicators.vpPocColor" aria-label="POC color" title="POC line" />
+            <input class="ind-set-color" type="color" v-model="indicators.vpVaColor" aria-label="Value Area color" title="Value Area lines" />
+            <span class="ma-len-hint">poc / va</span>
+          </div>
+          <div class="ind-set-row">
+            <input class="rsi-num" type="number" min="1" max="200" v-model.number="indicators.vpRows" aria-label="Row count" />
+            <span class="ma-len-hint">rows</span>
+            <input class="rsi-num" type="number" min="0" max="100" v-model.number="indicators.vpVaPercent" aria-label="Value area percent" />
+            <span class="ma-len-hint">% va</span>
+          </div>
+          <div class="ind-set-row">
+            <input class="rsi-num" type="number" min="5" max="80" v-model.number="indicators.vpWidthPercent" aria-label="Histogram width percent" />
+            <span class="ma-len-hint">% width</span>
+            <label class="vp-set-check">
+              <input type="checkbox" v-model="indicators.vpShowPocLabel" aria-label="Show POC label" />
+              <span>POC label</span>
+            </label>
+            <label class="vp-set-check">
+              <input type="checkbox" v-model="indicators.vpShowVaLines" aria-label="Show Value Area lines" />
+              <span>VA lines</span>
+            </label>
+          </div>
+          <div class="vp-set-hint">Drag the dashed lines to resize the range</div>
+        </div>
+      </div>
     </div>
 
     <div v-if="isLoading" class="overlay center loading-only">
@@ -5591,6 +5974,80 @@ onBeforeUnmount(() => {
         :style="{ left: b.left + 'px', width: b.width + 'px', top: b.top + 'px', height: b.height + 'px', background: b.color + '26' }"
       >
         <span v-if="b.showLabel" class="session-label" :style="{ color: b.color, top: b.labelTop + 'px' }">{{ b.name }}</span>
+      </div>
+    </div>
+    <!-- Fixed Range Volume Profile: two-tone histogram anchored at the
+         range's left edge + POC / optional Value Area lines, painted behind
+         the drawings (which themselves sit behind the candles).
+         Non-interactive. -->
+    <div
+      v-if="indicators.vpAdded && indicators.vpVisible && (vpPixels.bars.length > 0 || vpPixels.noData)"
+      class="vp-layer drawing-clip"
+      :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }"
+    >
+      <div
+        v-for="b in vpPixels.bars"
+        :key="b.key"
+        class="vp-bar"
+        :style="{ top: b.top + 'px', height: b.height + 'px', left: b.left + 'px', width: b.width + 'px', background: b.background, opacity: b.opacity }"
+      ></div>
+      <div
+        v-if="vpPixels.poc"
+        class="vp-line"
+        :style="{ top: vpPixels.poc.top + 'px', left: vpPixels.poc.left + 'px', width: vpPixels.poc.width + 'px', background: indicators.vpPocColor }"
+      ></div>
+      <div
+        v-if="vpPixels.pocLabel"
+        class="vp-poc-label"
+        :style="{ top: vpPixels.pocLabel.top + 'px', background: indicators.vpPocColor, color: vpPixels.pocLabel.ink }"
+      >{{ vpPixels.pocLabel.text }}</div>
+      <div
+        v-if="indicators.vpShowVaLines && vpPixels.vah"
+        class="vp-line vp-line-dashed"
+        :style="{ top: vpPixels.vah.top + 'px', left: vpPixels.vah.left + 'px', width: vpPixels.vah.width + 'px', backgroundImage: `repeating-linear-gradient(to right, ${indicators.vpVaColor} 0 5px, transparent 5px 9px)` }"
+      ></div>
+      <div
+        v-if="indicators.vpShowVaLines && vpPixels.val"
+        class="vp-line vp-line-dashed"
+        :style="{ top: vpPixels.val.top + 'px', left: vpPixels.val.left + 'px', width: vpPixels.val.width + 'px', backgroundImage: `repeating-linear-gradient(to right, ${indicators.vpVaColor} 0 5px, transparent 5px 9px)` }"
+      ></div>
+      <div
+        v-if="vpPixels.anchors"
+        class="vp-anchor-line"
+        :style="{ left: vpPixels.anchors.start + 'px', backgroundImage: `repeating-linear-gradient(to bottom, ${indicators.vpVaColor} 0 5px, transparent 5px 9px)` }"
+      ></div>
+      <div
+        v-if="vpPixels.anchors"
+        class="vp-anchor-line"
+        :style="{ left: vpPixels.anchors.end + 'px', backgroundImage: `repeating-linear-gradient(to bottom, ${indicators.vpVaColor} 0 5px, transparent 5px 9px)` }"
+      ></div>
+      <div v-if="vpPixels.noData" class="vp-no-data">No volume data for this instrument</div>
+    </div>
+    <!-- VP hit layer: the only VP elements that capture the pointer — the
+         two anchor strips. The window body stays pointer-transparent (the
+         chart's own crosshair/pan works between the lines). Ties with the
+         drawing hit layer, which comes later in the DOM → a selected
+         drawing's handles keep pointer priority where they overlap. -->
+    <div
+      v-if="indicators.vpAdded && indicators.vpVisible && vpPixels.anchors"
+      class="vp-hit-layer drawing-clip"
+      :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }"
+    >
+      <div
+        class="vp-anchor"
+        :style="{ left: vpPixels.anchors.start + 'px' }"
+        @pointerdown.stop.prevent="onVpDown($event, 'start')"
+      >
+        <span class="vp-grip" :style="{ background: indicators.vpVaColor }"></span>
+        <span class="vp-grip" :style="{ background: indicators.vpVaColor }"></span>
+      </div>
+      <div
+        class="vp-anchor"
+        :style="{ left: vpPixels.anchors.end + 'px' }"
+        @pointerdown.stop.prevent="onVpDown($event, 'end')"
+      >
+        <span class="vp-grip" :style="{ background: indicators.vpVaColor }"></span>
+        <span class="vp-grip" :style="{ background: indicators.vpVaColor }"></span>
       </div>
     </div>
     <!-- Visible drawing layer: z-ordered BEHIND the candle painting, so a
@@ -7676,6 +8133,116 @@ onBeforeUnmount(() => {
   letter-spacing: 0.03em;
   white-space: nowrap;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+/* ── Fixed Range Volume Profile ──────────────────────────────────────────
+ * .vp-layer      — window shading + up/down histogram + POC/VA lines,
+ *                  BEHIND the candles (z-0, same stacking as sessions).
+ * .vp-hit-layer  — anchor strips + window body above the candles (z-2),
+ *                  below the drawing hit layer (z-3). */
+.vp-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  /* Same software-rendering projection fix as .session-layer above. */
+  transform: translateZ(0);
+  will-change: transform;
+  backface-visibility: hidden;
+}
+.vp-bar {
+  position: absolute;
+}
+.vp-line {
+  position: absolute;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 1px;
+}
+.vp-poc-label {
+  position: absolute;
+  right: 6px;
+  transform: translateY(-50%);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  z-index: 1;
+}
+.vp-line-dashed {
+  background: none; /* color arrives as a repeating-gradient inline */
+  height: 1px;
+  margin-top: 0;
+}
+.vp-anchor-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+.vp-no-data {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-panel, rgba(0, 0, 0, 0.25));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 9px;
+  pointer-events: none;
+}
+.vp-hit-layer {
+  position: absolute;
+  inset: 0;
+  /* z-3: must beat LWC's pane canvas (z-2, later in DOM — it won the tie at
+     z-2 and swallowed every pointerdown, so the anchors were undraggable).
+     Ties with .drawing-hit-layer (z-3, later) → a selected drawing's handles
+     keep pointer priority where they overlap. */
+  z-index: 3;
+  pointer-events: none;
+}
+.vp-anchor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 13px;
+  margin-left: -6px;
+  cursor: ew-resize;
+  pointer-events: auto;
+  touch-action: none;
+}
+.vp-grip {
+  position: absolute;
+  left: 50%;
+  width: 11px;
+  height: 4px;
+  margin-left: -5.5px;
+  border-radius: 2px;
+  opacity: 0.9;
+}
+.vp-grip:first-child {
+  top: 8px;
+}
+.vp-grip:last-child {
+  bottom: 8px;
+}
+.vp-set-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.vp-set-hint {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  padding: 2px 4px 0;
 }
 /* Clip overlay children (boxes, hit areas, handles) to the chart area so
    nothing renders over or can be drawn on the price/time scales. */

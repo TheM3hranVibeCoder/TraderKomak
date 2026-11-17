@@ -157,11 +157,14 @@ export const useIndicatorsStore = defineStore("indicators", () => {
   const defs = ref<SessionDef[]>(SESSIONS.map((s) => ({ ...s })));
 
   /* ── Per-symbol "added" state for every indicator ─────────────────────
-   * Adding Sessions/RSI/SMA/EMA applies to the CURRENT symbol only;
+   * Adding Sessions/RSI/SMA/EMA/VP applies to the CURRENT symbol only;
    * removing on another symbol never touches this one. Synced to Supabase
    * via cloudSync (user_settings.indicators). */
-  type AddedFlags = { sessions?: boolean; rsi?: boolean; sma?: boolean; ema?: boolean };
+  type AddedFlags = { sessions?: boolean; rsi?: boolean; sma?: boolean; ema?: boolean; vp?: boolean };
   const addedMap = ref<Record<string, AddedFlags>>({});
+
+  /** Indicator kinds accepted by the sanitizer (cloud sync / migration). */
+  const ADDED_KINDS = ["sessions", "rsi", "sma", "ema", "vp"] as const;
 
   function addedFor(kind: keyof AddedFlags): boolean {
     const m = addedMap.value[useMarketStore().instrument];
@@ -188,7 +191,7 @@ export const useIndicatorsStore = defineStore("indicators", () => {
       if (!flags || typeof flags !== "object") continue;
       const f = flags as Record<string, unknown>;
       const e: AddedFlags = {};
-      for (const k of ["sessions", "rsi", "sma", "ema"] as const) {
+      for (const k of ADDED_KINDS) {
         if (typeof f[k] === "boolean" && f[k]) e[k] = true;
       }
       if (Object.keys(e).length > 0) clean[sym] = e;
@@ -224,6 +227,53 @@ export const useIndicatorsStore = defineStore("indicators", () => {
   const emaLength = ref(50);
   const emaColor = ref("#38bdf8");
 
+  /* ── Fixed Range Volume Profile (TradingView-style) ────────────────────
+   * Two draggable time anchors define the profile window; the histogram,
+   * POC and Value Area render from the volume sidecar (volumeFeed). The
+   * anchors persist PER symbol+timeframe — each view remembers its own
+   * window (null = first use; ChartPane then anchors the last 150 bars). */
+  const vpAdded = computed({
+    get: () => addedFor("vp"),
+    set: (v: boolean) => setAdded("vp", v),
+  });
+  const vpVisible = ref(true);
+  /** Histogram rows (price buckets) — TradingView's default is 24. */
+  const vpRows = ref(24);
+  /** Value Area percentage of total volume. */
+  const vpVaPercent = ref(70);
+  /** Histogram max width, % of the main-pane width. */
+  const vpWidthPercent = ref(30);
+  const vpUpColor = ref("#26a69a");
+  const vpDownColor = ref("#ef5350");
+  const vpPocColor = ref("#f59e0b");
+  const vpVaColor = ref("#8b93a7");
+  /** "POC: <price>" tag at the POC line's right end (TV script default ON). */
+  const vpShowPocLabel = ref(true);
+  /** VAH/VAL dashed lines — off by default (visitor prefers a clean look);
+   *  the Value Area itself still drives the brighter rows. */
+  const vpShowVaLines = ref(false);
+  const vpRanges = ref<Record<string, { start: number; end: number }>>({});
+
+  const vpRangeKey = (inst: string, tf: string): string => `${inst}|${tf}`;
+
+  function getVpRange(inst: string, tf: string): { start: number; end: number } | null {
+    const r = vpRanges.value[vpRangeKey(inst, tf)];
+    if (r && Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start) return { start: r.start, end: r.end };
+    return null;
+  }
+
+  function setVpRange(inst: string, tf: string, start: number, end: number): void {
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+    if (end <= start) return;
+    vpRanges.value = { ...vpRanges.value, [vpRangeKey(inst, tf)]: { start, end } };
+  }
+
+  function removeVpRange(inst: string, tf: string): void {
+    const next = { ...vpRanges.value };
+    delete next[vpRangeKey(inst, tf)];
+    vpRanges.value = next;
+  }
+
   /** User-defined sessions (visitor-local clock). */
   const customs = ref<CustomSession[]>([]);
 
@@ -253,6 +303,17 @@ export const useIndicatorsStore = defineStore("indicators", () => {
       emaVisible: emaVisible.value,
       emaLength: emaLength.value,
       emaColor: emaColor.value,
+      vpVisible: vpVisible.value,
+      vpRows: vpRows.value,
+      vpVaPercent: vpVaPercent.value,
+      vpWidthPercent: vpWidthPercent.value,
+      vpUpColor: vpUpColor.value,
+      vpDownColor: vpDownColor.value,
+      vpPocColor: vpPocColor.value,
+      vpVaColor: vpVaColor.value,
+      vpShowPocLabel: vpShowPocLabel.value,
+      vpShowVaLines: vpShowVaLines.value,
+      vpRanges: JSON.parse(JSON.stringify(vpRanges.value)),
     };
   }
 
@@ -303,6 +364,30 @@ export const useIndicatorsStore = defineStore("indicators", () => {
     if (typeof p.emaVisible === "boolean") emaVisible.value = p.emaVisible;
     if (typeof p.emaLength === "number" && p.emaLength >= 2 && p.emaLength <= 500) emaLength.value = Math.round(p.emaLength);
     if (typeof p.emaColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.emaColor)) emaColor.value = p.emaColor;
+    if (typeof p.vpVisible === "boolean") vpVisible.value = p.vpVisible;
+    if (typeof p.vpRows === "number") vpRows.value = Math.min(200, Math.max(1, Math.round(p.vpRows)));
+    if (typeof p.vpVaPercent === "number") vpVaPercent.value = Math.min(100, Math.max(0, p.vpVaPercent));
+    if (typeof p.vpWidthPercent === "number") vpWidthPercent.value = Math.min(80, Math.max(5, p.vpWidthPercent));
+    if (typeof p.vpUpColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.vpUpColor)) vpUpColor.value = p.vpUpColor;
+    if (typeof p.vpDownColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.vpDownColor)) vpDownColor.value = p.vpDownColor;
+    if (typeof p.vpPocColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.vpPocColor)) vpPocColor.value = p.vpPocColor;
+    if (typeof p.vpVaColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.vpVaColor)) vpVaColor.value = p.vpVaColor;
+    if (typeof p.vpShowPocLabel === "boolean") vpShowPocLabel.value = p.vpShowPocLabel;
+    if (typeof p.vpShowVaLines === "boolean") vpShowVaLines.value = p.vpShowVaLines;
+    if (p.vpRanges && typeof p.vpRanges === "object") {
+      const clean: Record<string, { start: number; end: number }> = {};
+      for (const [k, r] of Object.entries(p.vpRanges as Record<string, unknown>)) {
+        const rec = r as Record<string, unknown>;
+        if (
+          typeof rec?.start === "number" && Number.isFinite(rec.start) &&
+          typeof rec?.end === "number" && Number.isFinite(rec.end) &&
+          rec.end > rec.start
+        ) {
+          clean[k] = { start: rec.start, end: rec.end };
+        }
+      }
+      vpRanges.value = clean;
+    }
   }
 
   // Restore persisted state
@@ -331,6 +416,17 @@ export const useIndicatorsStore = defineStore("indicators", () => {
         emaVisible?: boolean;
         emaLength?: number;
         emaColor?: string;
+        vpVisible?: boolean;
+        vpRows?: number;
+        vpVaPercent?: number;
+        vpWidthPercent?: number;
+        vpUpColor?: string;
+        vpDownColor?: string;
+        vpPocColor?: string;
+        vpVaColor?: string;
+        vpShowPocLabel?: boolean;
+        vpShowVaLines?: boolean;
+        vpRanges?: Record<string, { start: number; end: number }>;
         addedMap?: Record<string, AddedFlags>;
       };
       if (typeof p.added === "boolean") sessionsAdded.value = p.added;
@@ -367,6 +463,25 @@ export const useIndicatorsStore = defineStore("indicators", () => {
       if (typeof p.emaVisible === "boolean") emaVisible.value = p.emaVisible;
       if (typeof p.emaLength === "number" && p.emaLength >= 2 && p.emaLength <= 500) emaLength.value = Math.round(p.emaLength);
       if (HEXc(p.emaColor)) emaColor.value = p.emaColor;
+      if (typeof p.vpVisible === "boolean") vpVisible.value = p.vpVisible;
+      if (typeof p.vpRows === "number") vpRows.value = Math.min(200, Math.max(1, Math.round(p.vpRows)));
+      if (typeof p.vpVaPercent === "number") vpVaPercent.value = Math.min(100, Math.max(0, p.vpVaPercent));
+      if (typeof p.vpWidthPercent === "number") vpWidthPercent.value = Math.min(80, Math.max(5, p.vpWidthPercent));
+      if (HEXc(p.vpUpColor)) vpUpColor.value = p.vpUpColor;
+      if (HEXc(p.vpDownColor)) vpDownColor.value = p.vpDownColor;
+      if (HEXc(p.vpPocColor)) vpPocColor.value = p.vpPocColor;
+      if (HEXc(p.vpVaColor)) vpVaColor.value = p.vpVaColor;
+      if (typeof p.vpShowPocLabel === "boolean") vpShowPocLabel.value = p.vpShowPocLabel;
+      if (typeof p.vpShowVaLines === "boolean") vpShowVaLines.value = p.vpShowVaLines;
+      if (p.vpRanges && typeof p.vpRanges === "object") {
+        const clean: Record<string, { start: number; end: number }> = {};
+        for (const [k, r] of Object.entries(p.vpRanges)) {
+          if (r && Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start) {
+            clean[k] = { start: r.start, end: r.end };
+          }
+        }
+        vpRanges.value = clean;
+      }
       if (p.addedMap && typeof p.addedMap === "object") {
         setAddedMap(p.addedMap);
       } else {
@@ -401,7 +516,8 @@ export const useIndicatorsStore = defineStore("indicators", () => {
 
   watch(
     [sessionsAdded, sessionsVisible, sessionsLabels, sessionsEnabled, defs, customs, rsiAdded, rsiVisible, rsiLength, rsiColor, rsiLevelColor, rsiUpper, rsiLower,
-     smaAdded, smaVisible, smaLength, smaColor, emaAdded, emaVisible, emaLength, emaColor, addedMap],
+     smaAdded, smaVisible, smaLength, smaColor, emaAdded, emaVisible, emaLength, emaColor, addedMap,
+     vpAdded, vpVisible, vpRows, vpVaPercent, vpWidthPercent, vpUpColor, vpDownColor, vpPocColor, vpVaColor, vpShowPocLabel, vpShowVaLines, vpRanges],
     () => {
       try {
       localStorage.setItem(
@@ -428,6 +544,17 @@ export const useIndicatorsStore = defineStore("indicators", () => {
           emaVisible: emaVisible.value,
           emaLength: emaLength.value,
           emaColor: emaColor.value,
+          vpVisible: vpVisible.value,
+          vpRows: vpRows.value,
+          vpVaPercent: vpVaPercent.value,
+          vpWidthPercent: vpWidthPercent.value,
+          vpUpColor: vpUpColor.value,
+          vpDownColor: vpDownColor.value,
+          vpPocColor: vpPocColor.value,
+          vpVaColor: vpVaColor.value,
+          vpShowPocLabel: vpShowPocLabel.value,
+          vpShowVaLines: vpShowVaLines.value,
+          vpRanges: vpRanges.value,
           addedMap: addedMap.value,
         })
       );
@@ -443,6 +570,15 @@ export const useIndicatorsStore = defineStore("indicators", () => {
 
   function removeSessions(): void {
     sessionsAdded.value = false;
+  }
+
+  function addVp(): void {
+    vpAdded.value = true;
+    vpVisible.value = true;
+  }
+
+  function removeVp(): void {
+    vpAdded.value = false;
   }
 
   /** Add a user-defined session — interpreted in the VISITOR's own local
@@ -492,11 +628,28 @@ export const useIndicatorsStore = defineStore("indicators", () => {
     emaVisible,
     emaLength,
     emaColor,
+    vpAdded,
+    vpVisible,
+    vpRows,
+    vpVaPercent,
+    vpWidthPercent,
+    vpUpColor,
+    vpDownColor,
+    vpPocColor,
+    vpVaColor,
+    vpShowPocLabel,
+    vpShowVaLines,
+    vpRanges,
+    getVpRange,
+    setVpRange,
+    removeVpRange,
     isEnabled,
     settingsSnapshot,
     applySettings,
     addSessions,
     removeSessions,
+    addVp,
+    removeVp,
     addCustomSession,
     removeCustomSession,
   };

@@ -35,6 +35,7 @@ import {
   type Timeframe,
 } from "@traderkomak/shared";
 import type { WsHandlers } from "./wsClient";
+import { recordVolumes } from "./volumeFeed";
 import { currentOandaAccount, rotateOandaAccount, type OandaAccount } from "./oandaAccounts";
 
 const OANDA_MAX_COUNT = 5000;
@@ -107,6 +108,9 @@ interface OandaCandleMid {
 interface RawOandaCandle {
   complete?: unknown;
   time?: unknown;
+  /** Tick count in the bucket (OANDA's FX "volume") — captured for the
+   *  Volume Profile sidecar. */
+  volume?: unknown;
   mid?: OandaCandleMid;
 }
 
@@ -136,7 +140,7 @@ function oandaTimeToSeconds(value: unknown): number | null {
  * The trailing INCOMPLETE candle is kept on purpose (seeds the live
  * aggregator with the bucket currently forming).
  */
-function toCandles(response: RawOandaCandlesResponse): Candle[] {
+function toCandles(response: RawOandaCandlesResponse, vols?: Map<number, number>): Candle[] {
   const rows = Array.isArray(response.candles) ? response.candles : [];
   const out = new Map<number, Candle>();
   for (const row of rows as RawOandaCandle[]) {
@@ -147,6 +151,10 @@ function toCandles(response: RawOandaCandlesResponse): Candle[] {
     const low = parsePrice(row.mid?.l);
     const close = parsePrice(row.mid?.c);
     if (open === null || high === null || low === null || close === null) continue;
+    if (vols) {
+      const v = Number(row.volume);
+      if (Number.isFinite(v) && v > 0) vols.set(time, v);
+    }
     out.set(time, { time, open, high, low, close });
   }
   return [...out.values()].sort((a, b) => a.time - b.time);
@@ -190,7 +198,8 @@ async function fetchBatch(
   instrument: string,
   granularity: string,
   count: number,
-  toIso?: string
+  toIso?: string,
+  vols?: Map<number, number>
 ): Promise<Candle[]> {
   const res = await fetch(candlesUrl(target, instrument, granularity, count, toIso), {
     headers:
@@ -222,7 +231,7 @@ async function fetchBatch(
   } catch {
     throw new Error("Malformed OANDA proxy response");
   }
-  return toCandles(body);
+  return toCandles(body, vols);
 }
 
 /**
@@ -252,6 +261,7 @@ export async function fetchOandaCandles(
   let lastErr: unknown = null;
 
   const all: Candle[] = [];
+  const vols = new Map<number, number>(); // Volume Profile sidecar sink
   let remaining = needed;
   let to = toSec !== undefined ? new Date(toSec * 1000).toISOString() : undefined;
   for (let batch = 0; batch < MAX_BATCHES && remaining > 0; batch++) {
@@ -269,7 +279,7 @@ export async function fetchOandaCandles(
         throw lastErr instanceof Error ? lastErr : new Error("OANDA data source unavailable");
       }
       try {
-        candles = await fetchBatch(target, instrument, granularity, batchCount, to);
+        candles = await fetchBatch(target, instrument, granularity, batchCount, to, vols);
         break;
       } catch (err) {
         lastErr = err;
@@ -297,8 +307,25 @@ export async function fetchOandaCandles(
   const native = [...dedup.values()].sort((a, b) => a.time - b.time).slice(-needed);
 
   const tfSec = TIMEFRAME_SECONDS[timeframe];
-  // 10s/15s/30s are exact multiples of S5 and UTC-aligned → plain modulo.
-  if (granularity === "S5" && tfSec > 5) return aggregateCandles(native, tfSec);
+  // Volume Profile sidecar: keep only the volumes that survived the dedup
+  // (same keep-last rule as the candles), then mirror the aggregation —
+  // native granularities pass through 1:1; S5 sources sum into the
+  // epoch-floor target bucket (same rule as aggregateCandles).
+  const nativeVols = new Map<number, number>();
+  for (const c of native) {
+    const v = vols.get(c.time);
+    if (v !== undefined) nativeVols.set(c.time, v);
+  }
+  if (granularity === "S5" && tfSec > 5) {
+    const summed = new Map<number, number>();
+    for (const [t, v] of nativeVols) {
+      const bucket = Math.floor(t / tfSec) * tfSec;
+      summed.set(bucket, (summed.get(bucket) ?? 0) + v);
+    }
+    recordVolumes(instrument, timeframe, summed);
+    return aggregateCandles(native, tfSec);
+  }
+  recordVolumes(instrument, timeframe, nativeVols);
   return native;
 }
 

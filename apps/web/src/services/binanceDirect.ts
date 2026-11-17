@@ -53,6 +53,7 @@ import {
   type Timeframe,
 } from "@traderkomak/shared";
 import type { WsHandlers } from "./wsClient";
+import { recordVolumes } from "./volumeFeed";
 
 const REST_BASE_DIRECT = "https://data-api.binance.vision";
 const WS_BASE_DIRECT = "wss://data-stream.binance.vision";
@@ -185,7 +186,8 @@ async function fetchKlinesOnce(
   symbol: string,
   interval: string,
   limit: number,
-  endTimeMs?: number
+  endTimeMs?: number,
+  vols?: Map<number, number>
 ): Promise<Candle[]> {
   let url =
     `${base}/api/v3/klines` +
@@ -199,7 +201,14 @@ async function fetchKlinesOnce(
   for (const row of body as unknown[]) {
     if (!Array.isArray(row)) continue;
     const c = parseKline(row as RawKline);
-    if (c) out.push(c);
+    if (c) {
+      out.push(c);
+      // Volume Profile sidecar: kline index 5 is the base-asset volume.
+      if (vols) {
+        const v = Number(row[5]);
+        if (Number.isFinite(v) && v > 0) vols.set(c.time, v);
+      }
+    }
   }
   return out;
 }
@@ -210,7 +219,8 @@ async function walkKlines(
   symbol: string,
   interval: string,
   needed: number,
-  endTimeMs?: number
+  endTimeMs?: number,
+  vols?: Map<number, number>
 ): Promise<Candle[]> {
   const all: Candle[] = [];
   let end = endTimeMs;
@@ -220,7 +230,8 @@ async function walkKlines(
       symbol,
       interval,
       Math.min(needed - all.length, KLINE_LIMIT),
-      end
+      end,
+      vols
     );
     if (rows.length === 0) break;
     all.unshift(...rows);
@@ -235,9 +246,11 @@ interface HtxKline {
   high?: unknown;
   low?: unknown;
   close?: unknown;
+  /** Base-asset volume — captured for the Volume Profile sidecar. */
+  vol?: unknown;
 }
 
-function parseHtxKline(row: unknown): Candle | null {
+function parseHtxKline(row: unknown, vols?: Map<number, number>): Candle | null {
   if (typeof row !== "object" || row === null) return null;
   const r = row as HtxKline;
   const time = Number(r.id);
@@ -246,6 +259,10 @@ function parseHtxKline(row: unknown): Candle | null {
   const low = Number(r.low);
   const close = Number(r.close);
   if (!Number.isFinite(time) || ![open, high, low, close].every(Number.isFinite)) return null;
+  if (vols) {
+    const v = Number(r.vol);
+    if (Number.isFinite(v) && v > 0) vols.set(time, v);
+  }
   return { time, open, high, low, close };
 }
 
@@ -258,7 +275,8 @@ function parseHtxKline(row: unknown): Candle | null {
 async function fetchHtxCandles(
   symbol: string,
   interval: string,
-  needed: number
+  needed: number,
+  vols?: Map<number, number>
 ): Promise<Candle[] | null> {
   const period = HTX_PERIODS[interval];
   if (!period) return null;
@@ -272,7 +290,7 @@ async function fetchHtxCandles(
   }
   const out: Candle[] = [];
   for (const row of body.data) {
-    const c = parseHtxKline(row);
+    const c = parseHtxKline(row, vols);
     if (c) out.push(c);
   }
   out.reverse();
@@ -280,7 +298,7 @@ async function fetchHtxCandles(
 }
 
 /** Gate v4 row: [time, quoteVolume, close, high, low, open, baseVolume, …] */
-function parseGateCandle(row: unknown): Candle | null {
+function parseGateCandle(row: unknown, vols?: Map<number, number>): Candle | null {
   if (!Array.isArray(row) || row.length < 6) return null;
   const time = Number(row[0]);
   const close = parseFloat(String(row[2]));
@@ -288,6 +306,12 @@ function parseGateCandle(row: unknown): Candle | null {
   const low = parseFloat(String(row[4]));
   const open = parseFloat(String(row[5]));
   if (!Number.isFinite(time) || ![open, high, low, close].every(Number.isFinite)) return null;
+  // Index 6 is the BASE-asset volume (index 1 is quote-currency) — same
+  // unit Binance's kline index 5 reports.
+  if (vols && row.length > 6) {
+    const v = Number(row[6]);
+    if (Number.isFinite(v) && v > 0) vols.set(time, v);
+  }
   return { time, open, high, low, close };
 }
 
@@ -297,7 +321,8 @@ async function fetchGateCandles(
   symbol: string,
   interval: string,
   needed: number,
-  toSec?: number
+  toSec?: number,
+  vols?: Map<number, number>
 ): Promise<Candle[] | null> {
   const pair = gatePair(symbol);
   const all: Candle[] = [];
@@ -312,7 +337,7 @@ async function fetchGateCandles(
     if (!Array.isArray(body)) throw new Error("Malformed Gate response");
     const rows: Candle[] = [];
     for (const row of body) {
-      const c = parseGateCandle(row);
+      const c = parseGateCandle(row, vols);
       if (c) rows.push(c);
     }
     if (rows.length === 0) {
@@ -343,6 +368,27 @@ function aggregateBinanceBuckets(rows: Candle[], tfSec: number): Candle[] {
     }
   }
   return [...out.values()].sort((a, b) => a.time - b.time);
+}
+
+/** Source-row volumes → DISPLAYED-candle volumes, mirroring finalizeCandles'
+ *  aggregation exactly: same-source rows pass through 1:1; finer sources are
+ *  summed into the target bucket (epoch-floor, or Binance's calendar bucket
+ *  for 1w/1M derived from daily rows). The Volume Profile reads these by the
+ *  chart candle's time, so the keys must match the chart's candles. */
+function mapSourceVolumes(
+  vols: Map<number, number>,
+  sourceSec: number,
+  timeframe: Timeframe
+): Map<number, number> {
+  const tfSec = TIMEFRAME_SECONDS[timeframe];
+  if (vols.size === 0 || sourceSec === tfSec) return vols;
+  const calendar = tfSec === 604800 || tfSec === 2592000;
+  const out = new Map<number, number>();
+  for (const [t, v] of vols) {
+    const bucket = calendar ? binanceBucketStart(t * 1000, tfSec) / 1000 : Math.floor(t / tfSec) * tfSec;
+    out.set(bucket, (out.get(bucket) ?? 0) + v);
+  }
+  return out;
 }
 
 /** Dedup + sort, aggregate a coarser source grid into the target timeframe
@@ -406,11 +452,12 @@ export async function fetchBinanceCandles(
     try {
       let rows: Candle[] | null;
       let sourceSec: number;
+      const vols = new Map<number, number>(); // Volume Profile sidecar sink
       switch (source) {
         case "direct":
         case "proxy": {
           const base = source === "direct" ? REST_BASE_DIRECT : proxy!;
-          rows = await walkKlines(base, instrument, interval, Math.min(count * factor, cap), toMs);
+          rows = await walkKlines(base, instrument, interval, Math.min(count * factor, cap), toMs, vols);
           sourceSec = interval === "1s" ? 1 : tfSec;
           break;
         }
@@ -418,7 +465,7 @@ export async function fetchBinanceCandles(
           // HTX serves the latest window only — cursor queries need a source
           // with `to` support (Gate), otherwise the window would be wrong.
           if (toMs !== undefined) continue;
-          rows = await fetchHtxCandles(instrument, interval, count);
+          rows = await fetchHtxCandles(instrument, interval, count, vols);
           sourceSec = tfSec;
           break;
         }
@@ -433,13 +480,14 @@ export async function fetchBinanceCandles(
                 : tfSec === 2592000
                   ? count * 31 // 1d source rows → monthly target
                   : count;
-          rows = await fetchGateCandles(instrument, gate, Math.min(gateNeeded, cap), toSec);
+          rows = await fetchGateCandles(instrument, gate, Math.min(gateNeeded, cap), toSec, vols);
           sourceSec = gate === "10s" ? 10 : tfSec === 604800 || tfSec === 2592000 ? 86400 : tfSec;
           break;
         }
       }
       if (rows === null) continue; // source can't serve this request
       restMode = source; // remember the winner for the next fetch
+      recordVolumes(instrument, timeframe, mapSourceVolumes(vols, sourceSec, timeframe));
       return finalizeCandles(rows, sourceSec, timeframe, count);
     } catch (err) {
       lastErr = err;
@@ -894,6 +942,13 @@ export class BinanceDirectStream {
     const low = parseFloat(String(kl.l));
     const close = parseFloat(String(kl.c));
     if (![open, high, low, close].every(Number.isFinite)) return;
+    // Volume Profile sidecar: the live kline carries its running base-asset
+    // volume (`v`) — keep the bucket's entry fresh so the profile's last bar
+    // tracks the live candle without a REST refresh.
+    const vol = Number(kl.v);
+    if (Number.isFinite(vol) && vol > 0) {
+      recordVolumes(cur.instrument, cur.timeframe, [[Math.floor(openTimeMs / 1000), vol]]);
+    }
     this.handlers.onCandle(
       cur.instrument,
       cur.timeframe,

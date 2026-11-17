@@ -260,6 +260,18 @@ function toggleReplay(): void {
           </span>
           <span class="ind-item-name">Relative Strength Index</span>
         </button>
+        <button
+          class="ind-item"
+          type="button"
+          role="menuitemcheckbox"
+          :aria-checked="indicators.vpAdded"
+          @click="indicators.vpAdded ? indicators.removeVp() : indicators.addVp()"
+        >
+          <span class="ind-check" :class="{ on: indicators.vpAdded }">
+            <svg v-if="indicators.vpAdded" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12l5 5L20 7" /></svg>
+          </span>
+          <span class="ind-item-name">Fixed Volume Profile</span>
+        </button>
       </div>
     </Teleport>
 
