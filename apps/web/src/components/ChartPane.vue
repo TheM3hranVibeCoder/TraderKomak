@@ -671,6 +671,10 @@ function computeVpPixels(): void {
 type VpDragKind = "start" | "end";
 let vpDrag: { kind: VpDragKind; grabTime: number; origStart: number; origEnd: number } | null = null;
 const vpDragRange = ref<{ start: number; end: number } | null>(null);
+/** True while an anchor is being dragged — the overlay crosshair (v/h lines
+ *  + price/time tags) hides for the whole gesture: during a fast drag it
+ *  flickers over the moving line and only distracts (visitor request). */
+const vpDragActive = ref(false);
 
 function onVpDown(e: PointerEvent, kind: VpDragKind): void {
   if (!adapter || !indicators.vpAdded) return;
@@ -682,6 +686,8 @@ function onVpDown(e: PointerEvent, kind: VpDragKind): void {
   if (t === null) return;
   vpDrag = { kind, grabTime: t, origStart: range.start, origEnd: range.end };
   vpDragRange.value = { ...range };
+  vpDragActive.value = true;
+  snapXhair.value = null; // clear any crosshair showing at grab time
   adapter.setDrawingMode(true);
   window.addEventListener("pointermove", onVpDragMove);
   window.addEventListener("pointerup", onVpDragUp, { once: true });
@@ -716,6 +722,7 @@ function onVpDragMove(e: PointerEvent): void {
 
 function onVpDragUp(): void {
   window.removeEventListener("pointermove", onVpDragMove);
+  vpDragActive.value = false;
   if (vpDrag && vpDragRange.value && indicators.vpAdded) {
     const { start, end } = vpDragRange.value;
     if (end > start) indicators.setVpRange(market.instrument, market.timeframe, start, end);
@@ -2338,6 +2345,7 @@ const computeSnapXhair = (clientX: number, clientY: number): void => {
   // select click.
   if (
     !pointerInChart.value ||
+    vpDragActive.value ||
     (touchXhairLive.value && !touchXhairHold.value && !drawingToolActive.value)
   ) {
     snapXhair.value = null;
