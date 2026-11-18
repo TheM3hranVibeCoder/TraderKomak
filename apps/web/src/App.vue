@@ -19,6 +19,7 @@ import LandingPage from "@/components/LandingPage.vue";
 import AuthModal from "@/components/AuthModal.vue";
 import BannedPage from "@/components/BannedPage.vue";
 import UserPopups from "@/components/UserPopups.vue";
+import TelegramWelcome from "@/components/TelegramWelcome.vue";
 import type { Timeframe } from "@traderkomak/shared";
 
 const market = useMarketStore();
@@ -318,6 +319,8 @@ function onTimeframeChange(next: Timeframe): void {
     <AuthModal v-if="auth.authModalOpen" />
     <BannedPage v-if="chat.banned" />
     <UserPopups />
+    <!-- One-time Telegram welcome after an interactive Google sign-in -->
+    <TelegramWelcome />
     <!-- Server-down popup: Telegram channel push (free self-hosted app) -->
     <div v-if="serverDownPopup" class="server-down-pop" role="dialog" aria-modal="true" aria-label="Server unavailable">
       <button class="sdp-close" type="button" aria-label="Close" @click="dismissServerDownPopup">✕</button>
