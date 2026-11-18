@@ -491,21 +491,29 @@ const VP_DEFAULT_BARS = 150;
 function ensureVpRange(candles: Candle[]): { start: number; end: number } | null {
   const n = candles.length;
   if (n < 2) return null;
+  const first = candles[0]!.time;
+  const last = candles[n - 1]!.time;
   const stored = indicators.getVpRange(market.instrument, market.timeframe);
   if (stored) {
-    const first = candles[0]!.time;
-    const last = candles[n - 1]!.time;
     const start = Math.min(Math.max(stored.start, first), last);
     const end = Math.min(Math.max(stored.end, first), last);
-    if (start !== stored.start || end !== stored.end) {
-      if (end > start) indicators.setVpRange(market.instrument, market.timeframe, start, end);
+    if (end > start) {
+      if (start !== stored.start || end !== stored.end) {
+        indicators.setVpRange(market.instrument, market.timeframe, start, end);
+      }
+      return { start, end };
     }
-    return end > start ? { start, end } : null;
+    // The stored window fell entirely OUTSIDE the loaded data — the live
+    // edge advanced past it (a visit days later) or the initial history on
+    // fast second-timeframes (5s/10s/15s/30s, capped source walk) doesn't
+    // reach it. Clamping collapses it to a point, so the profile would
+    // render nothing forever — until lazy-loading happened to reach that
+    // old region. Re-anchor at the LIVE edge instead: adding always shows
+    // the profile on every timeframe (the anchors stay draggable).
   }
   const start = candles[Math.max(0, n - VP_DEFAULT_BARS)]!.time;
-  const end = candles[n - 1]!.time;
-  indicators.setVpRange(market.instrument, market.timeframe, start, end);
-  return { start, end };
+  indicators.setVpRange(market.instrument, market.timeframe, start, last);
+  return { start, end: last };
 }
 
 function vpRangeTimes(): { start: number; end: number } | null {
@@ -570,7 +578,11 @@ function computeVpPixels(): void {
   }
   const inst = market.instrument;
   const tf = market.timeframe;
-  const range = vpRangeTimes() ?? ensureVpRange(candles);
+  // Only an in-flight drag override bypasses validation — the stored range
+  // must always pass through ensureVpRange, which clamps it into the loaded
+  // data and re-anchors near the live edge when it fell entirely outside
+  // (the second-timeframes "VP never appears" bug).
+  const range = vpDragRange.value ?? ensureVpRange(candles);
   if (!range) {
     setVpPixels(EMPTY_VP);
     return;
