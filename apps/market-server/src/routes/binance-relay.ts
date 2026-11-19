@@ -17,6 +17,7 @@
 import type { FastifyInstance } from "fastify";
 import WebSocket, { type RawData } from "ws";
 import type { AppConfig } from "../config/env.js";
+import { safeEqual } from "../util/secure.js";
 
 const REST_TARGET = "https://data-api.binance.vision";
 const WS_TARGET = "wss://data-stream.binance.vision";
@@ -27,7 +28,8 @@ export function registerBinanceRelayRoute(app: FastifyInstance, config: AppConfi
   const secret = config.binanceRelaySecret;
   if (!secret) return; // relay disabled
 
-  const checkSecret = (s: unknown): boolean => typeof s === "string" && s.length <= 64 && s === secret;
+  // Constant-time comparison — the same primitive the chat admin key uses.
+  const checkSecret = (s: unknown): boolean => typeof s === "string" && s.length <= 64 && safeEqual(s, secret);
 
   // ── REST passthrough (GET only — market data) ─────────────────────────
   app.get<{ Params: { secret: string; "*": string } }>("/binance/:secret/api/*", async (request, reply) => {

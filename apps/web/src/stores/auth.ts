@@ -28,9 +28,11 @@ const WASAUTH_COOKIE = "tk-was-auth";
 
 function writeWasAuthCookie(on: boolean): void {
   try {
+    // Secure on HTTPS only — plain-HTTP dev origins would drop the cookie.
+    const secure = document.location.protocol === "https:" ? "; Secure" : "";
     document.cookie = on
-      ? `${WASAUTH_COOKIE}=1; Max-Age=${60 * 60 * 24 * 180}; path=/; SameSite=Lax`
-      : `${WASAUTH_COOKIE}=; Max-Age=0; path=/; SameSite=Lax`;
+      ? `${WASAUTH_COOKIE}=1; Max-Age=${60 * 60 * 24 * 180}; path=/; SameSite=Lax${secure}`
+      : `${WASAUTH_COOKIE}=; Max-Age=0; path=/; SameSite=Lax${secure}`;
   } catch {}
 }
 

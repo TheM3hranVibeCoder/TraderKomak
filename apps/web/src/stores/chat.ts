@@ -149,6 +149,19 @@ let client: ChatClient | null = null;
 let clientAdminKey: string | undefined;
 let healListenersAdded = false;
 
+/** Current Supabase access token for the join frame — the chat server
+ *  verifies registered usernames against it (anti-impersonation). Signed-out
+ *  visitors (and any session error) yield null: guest joins behave as before. */
+async function getAccessToken(): Promise<string | null> {
+  if (!supabaseReady) return null;
+  try {
+    const { data } = await supabase().auth.getSession();
+    return data.session?.access_token ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Browsers throttle background-tab timers and the OS/relay can drop idle
  *  sockets, so a chat socket can die while the user is away. On becoming
  *  visible/focused/online, reconnect IMMEDIATELY (skip the backoff) so the
@@ -365,7 +378,7 @@ function addHealListeners(): void {
       onReaction: (id, reactionNick, kind) => {
         applyReaction(id, reactionNick, kind);
       },
-    });
+    }, getAccessToken);
     clientAdminKey = currentKey;
     client.connect(nick.value, currentKey);
     startBanProbe();

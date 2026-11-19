@@ -60,7 +60,7 @@ export function registerCandlesRoute(
     // Rate limit per IP — but degrade to STALE cached history instead of a
     // hard 429 when we have it: phones behind carrier CGNAT share one IP,
     // and a blank chart is never an acceptable answer.
-    const ip = request.ip ?? "unknown";
+    const ip = request.clientIp || request.ip || "unknown";
     if (rateLimited(ip)) {
       const stale = lastGood.get(`${instrument}|${timeframe}|${bucketCount(DEFAULT_COUNT)}`)
         ?? [...lastGood.entries()].find(([k]) => k.startsWith(`${instrument}|${timeframe}|`))?.[1];

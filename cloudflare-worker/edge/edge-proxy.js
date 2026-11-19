@@ -26,10 +26,13 @@ export default {
     var base = upstreamBase(env);
     var upstreamHost = new URL(base).host;
 
-    // Real client IP (Cloudflare sets this on every incoming request).
-    // Fastify runs with trustProxy:true, so it reads X-Forwarded-For —
-    // without this every chatter looks like the same Cloudflare IP and
-    // IP bans / mutes / location lookup all break.
+    // Real client IP (Cloudflare sets this on every incoming request and no
+    // visitor can forge it). The market server no longer trusts the raw
+    // X-Forwarded-For chain — it resolves the visitor address per environment
+    // (see apps/market-server/src/util/clientIp.ts). Overwriting XFF here
+    // (never appending) means a client-supplied chain cannot survive to the
+    // origin: the server sees exactly [clientIp, <ingress-appended>...], and
+    // its Cloudflare-egress rule attributes the visitor to clientIp.
     var clientIp =
       request.headers.get("CF-Connecting-IP") ||
       request.headers.get("X-Forwarded-For") ||
@@ -40,13 +43,15 @@ export default {
     headers.set("Host", upstreamHost);
     headers.set("X-Forwarded-Host", url.host);
     if (clientIp) {
-      var prior = request.headers.get("X-Forwarded-For");
-      headers.set(
-        "X-Forwarded-For",
-        prior ? prior + ", " + clientIp : clientIp
-      );
+      headers.set("X-Forwarded-For", clientIp);
       headers.set("CF-Connecting-IP", clientIp);
       headers.set("X-Real-IP", clientIp);
+      // Optional hardening: set this secret on the Worker (wrangler secret put
+      // EDGE_SHARED_SECRET) AND on the market server; matching requests are
+      // then attributed to this attested value outright.
+      if (env && env.EDGE_SHARED_SECRET) {
+        headers.set("X-Tk-Edge-Auth", env.EDGE_SHARED_SECRET);
+      }
     }
 
     // ---- WebSocket (/ws) ------------------------------------------------

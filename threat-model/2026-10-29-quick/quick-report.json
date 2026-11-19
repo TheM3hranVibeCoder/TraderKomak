@@ -1,0 +1,662 @@
+{
+  "schema_version": "1.0",
+  "artifact_type": "TM_REPORT",
+  "model_id": "traderkomak-quick-20261029",
+  "revision": "1",
+  "parent_revision": null,
+  "status": "complete",
+  "analysis_depth": "quick",
+  "architecture_ids": ["web", "collaboration-realtime", "serverless"],
+  "selected_methods": [],
+  "processed_inputs": [
+    { "id": "PI-1", "locator": "threat-model/2026-10-29-quick/SYSTEM_UNDER_REVIEW.md", "access": "read", "coverage": "full bundle: evidence E1-E27, gaps G1-G6, inspection log, redactions", "reason": null },
+    { "id": "PI-2", "locator": "grim-prompter/quick/web.md", "access": "read", "coverage": "complete prompt body (frontmatter skipped)", "reason": null },
+    { "id": "PI-3", "locator": "threat-model/2026-10-29-quick/selection.json + selection.md", "access": "read", "coverage": "runbook-required architecture selection output consumed as scoping input, not as a versioned model envelope", "reason": null },
+    { "id": "PI-4", "locator": "grim-prompter/runbook.md", "access": "read", "coverage": "operating boundary and output table", "reason": null }
+  ],
+  "unprocessed_inputs": [
+    { "id": "UI-1", "locator": "traderkomak/.env and live secret stores", "access": "unavailable", "coverage": "secret values", "reason": "runbook secret boundary; production values unknown (bundle G2)" },
+    { "id": "UI-2", "locator": "runtime state: live Supabase project, Vercel/Netlify/Render/Cloudflare tenants, live sockets", "access": "unavailable", "coverage": "runtime behavior, deployed headers, live RLS", "reason": "read-only run; no network to live systems" },
+    { "id": "UI-3", "locator": "node_modules, dist output, .data runtime files, dev logs, package-lock audit", "access": "skipped", "coverage": "dependency vulnerabilities, runtime data", "reason": "generated trees; audit requires network" },
+    { "id": "UI-4", "locator": "packages/shared internals, most Vue components (beyond targeted greps), test files, wrangler.toml details", "access": "partial", "coverage": "read only where security-relevant via bundle scope", "reason": "quick-pass budget; unread portions disclosed here" }
+  ],
+  "attachments": [],
+  "continuation": null,
+  "model": {
+    "scope": {
+      "description": "Quick web-lens threat analysis of TraderKomak (Vue SPA + Fastify market server with unauthenticated market WebSocket and community chat + Supabase auth/data + Cloudflare edge relays), at revision a21edd3, to ground a caller decision on which findings to fix without breaking behavior.",
+      "in_scope": [
+        "web: browser request authority, session handling, rendered user content, private-response exposure (vercel.json CSP path)",
+        "collaboration-realtime (bounded): /chat identity, moderation authority, roster/PII",
+        "serverless (bounded): edge/oanda/binance Workers and Netlify candles function"
+      ],
+      "out_of_scope": [
+        "deep six-stage analysis, model challenge, and separately executed methods (none run)",
+        "dependency vulnerability scanning and runtime/live verification (no network)",
+        "mobile apps, payments, trading execution (do not exist in this codebase)",
+        "CI/CD pipelines (none found beyond host build configs)"
+      ],
+      "objectives": [
+        "identify grounded, evidence-linked scenarios that threaten user PII, service availability, moderation authority and data integrity",
+        "propose architectural outcomes and verification the caller can approve before any code changes"
+      ],
+      "assumptions": [
+        "the bundle accurately reflects revision a21edd3; production env values are host-configured per render.yaml/vps-setup.sh",
+        "the deployed frontend is the Vercel path (CSP present); Netlify path is a fallback (unconfirmed, bundle G2)"
+      ],
+      "limitations": [
+        "Quick analysis: no deep-stage challenge, no method executions (selected_methods empty; library registry not checked), no severity ratings (no rubric supplied - risks unrated), no runtime observations.",
+        "Verification designs are not_run plans; none were executed and none authorize execution.",
+        "No parent baseline: changes is empty; baseline comparison did not run.",
+        "Reading code is implementation evidence, not proof of runtime behavior; live RLS state, effective CORS_ORIGIN and the live frontend host remain open gaps (G-1, G-2).",
+        "Counts of records do not measure severity or assurance; absence of a threat record is not a claim of safety."
+      ]
+    },
+    "evidence": [
+      { "id": "EV-01", "locator": "apps/market-server/src/app.ts:38-52 + src/config/env.ts:147", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "Fastify runs with trustProxy:true (request.ip = leftmost X-Forwarded-For entry, all hops trusted); CORS_ORIGIN defaults to '*' which the CORS plugin reflects as any origin; HTTP methods limited to GET.", "status": "observation", "purpose": "implementation", "access": "read", "limitations": "", "excerpt": null, "derived_from": [] },
+      { "id": "EV-02", "locator": "apps/market-server/src/websocket/hub.ts:188-244 + packages/shared/src/validation.ts:38-108", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "Every /ws frame is parsed and whitelist-validated (instrument, timeframe, watch<=20); malformed frames produce an error frame, not an exception; WS maxPayload 1 MiB.", "status": "observation", "purpose": "implementation", "access": "read", "limitations": "", "excerpt": null, "derived_from": [] },
+      { "id": "EV-03", "locator": "apps/market-server/src/chat/chatRoom.ts", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "Chat: nickname is the only identity (owner nick reserved; admin-key joins constant-time compared); 15s cooldown is per-connection with no nick uniqueness among connections; IP bans keyed by req.ip; roster stores nick->IP indefinitely on disk/Redis; server geo-looks-up chatter IPs at ipwho.is; images restricted to png/jpeg/webp data-URLs <=280k chars, served with nosniff; admin DM delivered to first connection matching a nick.", "status": "observation", "purpose": "implementation", "access": "read", "limitations": "", "excerpt": null, "derived_from": [] },
+      { "id": "EV-04", "locator": "supabase/schema.sql:21-43,79-131", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "RLS: profiles public-select, own-insert, own-update restricted by column grant excluding is_admin; user_emails own-insert/update, admin-only select; admin_settings admin-only select; drawings/user_settings own-all.", "status": "observation", "purpose": "implementation", "access": "read", "limitations": "repo intent; live application unverified (gap G-1)", "excerpt": null, "derived_from": [] },
+      { "id": "EV-05", "locator": "supabase/fix-admin-escalation.sql:1-20", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "Standalone fix script documents a past critical hole (self-granted is_admin -> emails + moderator key) and instructs manual execution plus key rotation; repository cannot show whether it was run on the live project.", "status": "claim", "purpose": "description", "access": "read", "limitations": "documentation claim, not runtime evidence", "excerpt": null, "derived_from": ["EV-04"] },
+      { "id": "EV-06", "locator": "apps/web/src/services/oandaAccounts.ts:1-28", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "Two OANDA practice-account tokens are hardcoded in the browser bundle (values redacted in bundle as [REDACTED:oanda-token-1/2]); file documents the exposure as deliberate, practice-only, with session rotation on 429/401/403.", "status": "observation", "purpose": "implementation", "access": "read", "limitations": "", "excerpt": null, "derived_from": [] },
+      { "id": "EV-07", "locator": "cloudflare-worker/edge/edge-proxy.js:29-72 + cloudflare-worker/oanda/oanda-proxy.js:25-30 + binance-proxy.js:21-26", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "Edge worker forwards all methods/paths to Render and sets X-Forwarded-For to client-supplied prior XFF plus CF-Connecting-IP; oanda worker relays OANDA with worker-secret token under CORS-* with no auth or rate limits; binance worker is an open CORS-* relay.", "status": "observation", "purpose": "implementation", "access": "read", "limitations": "Render direct-path XFF handling unverified (gap G-4 of bundle)", "excerpt": null, "derived_from": [] },
+      { "id": "EV-08", "locator": "vercel.json:19-27 + netlify.toml", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "Vercel deploy sends strict CSP (script-src self + two hashes; connect-src allowlist; frame-ancestors none), nosniff, Referrer-Policy, Permissions-Policy; netlify.toml defines no security headers.", "status": "observation", "purpose": "implementation", "access": "read", "limitations": "", "excerpt": null, "derived_from": [] },
+      { "id": "EV-09", "locator": "apps/web/src/services/supabase.ts:20-66", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "Supabase session JWT mirrored into first-party cookie tk-sb-session via document.cookie: SameSite=Lax, no Secure attribute, HttpOnly impossible (JS-written), 180-day Max-Age, silently skipped above 3500 chars.", "status": "observation", "purpose": "implementation", "access": "read", "limitations": "", "excerpt": null, "derived_from": [] },
+      { "id": "EV-10", "locator": "apps/web/src/services/location.ts:17-112", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "Signed-in visitors fetch their own public IP/country from ipwho.is/get.geojs.io/api.ipify.org and upsert it into their own user_emails row; admin panel reads all rows; RECORD_LOCATION constant gates collection; values are self-reported and unverified.", "status": "observation", "purpose": "implementation", "access": "read", "limitations": "", "excerpt": null, "derived_from": [] },
+      { "id": "EV-11", "locator": "apps/web/src/stores/chat.ts:7-19,174-183,389-408 + services/chatClient.ts:288-298", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "Chat moderator key persists in localStorage['tk-chat-admin'] and is sent in the WS join frame; nickname persists in localStorage and is set client-side; roster username filtering is display-only (validNicks) with no server-side proof of Supabase identity.", "status": "observation", "purpose": "implementation", "access": "read", "limitations": "", "excerpt": null, "derived_from": [] },
+      { "id": "EV-12", "locator": "apps/market-server/src/routes/candles.ts:60-159", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "GET /api/candles: instrument/timeframe whitelists, count<=20000, in-memory per-IP fixed-window limiter (240/min) keyed by request.ip, 300-entry history cache, stale fallback, mapped errors without upstream details.", "status": "observation", "purpose": "implementation", "access": "read", "limitations": "", "excerpt": null, "derived_from": [] },
+      { "id": "EV-13", "locator": "apps/web/src (grep: v-html, innerHTML)", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "v-html appears only with static local icon constants (DrawingToolbar.vue); chartAdapter innerHTML builds a static SVG watermark; no user-string HTML sink found; chat content renders through Vue text interpolation.", "status": "observation", "purpose": "implementation", "access": "partial", "limitations": "grep-level audit of sinks, not a full manual DOM audit", "excerpt": null, "derived_from": [] },
+      { "id": "EV-14", "locator": "apps/market-server/src/config/env.ts:104-170 + render.yaml:16-47", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "CORS_ORIGIN defaults to '*' when unset; render.yaml sets secrets sync:false in the dashboard and CHAT_OWNER_NICK=mehran; BINANCE_RELAY_SECRET empty disables the relay.", "status": "observation", "purpose": "implementation", "access": "read", "limitations": "production values unknown (gap G-2)", "excerpt": null, "derived_from": [] },
+      { "id": "EV-15", "locator": "apps/market-server/src/logger.ts:13-28", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "Pino global redaction covers authorization headers, cookies and token-like fields with censor [REDACTED].", "status": "observation", "purpose": "implementation", "access": "read", "limitations": "", "excerpt": null, "derived_from": [] },
+      { "id": "EV-16", "locator": "AGENTS.md:17 + README.md:13", "source_kind": "document", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "Project hard rule states OANDA credentials must never reach the browser (server env or Worker secrets only).", "status": "claim", "purpose": "description", "access": "read", "limitations": "conflicts with EV-06 (see conflict CO-01)", "excerpt": null, "derived_from": [] },
+      { "id": "EV-17", "locator": "apps/market-server/src/routes/binance-relay.ts:26-101", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "Binance relay gate: secret as URL path segment compared with === (not constant-time, unlike the chat admin key); path regex-validated; relay disabled when secret empty.", "status": "observation", "purpose": "implementation", "access": "read", "limitations": "", "excerpt": null, "derived_from": [] },
+      { "id": "EV-18", "locator": "netlify/functions/candles.ts:46-118 + cloudflare-worker/oanda/oanda-proxy.js:33-94", "source_kind": "repository", "source_revision": "a21edd3", "date": "2026-10-29", "statement": "Netlify function and oanda worker validate instrument/granularity/count against strict whitelists before any upstream call.", "status": "observation", "purpose": "implementation", "access": "read", "limitations": "", "excerpt": null, "derived_from": [] }
+    ],
+    "system": {
+      "assets": [
+        { "id": "AS-1", "kind": "asset", "description": "OANDA practice-account API tokens (browser bundle pool + worker/server secrets)", "basis": "observed", "evidence_refs": ["EV-06", "EV-07"], "rationale": "credential asset gating the entire OANDA data path", "related_refs": ["D-6", "F-6", "F-7"] },
+        { "id": "AS-2", "kind": "asset", "description": "Server environment secrets (CHAT_ADMIN_KEY, BINANCE_RELAY_SECRET, Upstash token)", "basis": "observed", "evidence_refs": ["EV-03", "EV-14"], "rationale": "gates moderation and relay authority", "related_refs": ["D-5"] },
+        { "id": "AS-3", "kind": "asset", "description": "User PII: emails, IPs, countries in user_emails and the chat roster", "basis": "observed", "evidence_refs": ["EV-03", "EV-04", "EV-10"], "rationale": "privacy asset, admin-readable, user-writable", "related_refs": ["D-3", "D-4"] },
+        { "id": "AS-4", "kind": "asset", "description": "Availability of the market-data path and free-tier quotas (OANDA rate limits, Cloudflare/Render quotas)", "basis": "observed", "evidence_refs": ["EV-06", "EV-07"], "rationale": "token burn or quota exhaustion makes the site's data path fail", "related_refs": ["DEP-1"] }
+      ],
+      "actors": [
+        { "id": "AC-1", "kind": "actor", "description": "Anonymous visitor (guest browser)", "basis": "observed", "evidence_refs": ["EV-01", "EV-02"], "rationale": "consumes public data and chat without an account", "related_refs": [] },
+        { "id": "AC-2", "kind": "actor", "description": "Registered user (Google sign-in via Supabase)", "basis": "observed", "evidence_refs": ["EV-04", "EV-09"], "rationale": "owns profile/settings/drawings; chats under username", "related_refs": [] },
+        { "id": "AC-3", "kind": "actor", "description": "Chat admin / room owner (CHAT_ADMIN_KEY holder; is_admin profile)", "basis": "observed", "evidence_refs": ["EV-03", "EV-04"], "rationale": "moderation powers and PII reads", "related_refs": [] },
+        { "id": "AC-4", "kind": "actor", "description": "Unauthenticated internet attacker (any origin, any IP, scripts/bots)", "basis": "observed", "evidence_refs": ["EV-02", "EV-03", "EV-07"], "rationale": "source of spoofing/abuse/DoS scenarios", "related_refs": [] }
+      ],
+      "data": [
+        { "id": "D-1", "kind": "data", "description": "Public market candles and the news calendar", "basis": "observed", "evidence_refs": ["EV-01", "EV-12"], "rationale": "public by design; integrity matters to traders", "related_refs": [] },
+        { "id": "D-2", "kind": "data", "description": "Chat messages, images, reactions, mute/ban state", "basis": "observed", "evidence_refs": ["EV-03"], "rationale": "user-generated content", "related_refs": [] },
+        { "id": "D-3", "kind": "data", "description": "Chat roster: nicknames, last-seen, known IPs, persisted to disk and Upstash without retention limit", "basis": "observed", "evidence_refs": ["EV-03"], "rationale": "indefinite PII retention", "related_refs": ["AS-3"] },
+        { "id": "D-4", "kind": "data", "description": "user_emails rows: self-reported email, IP, country, seen-at", "basis": "observed", "evidence_refs": ["EV-04", "EV-10"], "rationale": "admin-only read, user-writable", "related_refs": ["AS-3"] },
+        { "id": "D-5", "kind": "data", "description": "profiles (username, is_admin) and admin_settings (chat moderator key)", "basis": "observed", "evidence_refs": ["EV-04", "EV-05"], "rationale": "authority data", "related_refs": ["AS-2"] },
+        { "id": "D-6", "kind": "data", "description": "Supabase session JWT (localStorage + non-Secure cookie mirror)", "basis": "observed", "evidence_refs": ["EV-09"], "rationale": "identity credential", "related_refs": [] }
+      ],
+      "zones": [
+        { "id": "Z-1", "kind": "zone", "description": "Visitor browser (SPA, localStorage, cookies)", "basis": "observed", "evidence_refs": ["EV-06", "EV-09", "EV-11"], "rationale": "holds bundle tokens, session, moderator key", "related_refs": [] },
+        { "id": "Z-2", "kind": "zone", "description": "Edge: Cloudflare Workers (edge/oanda/binance/warmup), Vercel CDN + Netlify function", "basis": "observed", "evidence_refs": ["EV-07", "EV-08"], "rationale": "first hop for Iran-accessible traffic", "related_refs": [] },
+        { "id": "Z-3", "kind": "zone", "description": "Market server on Render (Fastify, WS hub, chat, disk/Redis persistence)", "basis": "observed", "evidence_refs": ["EV-01", "EV-02", "EV-03"], "rationale": "authoritative service zone", "related_refs": [] },
+        { "id": "Z-4", "kind": "zone", "description": "Supabase (auth, PostgREST, RLS-protected tables)", "basis": "observed", "evidence_refs": ["EV-04"], "rationale": "identity and PII store", "related_refs": [] },
+        { "id": "Z-5", "kind": "zone", "description": "Upstream providers: OANDA, Binance mirrors, Dukascopy, ForexFactory, ipwho.is/geojs/ipify", "basis": "observed", "evidence_refs": ["EV-06", "EV-07", "EV-10"], "rationale": "external data and geo sources", "related_refs": [] }
+      ],
+      "boundaries": [
+        { "id": "B-1", "kind": "boundary", "description": "Browser to edge (HTTPS/WSS; CSP on Vercel path only)", "basis": "observed", "evidence_refs": ["EV-07", "EV-08"], "rationale": "public internet crossing", "side_refs": ["Z-1", "Z-2"], "owner_architecture": "web", "gap_refs": [], "related_refs": [] },
+        { "id": "B-2", "kind": "boundary", "description": "Edge to market server (full passthrough; client-supplied XFF survives; trustProxy trusts all hops)", "basis": "observed", "evidence_refs": ["EV-01", "EV-07"], "rationale": "client-IP authority derivation", "side_refs": ["Z-2", "Z-3"], "owner_architecture": "serverless", "gap_refs": [], "related_refs": [] },
+        { "id": "B-3", "kind": "boundary", "description": "Browser direct to Supabase (anon key + user JWT; RLS is the only server-side authority)", "basis": "observed", "evidence_refs": ["EV-04", "EV-09", "EV-10"], "rationale": "authorization crossing", "side_refs": ["Z-1", "Z-4"], "owner_architecture": "web", "gap_refs": [], "related_refs": [] },
+        { "id": "B-4", "kind": "boundary", "description": "Market server / workers to upstream providers (secrets; open relays; third-party IP transmission)", "basis": "observed", "evidence_refs": ["EV-03", "EV-07", "EV-10"], "rationale": "credential, quota and privacy crossing", "side_refs": ["Z-2", "Z-3", "Z-5"], "owner_architecture": "serverless", "gap_refs": [], "related_refs": [] },
+        { "id": "B-5", "kind": "boundary", "description": "Browser direct to OANDA/Binance with bundle tokens", "basis": "observed", "evidence_refs": ["EV-06"], "rationale": "tokens exposed at this crossing by design", "side_refs": ["Z-1", "Z-5"], "owner_architecture": "web", "gap_refs": [], "related_refs": [] }
+      ],
+      "flows": [
+        { "id": "F-1", "description": "History candles: browser or Netlify function to market server; browser direct to Binance/OANDA", "basis": "observed", "evidence_refs": ["EV-12", "EV-18", "EV-06"], "rationale": "primary data flow", "source_ref": "AC-1", "target_ref": "Z-3", "data_refs": ["D-1"], "boundary_refs": ["B-1", "B-2", "B-5"], "gap_refs": [] },
+        { "id": "F-2", "description": "Live ticks/candles over unauthenticated /ws", "basis": "observed", "evidence_refs": ["EV-02"], "rationale": "real-time fan-out", "source_ref": "AC-1", "target_ref": "Z-3", "data_refs": ["D-1"], "boundary_refs": ["B-1", "B-2"], "gap_refs": [] },
+        { "id": "F-3", "description": "Chat joins with nickname (+adminKey), messaging, moderation, admin DMs", "basis": "observed", "evidence_refs": ["EV-03", "EV-11"], "rationale": "identity-bearing flow", "source_ref": "AC-2", "target_ref": "Z-3", "data_refs": ["D-2", "D-3"], "boundary_refs": ["B-1", "B-2"], "gap_refs": [] },
+        { "id": "F-4", "description": "Supabase OAuth; client upserts profile/email/self-reported IP; admins read user_emails and admin_settings", "basis": "observed", "evidence_refs": ["EV-04", "EV-09", "EV-10"], "rationale": "identity and PII flow", "source_ref": "AC-2", "target_ref": "Z-4", "data_refs": ["D-4", "D-5", "D-6"], "boundary_refs": ["B-3"], "gap_refs": [] },
+        { "id": "F-5", "description": "Edge worker forwards everything to Render, appending CF-Connecting-IP to client XFF; Fastify trusts all proxies", "basis": "observed", "evidence_refs": ["EV-01", "EV-07"], "rationale": "IP-authority derivation", "source_ref": "Z-2", "target_ref": "Z-3", "data_refs": ["D-1", "D-2"], "boundary_refs": ["B-2"], "gap_refs": [] },
+        { "id": "F-6", "description": "oanda-proxy worker relays OANDA REST/stream on the project's worker-secret token; CORS-*; no limits", "basis": "observed", "evidence_refs": ["EV-07"], "rationale": "open relay on project credential", "source_ref": "Z-2", "target_ref": "Z-5", "data_refs": ["D-1"], "boundary_refs": ["B-4"], "gap_refs": [] },
+        { "id": "F-7", "description": "Browser calls OANDA practice API directly with hardcoded pool tokens", "basis": "observed", "evidence_refs": ["EV-06"], "rationale": "token exposure by design", "source_ref": "Z-1", "target_ref": "Z-5", "data_refs": ["D-1"], "boundary_refs": ["B-5"], "gap_refs": [] },
+        { "id": "F-8", "description": "IP disclosures: server geo-looks-up chatter IPs at ipwho.is; browsers self-report IP via third-party echo services", "basis": "observed", "evidence_refs": ["EV-03", "EV-10"], "rationale": "third-party IP transmission", "source_ref": "Z-3", "target_ref": "Z-5", "data_refs": ["D-3", "D-4"], "boundary_refs": ["B-4", "B-3"], "gap_refs": [] }
+      ],
+      "entry_points": [
+        { "id": "EP-1", "kind": "entry_point", "description": "GET /api/candles (server; Netlify function proxy)", "basis": "observed", "evidence_refs": ["EV-12", "EV-18"], "rationale": "public REST with limiter", "related_refs": [] },
+        { "id": "EP-2", "kind": "entry_point", "description": "GET /api/news, /api/chat-img/:id, /health", "basis": "observed", "evidence_refs": ["EV-03"], "rationale": "public REST; image route rate-limited", "related_refs": [] },
+        { "id": "EP-3", "kind": "entry_point", "description": "WS /ws (unauthenticated market stream)", "basis": "observed", "evidence_refs": ["EV-02"], "rationale": "public socket", "related_refs": [] },
+        { "id": "EP-4", "kind": "entry_point", "description": "WS /chat (unauthenticated room; admin-key joins)", "basis": "observed", "evidence_refs": ["EV-03"], "rationale": "identity-bearing socket", "related_refs": [] },
+        { "id": "EP-5", "kind": "entry_point", "description": "/binance/:secret/api|ws relay (secret in path)", "basis": "observed", "evidence_refs": ["EV-17"], "rationale": "secret-gated relay", "related_refs": [] },
+        { "id": "EP-6", "kind": "entry_point", "description": "Cloudflare worker routes: edge (all paths), oanda /candles|/stream|/news, binance relay", "basis": "observed", "evidence_refs": ["EV-07"], "rationale": "unauthenticated edge", "related_refs": [] },
+        { "id": "EP-7", "kind": "entry_point", "description": "Supabase PostgREST + auth (anon key + user JWT; RLS)", "basis": "observed", "evidence_refs": ["EV-04"], "rationale": "direct browser DB access", "related_refs": [] }
+      ],
+      "states": [],
+      "dependencies": [
+        { "id": "DEP-1", "description": "Market-data availability depends on OANDA practice tokens (browser pool + worker/server secrets), Binance mirrors, Dukascopy, and free-tier quotas", "basis": "observed", "evidence_refs": ["EV-06", "EV-07"], "rationale": "token burn or quota exhaustion degrades the product for everyone", "source_ref": "AS-4", "target_ref": "Z-5", "gap_refs": [], "related_refs": [] },
+        { "id": "DEP-2", "description": "Identity and PII protection depend entirely on Supabase RLS correctness (no other server-side authorization layer)", "basis": "observed", "evidence_refs": ["EV-04"], "rationale": "single authorization control point", "source_ref": "Z-4", "target_ref": "Z-4", "gap_refs": [], "related_refs": [] }
+      ]
+    },
+    "methods": [],
+    "threats": [
+      {
+        "id": "T-01",
+        "scenario": "An attacker sends requests with a forged X-Forwarded-For header (directly to the Render origin or through the edge worker, which prepends the client-supplied XFF before the real IP). Fastify runs with trustProxy:true, so request.ip becomes the attacker-chosen address. Every per-IP control keyed on request.ip - the /api/candles rate limiter, the chat image limiter, chat IP bans, and the roster's recorded IPs - then binds to an address the attacker picks at will.",
+        "objective": "Rate limits, IP bans and IP-derived attribution (availability controls and accountability data)",
+        "affected_refs": ["B-2", "F-5", "EP-1", "EP-2", "EP-4", "AS-4", "D-3"],
+        "prerequisites": ["attacker can reach the market server directly or via edge.traderkomak.ir", "server keeps trustProxy:true with all hops trusted"],
+        "actor_assumptions": ["unauthenticated internet attacker able to send arbitrary HTTP/WS requests with forged XFF"],
+        "evidence_refs": ["EV-01", "EV-07", "EV-12", "EV-03"],
+        "method_refs": [],
+        "confidence": "high",
+        "confidence_rationale": "Both halves are implementation observations: trustProxy:true trusts all hops (EV-01) and the edge worker forwards client-supplied XFF ahead of CF-Connecting-IP (EV-07); the limiters key on request.ip (EV-12, EV-03). What argues against: Render's direct ingress may overwrite client XFF (unverified, bundle G4); decisive observation: an authorized request with a forged XFF echoing the resolved IP.",
+        "finding_type": "evidenced_weakness",
+        "status": "open",
+        "gap_refs": [],
+        "related_threat_refs": ["T-08"],
+        "resolution_evidence_refs": [],
+        "architecture_ids": ["web", "serverless", "collaboration-realtime"]
+      },
+      {
+        "id": "T-02",
+        "scenario": "A visitor joins /chat with any nickname that is not the reserved owner nick - including a username that belongs to a registered Google-signed-in user. The server has no proof of Supabase identity at join (roster username filtering is display-only in the client), so the attacker's messages, reactions and quotes appear as the victim; if the victim is not connected, the impersonator's connection is the first match for that nick and receives the admin's direct messages and Telegram popups addressed to them.",
+        "objective": "Identity of registered users in the community chat; confidentiality of admin DMs",
+        "affected_refs": ["EP-4", "F-3", "D-2", "AC-2", "AC-3"],
+        "prerequisites": ["no server-side binding of chat nick to Supabase identity", "victim not connected (for DM interception) or connected (for message impersonation)"],
+        "actor_assumptions": ["attacker knows or guesses a registered username (roster is publicly readable via anon key)"],
+        "evidence_refs": ["EV-03", "EV-11"],
+        "method_refs": [],
+        "confidence": "high",
+        "confidence_rationale": "Implementation observation: join() reserves only the owner nick and trusts the supplied nick (EV-03); the client filters rosters display-only (EV-11); onAdminDm delivers to the first matching connection and breaks. Against: the UI nudges signed-in users to their username, so abuse is social rather than automatic. Decisive observation: two synthetic connections joining with the same registered nick.",
+        "finding_type": "evidenced_weakness",
+        "status": "open",
+        "gap_refs": [],
+        "related_threat_refs": ["T-03"],
+        "resolution_evidence_refs": [],
+        "architecture_ids": ["collaboration-realtime", "web"]
+      },
+      {
+        "id": "T-03",
+        "scenario": "The chat moderator key is stored in localStorage and sent in every admin's WS join frame. Any script execution in the page origin (a future XSS, a compromised third-party script, or a malicious browser extension with host permissions) can read the key and hold permanent moderation powers (delete, mute, ban, user-info with IP + country, DM-all) independent of Supabase sessions; the session JWT in localStorage and its non-Secure cookie mirror are exposed to the same reads.",
+        "objective": "Moderation authority and session confidentiality",
+        "affected_refs": ["AS-2", "D-5", "D-6", "Z-1", "AC-3"],
+        "prerequisites": ["script execution in the page origin (XSS, extension, or supply-chain compromise of a bundled script)", "an admin has used the site on that browser"],
+        "actor_assumptions": ["attacker gains same-origin script execution once"],
+        "evidence_refs": ["EV-11", "EV-09", "EV-03"],
+        "method_refs": [],
+        "confidence": "medium",
+        "confidence_rationale": "The storage and wire exposure are observed (EV-11, EV-09); the exfiltration step requires a compromise that no current evidence demonstrates (no XSS sink found, EV-13; CSP on the Vercel path, EV-08). Decisive observation: a penetration test with an authorized same-origin script.",
+        "finding_type": "evidenced_weakness",
+        "status": "open",
+        "gap_refs": [],
+        "related_threat_refs": ["T-02", "T-06"],
+        "resolution_evidence_refs": [],
+        "architecture_ids": ["web", "collaboration-realtime"]
+      },
+      {
+        "id": "T-04",
+        "scenario": "The oanda-proxy, binance-proxy and edge Cloudflare Workers accept unauthenticated traffic from any origin with permissive CORS and no rate limits. Anyone who discovers the worker URLs (they appear in the public bundle's connect-src allowlist) can relay OANDA/Binance traffic through the project's credentials and quotas - burning the OANDA practice tokens' rate limits and Cloudflare free-tier quota until the site's own data path degrades.",
+        "objective": "Availability of the market-data path and project quotas/tokens (AS-4)",
+        "affected_refs": ["EP-6", "F-6", "B-4", "AS-1", "AS-4", "DEP-1"],
+        "prerequisites": ["worker URLs discoverable (they are, via the shipped CSP connect-src allowlist)", "no per-caller rate limiting at the workers"],
+        "actor_assumptions": ["attacker scripting modest request volumes against the workers"],
+        "evidence_refs": ["EV-07", "EV-08", "EV-06"],
+        "method_refs": [],
+        "confidence": "high",
+        "confidence_rationale": "Open, unauthenticated, unlimited relays are configuration observations (EV-07); the URLs are disclosed in vercel.json's connect-src (EV-08). Against: OANDA practice rate limits cap the burn rate; session rotation in the browser pool mitigates per-token 429s (EV-06). Decisive observation: quota/usage monitoring on the workers and OANDA accounts.",
+        "finding_type": "evidenced_weakness",
+        "status": "open",
+        "gap_refs": [],
+        "related_threat_refs": ["T-05", "T-08"],
+        "resolution_evidence_refs": [],
+        "architecture_ids": ["serverless", "web"]
+      },
+      {
+        "id": "T-05",
+        "scenario": "Two OANDA practice-account tokens ship in every visitor's bundle. Any user can extract them and use them outside the site (own scripts, third-party apps), consuming the accounts' rate limits, placing practice-account orders, or triggering OANDA abuse flags against the accounts - after which the site's browser-direct data path fails for everyone. The exposure also contradicts the project's own written invariant (AGENTS.md).",
+        "objective": "Integrity and availability of the practice-account data path; consistency with the project's security invariant",
+        "affected_refs": ["AS-1", "B-5", "F-7", "DEP-1"],
+        "prerequisites": ["tokens remain in the bundle (current state)", "attacker extracts them from the served JavaScript"],
+        "actor_assumptions": ["any visitor; zero privilege required"],
+        "evidence_refs": ["EV-06", "EV-16"],
+        "method_refs": [],
+        "confidence": "high",
+        "confidence_rationale": "The tokens are literally in the bundle (EV-06) - the exposure itself is certain; the harm scenario (external abuse) is the standard consequence of public credentials. Against: they are practice accounts, deliberately chosen, with rotation; blast radius is capped by OANDA practice semantics. This is a caller decision more than a defect (see proposed decision DC-02).",
+        "finding_type": "evidenced_weakness",
+        "status": "open",
+        "gap_refs": [],
+        "related_threat_refs": ["T-04"],
+        "resolution_evidence_refs": [],
+        "architecture_ids": ["web"]
+      },
+      {
+        "id": "T-06",
+        "scenario": "If the column-level UPDATE grant from fix-admin-escalation.sql was never executed on the live Supabase project, any signed-in user can set is_admin=true on their own profile row, then read every user's email and self-reported IP (user_emails) and fetch the chat moderator key (admin_settings) - full privilege escalation to admin.",
+        "objective": "Admin authority and all user PII",
+        "affected_refs": ["B-3", "EP-7", "D-4", "D-5", "AS-3", "AC-2"],
+        "prerequisites": ["live Supabase project missing the revoke/grant of schema.sql:42-43 (unverified, gap G-1)"],
+        "actor_assumptions": ["any registered user with a valid JWT"],
+        "evidence_refs": ["EV-04", "EV-05"],
+        "method_refs": [],
+        "confidence": "unknown",
+        "confidence_rationale": "The repository contains the fix (EV-04) and a script documenting the past hole (EV-05), but whether the live project has the grant applied is not observable from code (bundle G1). The scenario is a grounded hypothesis whose truth depends entirely on live DB state; decisive observation: running the verification query in fix-admin-escalation.sql.",
+        "finding_type": "design_hypothesis",
+        "status": "open",
+        "gap_refs": [],
+        "related_threat_refs": ["T-03"],
+        "resolution_evidence_refs": [],
+        "architecture_ids": ["web"]
+      },
+      {
+        "id": "T-07",
+        "scenario": "user_emails rows are user-writable: a user can store any email and any IP/country in their own row (values are self-reported from client-side echo services), so the admin panel's per-user email/IP/country view can be poisoned to mislead moderation decisions. Separately, the chat roster retains every nickname's IP indefinitely on disk and Upstash, and chatter IPs are transmitted to ipwho.is - PII collected, retained and shared with third parties beyond what the feature strictly needs.",
+        "objective": "Integrity of admin-facing user data; privacy/retention of user IPs",
+        "affected_refs": ["D-4", "D-3", "AS-3", "F-8", "F-4", "AC-3"],
+        "prerequisites": ["existing RLS own-write policy on user_emails (by design)", "RECORD_LOCATION enabled (currently true)"],
+        "actor_assumptions": ["registered user willing to falsify their own row"],
+        "evidence_refs": ["EV-10", "EV-04", "EV-03"],
+        "method_refs": [],
+        "confidence": "high",
+        "confidence_rationale": "Both the unverified write path and the retention/third-party transmission are implementation observations (EV-10, EV-03, EV-04). Against: the data is admin-facing only; poisoning misleads an admin rather than granting authority. Decisive observation: writing a bogus IP as a test user and reading it in the admin panel.",
+        "finding_type": "evidenced_weakness",
+        "status": "open",
+        "gap_refs": [],
+        "related_threat_refs": [],
+        "resolution_evidence_refs": [],
+        "architecture_ids": ["web", "collaboration-realtime"]
+      },
+      {
+        "id": "T-08",
+        "scenario": "Chat abuse controls bind to connections, not identities or IPs: the 15s message cooldown and flood guards reset on every reconnect, any number of connections may share one nickname (no uniqueness check), and there is no per-IP connection cap. An attacker opens many sockets (rotating forged XFF per T-01) and floods the room far past the intended 1-message-per-15s, or exhausts server memory with image messages (each up to ~280KB in the in-memory image store).",
+        "objective": "Chat availability and moderation effectiveness",
+        "affected_refs": ["EP-4", "F-3", "D-2", "AS-4"],
+        "prerequisites": ["scripted WebSocket clients", "per-connection (not per-identity) cooldown state"],
+        "actor_assumptions": ["attacker running a simple script"],
+        "evidence_refs": ["EV-03", "EV-12", "EV-01"],
+        "method_refs": [],
+        "confidence": "high",
+        "confidence_rationale": "Cooldown state and lack of nick uniqueness are per-connection by construction (EV-03); the XFF rotation amplifier is T-01's observed mechanism. Against: WS maxPayload caps single frames, history caps at 200 messages, image store is bounded (~200 images); abuse is noisy and bannable by nick (though IP bans are T-01-weakened).",
+        "finding_type": "evidenced_weakness",
+        "status": "open",
+        "gap_refs": [],
+        "related_threat_refs": ["T-01", "T-02"],
+        "resolution_evidence_refs": [],
+        "architecture_ids": ["collaboration-realtime"]
+      },
+      {
+        "id": "T-09",
+        "scenario": "The session cookie mirror tk-sb-session is written without the Secure attribute, so a network attacker on a captive/downgraded HTTP context (or any http:// reference to the site origin) can cause the 180-day session credential to transit in cleartext; the same JWT also sits in localStorage where any same-origin script can read it.",
+        "objective": "Session credential confidentiality (D-6)",
+        "affected_refs": ["D-6", "Z-1", "B-1"],
+        "prerequisites": ["victim loads the site over HTTP or an HTTP subresource context", "attacker positioned on-path (network/captive portal)"],
+        "actor_assumptions": ["on-path network attacker"],
+        "evidence_refs": ["EV-09"],
+        "method_refs": [],
+        "confidence": "medium",
+        "confidence_rationale": "The missing Secure attribute is directly observed (EV-09); whether the production host redirects HTTP to HTTPS is host configuration not visible in the repo (unverified). Decisive observation: curl -I http://<host>/ checking the redirect/HSTS behavior.",
+        "finding_type": "evidenced_weakness",
+        "status": "open",
+        "gap_refs": [],
+        "related_threat_refs": ["T-03"],
+        "resolution_evidence_refs": [],
+        "architecture_ids": ["web"]
+      },
+      {
+        "id": "T-10",
+        "scenario": "If CORS_ORIGIN is unset or '*' in the production environment, the market server reflects any origin for GET requests; combined with the unauthenticated surfaces this mostly exposes already-public data, but it also means any third-party website can script its visitors' browsers against the server's endpoints, silently multiplying load (each visitor becomes an unwitting relay).",
+        "objective": "Load amplification and unintended third-party embedding",
+        "affected_refs": ["B-1", "B-2", "EP-1", "EP-2", "DEP-1"],
+        "prerequisites": ["production CORS_ORIGIN == '*' (unverified, gap G-2)"],
+        "actor_assumptions": ["third-party site operator embedding cross-origin fetches"],
+        "evidence_refs": ["EV-01", "EV-14"],
+        "method_refs": [],
+        "confidence": "low",
+        "confidence_rationale": "The default-to-* code path is observed (EV-01, EV-14); whether production relies on it is unknown (bundle G2). Data exposed is public market data, so the disclosure impact is minimal - the harm is load attribution. Decisive observation: checking the deployed CORS_ORIGIN value.",
+        "finding_type": "design_hypothesis",
+        "status": "open",
+        "gap_refs": [],
+        "related_threat_refs": ["T-04"],
+        "resolution_evidence_refs": [],
+        "architecture_ids": ["web", "serverless"]
+      },
+      {
+        "id": "T-11",
+        "scenario": "The Binance relay gate places its secret in the URL path (/binance/:secret/...) and compares it with === rather than the constant-time comparison used for the chat key. The secret therefore leaks into access logs, proxy logs and browser history along every relayed request, and the comparison is nominally timing-observable; a leaked secret lets third parties use the deployment as a free Binance relay on the project's quota.",
+        "objective": "Relay confidentiality and quota protection",
+        "affected_refs": ["EP-5", "AS-2", "AS-4", "B-2"],
+        "prerequisites": ["BINANCE_RELAY_SECRET set (relay enabled; unknown in production, gap G-2)", "attacker gains read access to any log capturing the path"],
+        "actor_assumptions": ["anyone with log visibility or a timing oracle"],
+        "evidence_refs": ["EV-17"],
+        "method_refs": [],
+        "confidence": "medium",
+        "confidence_rationale": "Secret-in-path and non-constant-time comparison are directly observed (EV-17); the relay is disabled when the secret is empty (default), so production exposure depends on configuration (gap G-2). Impact is bounded: the relay serves public market data only.",
+        "finding_type": "evidenced_weakness",
+        "status": "open",
+        "gap_refs": [],
+        "related_threat_refs": ["T-04"],
+        "resolution_evidence_refs": [],
+        "architecture_ids": ["serverless"]
+      }
+    ],
+    "controls": [
+      { "id": "C-01", "description": "All market /ws frames pass through a shared whitelist validator (instrument, timeframe, watch<=20); malformed frames get a safe error, WS maxPayload 1 MiB caps single frames.", "affected_refs": ["EP-3", "F-2"], "threat_refs": ["T-08"], "status": "implemented", "evidence_refs": ["EV-02"], "limitations": "validation limits frame semantics, not connection volume", "verification_refs": [], "architecture_ids": ["web", "collaboration-realtime"] },
+      { "id": "C-02", "description": "Chat images are constrained server-side to png/jpeg/webp data-URLs under 280k chars, served from a rate-limited route with nosniff and immutable caching; SVG and remote URLs are rejected.", "affected_refs": ["EP-2", "D-2"], "threat_refs": [], "status": "implemented", "evidence_refs": ["EV-03"], "limitations": "the image store is in-memory and bounded (~200 entries), not unbounded", "verification_refs": [], "architecture_ids": ["collaboration-realtime", "web"] },
+      { "id": "C-03", "description": "The chat admin key is compared in constant time (SHA-256 digests + timingSafeEqual) and the owner nickname is reserved against non-admin joins.", "affected_refs": ["EP-4", "AS-2"], "threat_refs": ["T-03"], "status": "implemented", "evidence_refs": ["EV-03"], "limitations": "does not address storage/wire exposure of the key (T-03)", "verification_refs": [], "architecture_ids": ["collaboration-realtime"] },
+      { "id": "C-04", "description": "Vercel deploy sends CSP (script-src self + two hashes, connect-src allowlist, frame-ancestors none), nosniff, Referrer-Policy, Permissions-Policy.", "affected_refs": ["B-1", "Z-1"], "threat_refs": ["T-03"], "status": "implemented", "evidence_refs": ["EV-08"], "limitations": "only on the Vercel path; netlify.toml has no headers; style-src allows unsafe-inline", "verification_refs": [], "architecture_ids": ["web"] },
+      { "id": "C-05", "description": "Supabase RLS on all tables; profiles UPDATE restricted by column-level grant excluding is_admin; user_emails own-write/admin-read; admin_settings admin-read only.", "affected_refs": ["EP-7", "B-3", "D-4", "D-5"], "threat_refs": ["T-06"], "status": "implemented", "evidence_refs": ["EV-04", "EV-05"], "limitations": "repo SQL shows intent; live application of the column grant is unverified (gap G-1)", "verification_refs": [], "architecture_ids": ["web"] },
+      { "id": "C-06", "description": "Pino global redaction of authorization headers, cookies and token-like fields in all server logs.", "affected_refs": ["Z-3"], "threat_refs": [], "status": "implemented", "evidence_refs": ["EV-15"], "limitations": "redaction list is path-based; novel field names could bypass it", "verification_refs": [], "architecture_ids": ["web"] },
+      { "id": "C-07", "description": "Strict input whitelists at every provider-facing boundary: instrument/timeframe/count on /api/candles (server), the Netlify function, and the oanda worker; path regex on the binance relay.", "affected_refs": ["EP-1", "EP-5", "EP-6", "F-1", "F-6"], "threat_refs": ["T-08", "T-11"], "status": "implemented", "evidence_refs": ["EV-12", "EV-18", "EV-17"], "limitations": "count clamps still allow 20000-candle requests (cache-bucketed)", "verification_refs": [], "architecture_ids": ["web", "serverless"] },
+      { "id": "C-08", "description": "Chat moderation toolkit: per-connection 15s cooldown, reaction flood guard, mute/ban with persistence, banned-IP pre-connect rejection, heartbeat reaping of dead sockets.", "affected_refs": ["EP-4", "D-2"], "threat_refs": ["T-08", "T-01"], "status": "implemented", "evidence_refs": ["EV-03"], "limitations": "per-connection state defeats cooldown under reconnect/multi-socket (T-08); IP bans weakened by T-01", "verification_refs": [], "architecture_ids": ["collaboration-realtime"] },
+      { "id": "C-09", "description": "HTTP surface is GET-only over CORS; cookies are SameSite=Lax; Supabase uses bearer tokens rather than cookies for API calls.", "affected_refs": ["B-1", "B-3"], "threat_refs": [], "status": "implemented", "evidence_refs": ["EV-01", "EV-09"], "limitations": "reflect-all origin when CORS_ORIGIN='*' (T-10); Lax does not help against top-level GET navigation", "verification_refs": [], "architecture_ids": ["web"] }
+    ],
+    "requirements": [],
+    "risks": [
+      { "id": "R-01", "threat_refs": ["T-01"], "status": "unrated", "rubric": null, "inputs": [], "rating": null, "original_values": [], "rationale": "Undermines every IP-based control at once (rate limits, bans, attribution); likelihood trivial, impact moderate and compounding with T-08.", "uncertainty": "Direct-to-Render XFF handling by Render's ingress unverified (bundle G4)." },
+      { "id": "R-02", "threat_refs": ["T-02"], "status": "unrated", "rubric": null, "inputs": [], "rating": null, "rationale": "Identity spoofing in a community trading room enables social engineering and interception of admin DMs; likelihood high for a motivated attacker, impact reputational and social.", "uncertainty": "DM interception requires timing (victim offline); message impersonation is always available." },
+      { "id": "R-03", "threat_refs": ["T-03"], "status": "unrated", "rubric": null, "inputs": [], "rating": null, "rationale": "Persistent moderation powers and session theft if same-origin script execution ever occurs; today no sink is known and CSP holds on the Vercel path.", "uncertainty": "Conditional on a future XSS/extension/supply-chain event; storage exposure itself is certain." },
+      { "id": "R-04", "threat_refs": ["T-04"], "status": "unrated", "rubric": null, "inputs": [], "rating": null, "rationale": "Open relays convert modest attacker effort into exhaustion of the free-tier quotas and OANDA rate limits the whole product depends on.", "uncertainty": "Attacker discovery of worker URLs is near-certain (CSP allowlist); burn rate bounded by OANDA limits." },
+      { "id": "R-05", "threat_refs": ["T-05"], "status": "unrated", "rubric": null, "inputs": [], "rating": null, "rationale": "Public practice tokens invite external abuse that manifests as availability loss for the site; accepted-by-design today but contradicts the written invariant.", "uncertainty": "Caller decision pending (DC-02); practice-account blast radius bounded by OANDA." },
+      { "id": "R-06", "threat_refs": ["T-06"], "status": "unrated", "rubric": null, "inputs": [], "rating": null, "rationale": "If unapplied, the escalation is one API call away for any registered user and exposes all emails/IPs plus the moderator key.", "uncertainty": "Entirely dependent on live DB state (gap G-1); verification is one SQL query." },
+      { "id": "R-07", "threat_refs": ["T-07"], "status": "unrated", "rubric": null, "inputs": [], "rating": null, "rationale": "Admin view poisoning misleads moderation; indefinite IP retention and third-party transmission create privacy exposure with no retention bound.", "uncertainty": "Harm requires an admin to act on poisoned data; retention risk grows with roster size." },
+      { "id": "R-08", "threat_refs": ["T-08"], "status": "unrated", "rubric": null, "inputs": [], "rating": null, "rationale": "Cheap to execute, disrupts the community feature and can chase users off the platform; compounding with T-01.", "uncertainty": "Bounded by history/image caps; moderation tools partially compensate." },
+      { "id": "R-09", "threat_refs": ["T-09"], "status": "unrated", "rubric": null, "inputs": [], "rating": null, "rationale": "One-attribute fix; exposure window limited to HTTP contexts, which the host may already redirect (unverified).", "uncertainty": "Production redirect behavior unknown." },
+      { "id": "R-10", "threat_refs": ["T-10"], "status": "unrated", "rubric": null, "inputs": [], "rating": null, "rationale": "Mostly a load-attribution and hygiene issue given public data; severity hinges on the production CORS_ORIGIN value.", "uncertainty": "Production value unknown (gap G-2)." },
+      { "id": "R-11", "threat_refs": ["T-11"], "status": "unrated", "rubric": null, "inputs": [], "rating": null, "rationale": "Low-impact leak (public market data relay) but inconsistent with the constant-time pattern used elsewhere; depends on relay being enabled.", "uncertainty": "Production BINANCE_RELAY_SECRET unknown (gap G-2)." }
+    ],
+    "attack_trees": [],
+    "attack_paths": [],
+    "visualizations": [],
+    "coverage": [
+      { "id": "CO-01", "target_ref": null, "method_ref": null, "lens": "analysis-scope", "status": "partial", "reason": "Quick single-pass baseline over bundle E1-E27 performed now (11 threats, 9 controls, 7 treatments, 7 verification designs); no method executions (selected_methods empty; library registry not checked); deep stages, model challenge and runtime verification not performed; no severity ratings without a supplied rubric." },
+      { "id": "CO-02", "target_ref": null, "method_ref": null, "lens": "stride-spoofing", "status": "assessed", "reason": "Grounded in T-01 (IP authority via XFF/trustProxy), T-02 (chat identity spoofing), T-11 (relay secret); Supabase identity rests on Google OAuth + bearer tokens with no observed spoofing path beyond T-02's chat layer." },
+      { "id": "CO-03", "target_ref": null, "method_ref": null, "lens": "stride-tampering", "status": "assessed", "reason": "Grounded in T-07 (self-reported user_emails poisoning); market data integrity rests on direct provider passthrough with whitelists (C-07); no other tampering path observed on validated flows." },
+      { "id": "CO-04", "target_ref": null, "method_ref": null, "lens": "stride-repudiation", "status": "assessed", "reason": "Chat actions are attributable only to self-claimed nicknames (no audit log on the server beyond pino logs of moderation events); captured inside T-02's scenario and rationale rather than a separate threat - the system intentionally holds no strong identity for chat." },
+      { "id": "CO-05", "target_ref": null, "method_ref": null, "lens": "stride-info-disclosure", "status": "assessed", "reason": "Grounded in T-03 (credential storage), T-05 (bundle tokens, deliberate), T-09 (cookie Secure), T-10 (reflect-all CORS, hypothesis); user-content rendering assessed inert (CO-09); admin PII reads are RLS-gated by design (C-05)." },
+      { "id": "CO-06", "target_ref": null, "method_ref": null, "lens": "stride-dos", "status": "assessed", "reason": "Grounded in T-04 (open relays/quotas), T-08 (chat flood via per-connection controls), with T-01 as the amplifier; upstream provider limits and frame/message caps are the compensating bounds (C-01, C-02, C-07)." },
+      { "id": "CO-07", "target_ref": null, "method_ref": null, "lens": "stride-elevation", "status": "assessed", "reason": "Grounded in T-06 (RLS self-promotion hypothesis, gap G-1); no other privilege transition observed: chat admin is a shared secret (T-03), Supabase admin is the is_admin column, both covered." },
+      { "id": "CO-08", "target_ref": null, "method_ref": null, "lens": "web-scenario:unintended-state-change", "status": "assessed", "reason": "State-changing server operations are chat moderation (admin-key gated, constant-time compared) and Supabase writes (own-row RLS with bearer tokens, SameSite=Lax cookies); server HTTP surface is GET-only, so classic cross-site state-change has no observed path; authority binding for moderation reduces to T-03/T-06." },
+      { "id": "CO-09", "target_ref": null, "method_ref": null, "lens": "web-scenario:user-content-in-privileged-view", "status": "assessed", "reason": "Chat text reaches other users through Vue text interpolation (no HTML sink found - EV-13); images are regex-constrained data-URLs (C-02); admin viewers see the same escaped content plus roster entries (nicks, bounded); protective evidence recorded as controls rather than a threat." },
+      { "id": "CO-10", "target_ref": null, "method_ref": null, "lens": "web-scenario:private-response-exposure", "status": "assessed", "reason": "No per-user HTTP response travels through a shared cache: admin data is fetched from PostgREST with the caller's bearer token (RLS-gated), chat history is identical for all joiners, and /api/chat-img is public by design; the session cookie is not used for API authorization; attacker-influenced shared-cache poisoning has no observed cache to poison (edge workers bypass caching with cacheTtl 0)." },
+      { "id": "CO-11", "target_ref": null, "method_ref": null, "lens": "privacy-subject:user-ips-and-emails", "status": "assessed", "reason": "Concrete subject exists: chatter/visitor IPs are stored in the roster (indefinitely), self-reported into user_emails, transmitted to ipwho.is (server-side) and ipwho.is/geojs/ipify (client-side), and shown to admins (T-07, F-8, D-3/D-4)." },
+      { "id": "CO-12", "target_ref": null, "method_ref": null, "lens": "abuse-subject:community-chat", "status": "assessed", "reason": "Concrete abuse subject: spam/impersonation/flood (T-02, T-08) with existing moderation toolkit as counter-evidence (C-08) and its per-connection limits as the weakness." },
+      { "id": "CO-13", "target_ref": null, "method_ref": null, "lens": "handoff:methods", "status": "not_assessed", "reason": "No method executed in this quick run; selected_methods empty; registry unchecked." },
+      { "id": "CO-14", "target_ref": null, "method_ref": null, "lens": "handoff:requirements", "status": "not_assessed", "reason": "No requirement source supplied; none derived in a quick pass - treatments carry the proposed outcomes instead." },
+      { "id": "CO-15", "target_ref": null, "method_ref": null, "lens": "handoff:attack_trees", "status": "not_assessed", "reason": "Scenario baseline without tree construction; a deep run or an attack-tree method would build these." },
+      { "id": "CO-16", "target_ref": null, "method_ref": null, "lens": "handoff:attack_paths", "status": "not_assessed", "reason": "Same as attack trees; boundaries/flows in system records carry the topology instead." },
+      { "id": "CO-17", "target_ref": null, "method_ref": null, "lens": "handoff:visualizations", "status": "not_assessed", "reason": "No diagram produced in this quick pass." },
+      { "id": "CO-18", "target_ref": null, "method_ref": null, "lens": "handoff:states", "status": "not_applicable", "reason": "The service is stateless beyond in-memory/disk caches; no lifecycle state machine was evidenced." },
+      { "id": "CO-19", "target_ref": null, "method_ref": null, "lens": "handoff:identity_map", "status": "not_applicable", "reason": "Raw-evidence quick run starting a new model; no imported identities to disposition." }
+    ],
+    "conflicts": [
+      {
+        "id": "CF-01",
+        "description": "The project's written invariant says OANDA credentials must never reach the browser, while the shipped frontend contains a deliberate, documented pool of practice-account tokens for browser-direct data access.",
+        "subject_refs": ["AS-1", "B-5"],
+        "alternatives": [
+          { "statement": "The invariant reflects the security posture the project wants; the browser token pool violates it and should be removed in favor of the worker relay.", "evidence_refs": ["EV-16"] },
+          { "statement": "The browser-direct pool is an accepted engineering tradeoff (Iran ISP resets kill the relay path; practice tokens cap the blast radius) and the invariant text should be amended to carve out practice-only pool tokens.", "evidence_refs": ["EV-06"] }
+        ],
+        "status": "unresolved",
+        "resolution": null,
+        "resolution_evidence_refs": []
+      }
+    ],
+    "gaps": [
+      { "id": "G-1", "kind": "evidence", "description": "Whether the column-level UPDATE grant (profiles) is applied on the live Supabase project - decides whether T-06 is real.", "needed": "Run the verification query at the end of supabase/fix-admin-escalation.sql in the live SQL editor.", "affected_refs": ["T-06", "C-05", "D-5"], "status": "open", "evidence_refs": ["EV-04", "EV-05"] },
+      { "id": "G-2", "kind": "evidence", "description": "Effective production values: CORS_ORIGIN (list vs *), BINANCE_RELAY_SECRET set or empty, live frontend host (Vercel vs Netlify), CHAT_ADMIN_KEY strength.", "needed": "Caller reads the values from the Render/Vercel/Netlify dashboards.", "affected_refs": ["T-10", "T-11", "C-04", "C-09"], "status": "open", "evidence_refs": ["EV-14", "EV-08"] },
+      { "id": "G-3", "kind": "coverage", "description": "Dependency vulnerabilities unaudited (package-lock not analyzed; npm audit requires network).", "needed": "Caller-authorized `npm audit` / lockfile scan.", "affected_refs": ["Z-1", "Z-3"], "status": "open", "evidence_refs": [] },
+      { "id": "G-4", "kind": "topology", "description": "Render's direct-ingress handling of client-supplied X-Forwarded-For (append vs overwrite) is unverified; the spoofing chain is certain via the edge worker and probable direct.", "needed": "Authorized request with a forged XFF echoing the resolved IP (verification VF-01).", "affected_refs": ["T-01", "B-2", "F-5"], "status": "open", "evidence_refs": ["EV-01", "EV-07"] },
+      { "id": "G-5", "kind": "evidence", "description": "Full manual DOM/render audit of all Vue components not performed (grep-level sink check only).", "needed": "Component-by-component review of any future dynamic rendering, or an authorized DOM XSS scan.", "affected_refs": ["T-03", "C-04"], "status": "open", "evidence_refs": ["EV-13"] },
+      { "id": "G-6", "kind": "evidence", "description": "Supabase Auth project settings (email confirmation, OTP, rate limits) not inspectable from the repo.", "needed": "Caller checks Supabase Auth settings in the dashboard.", "affected_refs": ["EP-7", "B-3"], "status": "open", "evidence_refs": ["EV-04"] }
+    ],
+    "treatments": [
+      {
+        "id": "TR-01",
+        "threat_refs": ["T-01"],
+        "outcome": "Bind client-IP authority to the hops that actually attest it: the market server should treat only its immediate ingress (Render's edge, or the VPS Caddy) as the trusted proxy - deriving request.ip from the last attested hop rather than the leftmost header - and the edge worker should overwrite (not append to) X-Forwarded-For with the Cloudflare-attested CF-Connecting-IP so a client-supplied chain cannot survive to the origin.",
+        "status": "proposed",
+        "alternatives": [
+          "Restrict trust to the edge worker path only: derive the client IP solely from CF-Connecting-IP when the request arrives via edge.traderkomak.ir and from the immediate peer otherwise",
+          "Drop client-visible IP logic entirely from per-IP limits and move abuse control to per-connection + per-nick caps (weaker attribution, simpler)",
+          "Terminate public traffic exclusively on the VPS/Caddy path where the hop count is known and fixed"
+        ],
+        "tradeoffs": [
+          "Fixed-hop trust breaks if the deployment topology changes (new proxy hop) - document the chain",
+          "Overwriting XFF at the edge loses any upstream chain detail (acceptable: there is none that matters)",
+          "Per-connection-only abuse control weakens ban enforcement across reconnects"
+        ],
+        "dependency_refs": [],
+        "pack_dependencies": [],
+        "verification_refs": ["VF-01"],
+        "gap_refs": ["G-4"]
+      },
+      {
+        "id": "TR-02",
+        "threat_refs": ["T-02"],
+        "outcome": "Give the server a verifiable basis for chat identity: on join with a registered username, require a short-lived signed proof (for example a Supabase-derived token the client already holds), or have the server reserve all usernames that exist in profiles (it already syncs the roster hourly) and reject joins claiming them without proof; unauthenticated guests keep free nicknames that visibly differ from verified ones.",
+        "status": "proposed",
+        "alternatives": [
+          "Full binding: chat joins must present a Supabase session (breaks guest chatting)",
+          "Display-only mitigation: mark verified usernames with a badge and treat unverified same-name joins as suspects (no server change, weakest)",
+          "Server-side reservation without proof: reserve registered usernames for nobody (kills guest use of common names, still spoof-free)"
+        ],
+        "tradeoffs": [
+          "Token verification adds a server-side fetch/JWT check on join (latency once per join)",
+          "Guests lose the ability to use a name that collides with a registered username",
+          "Backward compatibility: existing connected clients keep working; only unproven claims of registered names are refused"
+        ],
+        "dependency_refs": ["DEP-2"],
+        "pack_dependencies": [],
+        "verification_refs": ["VF-02"],
+        "gap_refs": []
+      },
+      {
+        "id": "TR-03",
+        "threat_refs": ["T-03", "T-06", "T-09"],
+        "outcome": "Shrink the blast radius of credential storage: rotate the chat moderator key once the RLS state is confirmed (the fix script itself recommends this), mark the session cookie mirror and any future cookies Secure, and prefer session-scoped (sessionStorage) or in-memory holding of the moderator key over localStorage so a storage read yields nothing after the tab closes.",
+        "status": "proposed",
+        "alternatives": [
+          "Keep localStorage but pair it with a short server-side key lease (key expires; client re-fetches while the admin session lives)",
+          "Move moderation to an authenticated HTTP endpoint under the Supabase session instead of a shared WS key (larger refactor)"
+        ],
+        "tradeoffs": [
+          "sessionStorage re-prompts the key fetch each tab (one cheap Supabase read for admins)",
+          "Rotating the key signs out every current admin connection once",
+          "Secure attribute is a no-op on plain-HTTP local dev - gate to production"
+        ],
+        "dependency_refs": ["DEP-2"],
+        "pack_dependencies": [],
+        "verification_refs": ["VF-03", "VF-04"],
+        "gap_refs": ["G-1", "G-2"]
+      },
+      {
+        "id": "TR-04",
+        "threat_refs": ["T-04", "T-05"],
+        "outcome": "Decide the data-path posture explicitly and then defend it: if the browser-direct practice pool stays (recommended for the Iran-access requirement), treat its tokens as public by design - monitor OANDA per-account usage, keep session rotation, and add worker-side origin allowlisting plus Cloudflare rate-limiting/WAF rules on the oanda and binance workers so scripted third-party relay abuse is throttled; if it goes, route all OANDA traffic through the worker with per-origin throttling and remove the bundle pool.",
+        "status": "proposed",
+        "alternatives": [
+          "Keep pool + harden workers (recommended: preserves the resilient direct path)",
+          "Worker-only OANDA path (removes token exposure, reintroduces the relay single point of failure that the pool was built to avoid)",
+          "Status quo + monitoring only (accept the abuse risk, watch quotas)"
+        ],
+        "tradeoffs": [
+          "Worker rules add free-plan configuration overhead and can throttle legitimate bursty chart loads if set too tight",
+          "Worker-only path concentrates failure on one Cloudflare route (the original reason for the pool)",
+          "Monitoring requires somewhere to see OANDA 429 rates (the browser pool already retires accounts; server logs can record them)"
+        ],
+        "dependency_refs": ["DEP-1"],
+        "pack_dependencies": [],
+        "verification_refs": ["VF-05"],
+        "gap_refs": ["G-2"]
+      },
+      {
+        "id": "TR-05",
+        "threat_refs": ["T-07"],
+        "outcome": "Reduce PII collection to what moderation needs: stop treating user_emails content as verified (label it self-reported in the admin panel), cap roster IP retention (drop or age out stored IPs after a window), and keep the third-party geo calls only if the country value is actually used - the add-user-location.sql comments already provide the off switch.",
+        "status": "proposed",
+        "alternatives": [
+          "Delete the location columns and revert to live-only IP lookup for connected users (least data)",
+          "Keep collection but server-side: derive IP from the WS connection the user actually opens (accurate, requires the market server to be running)",
+          "Status quo with admin-panel labeling (minimal change, keeps retention)"
+        ],
+        "tradeoffs": [
+          "Self-reported IP was chosen precisely because the market server may be down; removing it loses offline-user visibility",
+          "Aging out roster IPs weakens ban-evasion investigations",
+          "Labeling changes UI copy only"
+        ],
+        "dependency_refs": [],
+        "pack_dependencies": [],
+        "verification_refs": ["VF-06"],
+        "gap_refs": []
+      },
+      {
+        "id": "TR-06",
+        "threat_refs": ["T-08"],
+        "outcome": "Re-bind chat abuse controls to stable identities: enforce nickname uniqueness among connected sockets (first join wins; later joins of the same nick get a read-only or rejected state), move the message cooldown from the connection to the nickname, and add a per-IP (once T-01 is fixed, per-attested-IP) cap on concurrent chat sockets.",
+        "status": "proposed",
+        "alternatives": [
+          "Global room-wide message rate ceiling in addition to per-nick cooldown (protects the room even if identity controls fail)",
+          "CAPTCHA-style join challenge on anomaly (heavy, harms UX on Iranian networks)"
+        ],
+        "tradeoffs": [
+          "Nick uniqueness breaks the current multi-tab same-user experience (tabs would fight over the nick - needs a grace or session-token allowance)",
+          "Per-nick cooldown lets one compromised nick hold its slot; the global ceiling covers that",
+          "Per-IP socket caps require the T-01 fix to be meaningful"
+        ],
+        "dependency_refs": [],
+        "pack_dependencies": [],
+        "verification_refs": ["VF-07"],
+        "gap_refs": []
+      },
+      {
+        "id": "TR-07",
+        "threat_refs": ["T-09", "T-10", "T-11"],
+        "outcome": "Close the configuration-hygiene set: mark cookies Secure in production, set an explicit CORS_ORIGIN origin list in every environment (never rely on the * default), and if the Binance relay stays, move its secret out of the URL path into a header and compare it with the same constant-time primitive the chat key uses.",
+        "status": "proposed",
+        "alternatives": [
+          "Leave CORS reflecting * but accept public-data-only exposure (not recommended: load attribution)",
+          "Disable the Binance relay entirely if no downstream server actually uses it (simplest)"
+        ],
+        "tradeoffs": [
+          "Explicit origin lists must be updated when the domain changes",
+          "Header-based relay secret requires updating downstream server configuration",
+          "Relay removal removes a capability another deployment may rely on"
+        ],
+        "dependency_refs": [],
+        "pack_dependencies": [],
+        "verification_refs": ["VF-04"],
+        "gap_refs": ["G-2"]
+      }
+    ],
+    "verification": [
+      {
+        "id": "VF-01",
+        "threat_refs": ["T-01"],
+        "control_refs": [],
+        "approach": "Caller-authorized request test against a staging or the production market server: send an HTTP request with X-Forwarded-For: 203.0.113.9 (TEST-NET) both directly to the Render origin and through edge.traderkomak.ir, to an endpoint that echoes resolution (or observe which synthetic IP gets rate-limited first).",
+        "expected_outcome": "After TR-01, the resolved client IP is the true connecting address in both paths; before the fix, the forged address is adopted.",
+        "prerequisite_evidence_refs": ["EV-01", "EV-07"],
+        "pass_criteria": "Direct and edge-path requests with forged XFF do not change the server-visible IP; rate limiting and bans bind to the true address.",
+        "fail_criteria": "The forged TEST-NET address appears as request.ip (rate limiter keyed by it, roster records it, or a ban on it prevents access).",
+        "inconclusive_criteria": "Neither address observable (no echo endpoint and rate-limit probes ambiguous); record which path was tested - results do not generalize to the untested path.",
+        "status": "not_run",
+        "result_evidence_refs": []
+      },
+      {
+        "id": "VF-02",
+        "threat_refs": ["T-02"],
+        "control_refs": [],
+        "approach": "Caller-authorized synthetic test with two browser sessions (A: signed-in registered username 'victimname'; B: guest): B joins /chat with nick 'victimname' before and while A is connected; admin sends a DM to 'victimname'.",
+        "expected_outcome": "After TR-02, B cannot claim a registered username without a verifiable proof; DMs reach only the verified session.",
+        "prerequisite_evidence_refs": ["EV-03", "EV-11"],
+        "pass_criteria": "B's join with the registered nick is rejected or visibly unverified; the admin DM arrives on A's connection only in both orderings.",
+        "fail_criteria": "B chats and reacts as 'victimname', or receives the admin DM while A is connected.",
+        "inconclusive_criteria": "Server unreachable or admin key unavailable for the test; state which ordering was exercised.",
+        "status": "not_run",
+        "result_evidence_refs": []
+      },
+      {
+        "id": "VF-03",
+        "threat_refs": ["T-06"],
+        "control_refs": ["C-05"],
+        "approach": "Caller runs the verification query from supabase/fix-admin-escalation.sql (information_schema.column_privileges) in the live Supabase SQL editor; optionally with a non-admin JWT, attempt UPDATE profiles SET is_admin=true.",
+        "expected_outcome": "The grant table shows UPDATE only on username, username_lower, avatar_url; the is_admin update fails for a non-admin.",
+        "prerequisite_evidence_refs": ["EV-04", "EV-05"],
+        "pass_criteria": "Column privileges exclude is_admin and the attempt errors (or updates zero rows).",
+        "fail_criteria": "A non-admin JWT successfully sets is_admin=true - escalate to immediate key rotation and policy fix.",
+        "inconclusive_criteria": "Cannot obtain a non-admin JWT for testing - the grant-table query alone is then the decisive evidence; if even that cannot run, the gap stays open.",
+        "status": "not_run",
+        "result_evidence_refs": []
+      },
+      {
+        "id": "VF-04",
+        "threat_refs": ["T-09", "T-10", "T-11"],
+        "control_refs": ["C-04", "C-09"],
+        "approach": "Caller-inspected response headers and config: curl -I the production site (HTTP and HTTPS) checking Set-Cookie Secure, CSP presence, and Access-Control-Allow-Origin behavior for a foreign Origin; read CORS_ORIGIN/BINANCE_RELAY_SECRET values from the host dashboards.",
+        "expected_outcome": "After TR-03/TR-07: Secure cookie attribute present, CSP on the live host, ACAO reflects only allowed origins, relay secret not in any URL.",
+        "prerequisite_evidence_refs": ["EV-08", "EV-09", "EV-14"],
+        "pass_criteria": "All four observations match the expected post-fix state.",
+        "fail_criteria": "Any of: cookie without Secure, no CSP on the live frontend, ACAO '*' in production, relay secret visible in URLs.",
+        "inconclusive_criteria": "Header cache/CDN masking the origin response - retry with cache-busting; note which check was inconclusive.",
+        "status": "not_run",
+        "result_evidence_refs": []
+      },
+      {
+        "id": "VF-05",
+        "threat_refs": ["T-04", "T-05"],
+        "control_refs": [],
+        "approach": "Caller-reviewed quota evidence: OANDA account usage/rate-limit responses over a week, Cloudflare worker analytics for the three workers, and worker logs showing request origins/volumes.",
+        "expected_outcome": "Baseline usage matches the site's own traffic; anomalies reveal third-party relay abuse.",
+        "prerequisite_evidence_refs": ["EV-06", "EV-07", "EV-08"],
+        "pass_criteria": "Usage attributable to the site's own clients; no sustained unexplained volume.",
+        "fail_criteria": "Sustained unexplained traffic on oanda/binance workers or OANDA 429s outside site activity - tighten per TR-04.",
+        "inconclusive_criteria": "Analytics unavailable on the free plan - fall back to a week of server-side fetch logging at the workers.",
+        "status": "not_run",
+        "result_evidence_refs": []
+      },
+      {
+        "id": "VF-06",
+        "threat_refs": ["T-07"],
+        "control_refs": [],
+        "approach": "Caller-authorized synthetic test: a test account writes a deliberately bogus IP/country into its own user_emails row (as the client code allows), then the admin panel is read.",
+        "expected_outcome": "Before TR-05 the panel shows the bogus values; after TR-05 the values are labeled self-reported, server-derived, or no longer collected.",
+        "prerequisite_evidence_refs": ["EV-10", "EV-04"],
+        "pass_criteria": "Post-fix behavior matches the chosen TR-05 alternative.",
+        "fail_criteria": "Panel presents attacker-chosen values as authoritative with no labeling.",
+        "inconclusive_criteria": "Test account cannot write (RLS stricter than repo shows - protective finding); record it.",
+        "status": "not_run",
+        "result_evidence_refs": []
+      },
+      {
+        "id": "VF-07",
+        "threat_refs": ["T-08"],
+        "control_refs": ["C-08"],
+        "approach": "Caller-authorized load test on staging: script N sockets joining with the same nickname and sending messages at the per-connection maximum, with and without the TR-06 fix.",
+        "expected_outcome": "Post-fix, only one socket holds the nick, the per-nick cooldown holds across sockets, and the per-IP socket cap binds.",
+        "prerequisite_evidence_refs": ["EV-03", "EV-12"],
+        "pass_criteria": "Message rate into the room stays within the intended bound regardless of socket count; duplicate-nick joins are refused or read-only.",
+        "fail_criteria": "N sockets each post one message per 15s under one nick (N x rate reaches the room).",
+        "inconclusive_criteria": "Staging environment differs from production topology - record the difference; do not generalize.",
+        "status": "not_run",
+        "result_evidence_refs": []
+      }
+    ],
+    "decisions": [
+      {
+        "id": "DC-01",
+        "subject_refs": ["R-01", "R-02", "R-03", "R-04", "R-05", "R-06", "R-07", "R-08", "R-09", "R-10", "R-11"],
+        "status": "proposed",
+        "rationale": "All risks are intentionally unrated because no rubric was supplied. Proposed for caller approval: adopt a simple two-axis scale (impact 1-4 x likelihood 1-4, or CVSS v4 if preferred) and rate R-01..R-11 before choosing the fix order.",
+        "owner": null,
+        "date": null,
+        "evidence_refs": []
+      },
+      {
+        "id": "DC-02",
+        "subject_refs": ["T-05", "AS-1", "CF-01"],
+        "status": "proposed",
+        "rationale": "The browser-direct OANDA practice-token pool is the load-bearing data path for Iran-access and is deliberate; the caller should explicitly choose between 'keep pool + harden workers + amend the invariant text' and 'worker-only + remove pool'. Until decided, T-05 stays open by design.",
+        "owner": null,
+        "date": null,
+        "evidence_refs": ["EV-06", "EV-16"]
+      }
+    ],
+    "changes": [],
+    "identity_map": []
+  }
+}

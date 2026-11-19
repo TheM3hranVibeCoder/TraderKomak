@@ -53,6 +53,11 @@ function chatUrl(): string {
 export class ChatClient {
   private ws: WebSocket | null = null;
   private handlers: ChatClientHandlers;
+  /** Returns the current Supabase access token (null when signed out).
+   *  Consulted fresh on every join so reconnects carry a live token even
+   *  after a silent refresh — the server verifies registered usernames
+   *  against it. */
+  private getAccessToken?: () => Promise<string | null>;
   private attempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closedByUser = false;
@@ -64,8 +69,9 @@ export class ChatClient {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private lastServerMsgAt = 0;
 
-  constructor(handlers: ChatClientHandlers) {
+  constructor(handlers: ChatClientHandlers, getAccessToken?: () => Promise<string | null>) {
     this.handlers = handlers;
+    this.getAccessToken = getAccessToken;
   }
 
   connect(nick: string, adminKey?: string): void {
@@ -177,6 +183,25 @@ export class ChatClient {
         this.outbox.unshift(payload); // put it back on failure
       }
     }
+  }
+
+  /** Join frame with a FRESH Supabase token (the server proves registered
+   *  usernames against it). Token fetch failure joins without one — the
+   *  server then treats the nick as an unproven guest claim. */
+  private async sendJoin(): Promise<void> {
+    let accessToken: string | null = null;
+    try {
+      accessToken = (await this.getAccessToken?.()) ?? null;
+    } catch {
+      accessToken = null;
+    }
+    this.sendRaw({
+      type: "join",
+      nick: this.joinNick,
+      adminKey: this.adminKey,
+      accessToken: accessToken ?? undefined,
+    });
+    this.flushOutbox();
   }
 
   /** Detect half-open sockets: dead NAT/proxy connections keep readyState=OPEN
@@ -292,8 +317,7 @@ export class ChatClient {
       // Empty nick = observer join (read-only, feeds the unread badge)
       if (this.joinNick !== null) {
         this.joined = true;
-        this.sendRaw({ type: "join", nick: this.joinNick, adminKey: this.adminKey });
-        this.flushOutbox();
+        void this.sendJoin();
       }
     });
 

@@ -18,10 +18,10 @@
 import type { FastifyInstance } from "fastify";
 import type { RawData, WebSocket } from "ws";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { createHash, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import type { ChatMessage, ChatModEntry } from "@traderkomak/shared";
 import type { Log } from "../logger.js";
+import { safeEqual } from "../util/secure.js";
 
 const HISTORY_CAP = 200;
 const HISTORY_FILE = "chat-history.json";
@@ -52,8 +52,13 @@ interface Conn {
   socket: WebSocket;
   nick: string | null;
   admin: boolean;
+  /** True when the nick was proven owned via a Supabase session (registered
+   *  usernames require proof — see verifyNickOwnership). */
+  verified: boolean;
+  /** A join frame is being processed (async verification) — further joins
+   *  on this connection are dropped until it settles. */
+  joining: boolean;
   ip: string;
-  lastChatAt: number;
   /** Last reaction-toggle timestamp (flood guard). */
   lastReactAt: number;
   /** Telegram popup ids delivered to THIS connection — receipts accepted
@@ -62,12 +67,6 @@ interface Conn {
   /** Set false right before each heartbeat ping; a pong (or any frame)
    *  sets it true. Dead phone browsers never pong → reaped below. */
   alive: boolean;
-}
-
-function safeEqual(a: string, b: string): boolean {
-  const ha = createHash("sha256").update(a).digest();
-  const hb = createHash("sha256").update(b).digest();
-  return timingSafeEqual(ha, hb);
 }
 
 /** Country lookup for admin user-info (free ip-api, cached per IP/day). */
@@ -108,6 +107,15 @@ export class ChatRoom {
   /** Every nick the room has seen — powers the member/offline lists. */
   private readonly known = new Map<string, { lastSeen: number; ip?: string }>();
   private mod: ModState = { mutes: [], bans: [] };
+  /** Usernames that exist in Supabase profiles — refreshed hourly by
+   *  syncSupabaseMembers. A join claiming one of these must prove ownership
+   *  with a valid Supabase session (see verifyNickOwnership); guests keep
+   *  free choice of unregistered nicknames. */
+  private readonly registered = new Set<string>();
+  /** Per-NICK message timestamps: the 15s cooldown binds to the identity,
+   *  not the connection, so a reconnect or a second socket cannot reset it.
+   *  (Verified same-user sockets — e.g. two tabs — share one allowance.) */
+  private readonly lastChatAtByNick = new Map<string, number>();
   /** When Upstash Redis env vars are set, history + mod state persist
    *  there — surviving Render free-tier restarts and sleep cycles that
    *  wipe the ephemeral disk. Without them, a local file is used. */
@@ -217,7 +225,11 @@ export class ChatRoom {
         const rows = (await res.json()) as { username?: unknown; created_at?: unknown }[];
         for (const r of rows) {
           const nick = String(r.username ?? "").trim().toLowerCase();
-          if (!nick || this.known.has(nick)) continue;
+          if (!nick) continue;
+          // Every profile username is a REGISTERED name: joins claiming it
+          // need ownership proof, whether or not the roster already knows it.
+          this.registered.add(nick);
+          if (this.known.has(nick)) continue;
           const ms = typeof r.created_at === "string" ? new Date(r.created_at).getTime() : NaN;
           this.known.set(nick, { lastSeen: Number.isFinite(ms) ? Math.floor(ms / 1000) : 0 });
           added += 1;
@@ -294,7 +306,7 @@ export class ChatRoom {
     // (Behind the relay all conns share one source IP, so this acts as a
     // global cap — same tradeoff as the candles limiter.)
     app.get<{ Params: { id: string } }>("/api/chat-img/:id", (request, reply) => {
-      if (imgRateLimited(request.ip ?? "unknown")) {
+      if (imgRateLimited(request.clientIp || request.ip || "unknown")) {
         return reply.code(429).send({ error: { code: "RATE_LIMITED", message: "Too many requests — slow down" } });
       }
       const img = this.getChatImg(String(request.params.id ?? "").slice(0, 64));
@@ -306,7 +318,7 @@ export class ChatRoom {
         .send(img.buffer);
     });
     app.get("/chat", { websocket: true }, (socket, req) => {
-      const conn: Conn = { socket, nick: null, admin: false, ip: req.ip ?? "", lastChatAt: 0, lastReactAt: 0, tgPopups: new Set(), alive: true };
+      const conn: Conn = { socket, nick: null, admin: false, verified: false, joining: false, ip: req.clientIp || req.ip || "", lastReactAt: 0, tgPopups: new Set(), alive: true };
       // IP bans are enforced before anything else — banned means banned.
       if (this.isBannedIp(conn.ip)) {
         this.safeSend(conn, { type: "error", message: "You are banned from this room" });
@@ -320,7 +332,7 @@ export class ChatRoom {
       }
       this.conns.set(socket, conn);
       this.sendOnline(socket);
-      this.log.info({ ip: req.ip, conns: this.conns.size }, "chat connected");
+      this.log.info({ ip: conn.ip, conns: this.conns.size }, "chat connected");
 
       socket.on("message", (raw: Buffer) => {
         try {
@@ -362,7 +374,12 @@ export class ChatRoom {
         this.safeSend(conn, { type: "pong" });
         return;
       case "join":
-        this.join(conn, String(msg.nick ?? ""), typeof msg.adminKey === "string" ? msg.adminKey : undefined);
+        void this.join(
+          conn,
+          String(msg.nick ?? ""),
+          typeof msg.adminKey === "string" ? msg.adminKey : undefined,
+          typeof msg.accessToken === "string" ? msg.accessToken.slice(0, 2048) : undefined
+        );
         return;
       case "chat": {
         const r = msg.reply as Record<string, unknown> | undefined;
@@ -404,7 +421,55 @@ export class ChatRoom {
     }
   }
 
-  private join(conn: Conn, rawNick: string, adminKey?: string): void {
+  /**
+   * Prove that a Supabase session belongs to `nick`'s profile: validate the
+   * access token against Supabase Auth, then compare the profile username.
+   *   "ok"       — token valid and the username matches
+   *   "unproven" — token invalid/expired, or the profile username differs
+   *   "error"    — infrastructure failure (Supabase unreachable); callers
+   *                fail OPEN so a transient outage never locks users out
+   */
+  private async verifyNickOwnership(nick: string, accessToken: string): Promise<"ok" | "unproven" | "error"> {
+    if (!this.sbUrl || !this.sbKey) return "error";
+    try {
+      const userRes = await fetch(`${this.sbUrl}/auth/v1/user`, {
+        headers: { apikey: this.sbKey, Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (userRes.status === 401 || userRes.status === 403) return "unproven";
+      if (!userRes.ok) return "error";
+      const user = (await userRes.json()) as { id?: unknown };
+      const userId = typeof user.id === "string" ? user.id : "";
+      if (!userId) return "error";
+      const profileRes = await fetch(
+        `${this.sbUrl}/rest/v1/profiles?user_id=eq.${encodeURIComponent(userId)}&select=username`,
+        {
+          headers: { apikey: this.sbKey, Authorization: `Bearer ${this.sbKey}` },
+          signal: AbortSignal.timeout(8_000),
+        }
+      );
+      if (!profileRes.ok) return "error";
+      const rows = (await profileRes.json()) as Array<{ username?: unknown }>;
+      const username = rows?.[0]?.username;
+      return typeof username === "string" && username.toLowerCase() === nick.toLowerCase()
+        ? "ok"
+        : "unproven";
+    } catch {
+      return "error";
+    }
+  }
+
+  private async join(conn: Conn, rawNick: string, adminKey?: string, accessToken?: string): Promise<void> {
+    if (conn.nick || conn.joining) return;
+    conn.joining = true;
+    try {
+      await this.joinInner(conn, rawNick, adminKey, accessToken);
+    } finally {
+      conn.joining = false;
+    }
+  }
+
+  private async joinInner(conn: Conn, rawNick: string, adminKey?: string, accessToken?: string): Promise<void> {
     const nick = rawNick.trim().replace(/\s+/g, " ").slice(0, NICK_MAX);
     if (nick.length < NICK_MIN) {
       // Empty nick = read-only observer: receives history and live messages
@@ -437,6 +502,26 @@ export class ChatRoom {
       this.log.warn({ ip: conn.ip, nick }, "chat: reserved nickname rejected");
       return;
     }
+    // Registered usernames require ownership proof: a Supabase session whose
+    // profile username matches the claimed nick. Guests (unregistered names)
+    // join as before. Infrastructure failures fail open — a transient
+    // Supabase outage must never lock users out of the room.
+    if (!isAdminKey && this.registered.has(nick.toLowerCase())) {
+      const verdict =
+        typeof accessToken === "string" && accessToken.length > 0
+          ? await this.verifyNickOwnership(nick, accessToken)
+          : "unproven";
+      if (verdict === "unproven") {
+        this.safeSend(conn, {
+          type: "error",
+          message: "This nickname belongs to a signed-in user — sign in with Google to use it",
+        });
+        this.log.warn({ ip: conn.ip, nick }, "chat: registered nickname without ownership proof");
+        return;
+      }
+      conn.verified = verdict === "ok";
+    }
+    if (isAdminKey) conn.verified = true;
     conn.nick = nick;
     this.known.set(nick.toLowerCase(), { lastSeen: Math.floor(Date.now() / 1000), ip: conn.ip });
     this.schedulePersist();
@@ -524,16 +609,25 @@ export class ChatRoom {
       if (m?.until) this.safeSend(conn, { type: "muted", until: m.until });
       return;
     }
-    // Cooldown: one message per 15s — the client shows the wait timer.
-    // The room owner/moderator is exempt.
+    // Cooldown: one message per 15s per NICK — the client shows the wait
+    // timer. The room owner/moderator is exempt. Binding to the nick (not
+    // the connection) means a reconnect or a second socket cannot reset it;
+    // two verified tabs of the same user simply share one allowance.
     const now = Date.now();
     if (!conn.admin) {
-      const wait = conn.lastChatAt ? RATE_INTERVAL_MS - (now - conn.lastChatAt) : 0;
+      const nickKey = conn.nick!.toLowerCase();
+      const last = this.lastChatAtByNick.get(nickKey) ?? 0;
+      const wait = last ? RATE_INTERVAL_MS - (now - last) : 0;
       if (wait > 0) {
         this.safeSend(conn, { type: "ratelimit", waitMs: wait });
         return;
       }
-      conn.lastChatAt = now;
+      if (this.lastChatAtByNick.size > 5000) {
+        for (const [k, v] of this.lastChatAtByNick) {
+          if (now - v > RATE_INTERVAL_MS * 4) this.lastChatAtByNick.delete(k);
+        }
+      }
+      this.lastChatAtByNick.set(nickKey, now);
     }
 
     const cleanText = text.replace(/\s+/g, " ").trim().slice(0, TEXT_MAX);
@@ -657,17 +751,27 @@ export class ChatRoom {
     const cleanText = text.replace(/\s+/g, " ").trim().slice(0, 500);
     const cleanImg = this.sanitizeImage(img);
     if (!cleanNick || (!cleanText && !cleanImg)) return;
-    let delivered = false;
+    // Prefer a VERIFIED connection holding the nick: registered usernames can
+    // only be held by their owner (or, during a Supabase outage, an unverified
+    // fail-open join — that one must not intercept the owner's DMs). Guest
+    // nicks have no verification, so the first match wins as before.
+    let target: Conn | null = null;
     for (const [, c] of this.conns) {
       if (c.nick && c.nick.toLowerCase() === cleanNick.toLowerCase() && c.socket.readyState === c.socket.OPEN) {
-        this.safeSend(c, { type: "admin_dm", id, text: cleanText || undefined, img: cleanImg });
-        delivered = true;
-        // remember where to deliver the Read receipt
-        this.pendingDms.set(id, { socket: conn.socket, nick: cleanNick });
-        break;
+        if (c.verified) {
+          target = c;
+          break;
+        }
+        if (!target) target = c;
       }
     }
-    if (!delivered) this.safeSend(conn, { type: "dm_status", id, nick: cleanNick, read: false, offline: true });
+    if (target) {
+      this.safeSend(target, { type: "admin_dm", id, text: cleanText || undefined, img: cleanImg });
+      // remember where to deliver the Read receipt
+      this.pendingDms.set(id, { socket: conn.socket, nick: cleanNick });
+    } else {
+      this.safeSend(conn, { type: "dm_status", id, nick: cleanNick, read: false, offline: true });
+    }
   }
 
   private onDmRead(user: Conn, id: string): void {
