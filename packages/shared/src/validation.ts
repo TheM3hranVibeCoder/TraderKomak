@@ -90,8 +90,11 @@ function parseWatch(
   if (!Array.isArray(raw)) {
     return { ok: false, error: "watch requires instruments array" };
   }
-  if (raw.length > 20) {
-    return { ok: false, error: "too many instruments (max 20)" };
+  // 25 (was 20): the default-watchlist index migration adds SPX500_USD /
+  // NAS100_USD / US30 to existing lists that may already hold 20 symbols —
+  // rejecting the watch frame would silence ALL live watchlist prices.
+  if (raw.length > 25) {
+    return { ok: false, error: "too many instruments (max 25)" };
   }
   const instruments: string[] = [];
   for (const v of raw) {

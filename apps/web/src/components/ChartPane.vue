@@ -13,6 +13,10 @@ import { useDrawingsStore, type DrawingRect, type DrawingTrend, type DrawingPoly
 import { useReplayStore } from "@/stores/replay";
 import { useDemoStore, demoValuePerPrice, type DemoSide, type DemoStatus, type DemoKind } from "@/stores/demo";
 import { useIndicatorsStore, sessionKindAt, nextBoundaryAfter, boundaryEpoch, CHAIN_NEXT, tzOffsetMin, inSession, localMinutesOfDay, type SessionDef, type CustomSession } from "@/stores/indicators";
+import { usePineStore } from "@/stores/pine";
+import { compile, type PineVM, type PineInputDecl } from "@/pine";
+import { PineTailError } from "@/chart/chartAdapter";
+import PineEditor from "./PineEditor.vue";
 import DemoPanel from "./DemoPanel.vue";
 import type { Candle } from "@traderkomak/shared";
 import { currencyFlagUrl, commodityIcon, generatedCoinIcon, symbolParts } from "@/utils/flags";
@@ -48,6 +52,9 @@ const sessionPixels = ref<SessionBoxPx[]>([]);
 const indSettingsOpen = ref(false);
 const smaSettingsOpen = ref(false);
 const emaSettingsOpen = ref(false);
+/** Which Pine script's inputs popup is open in the legend (declared here
+ *  so the shared outside-close watcher above can reference it). */
+const pineSettingsId = ref<string | null>(null);
 const vpSettingsOpen = ref(false);
 
 /** While the settings popup is open, any pointerdown outside it (the chart,
@@ -62,8 +69,9 @@ function indSettingsOutside(e: PointerEvent): void {
   emaSettingsOpen.value = false;
   indSettingsOpen.value = false;
   vpSettingsOpen.value = false;
+  pineSettingsId.value = null;
 }
-watch([indSettingsOpen, smaSettingsOpen, emaSettingsOpen, vpSettingsOpen], (states) => {
+watch([indSettingsOpen, smaSettingsOpen, emaSettingsOpen, vpSettingsOpen, pineSettingsId], (states) => {
   if (states.some(Boolean)) document.addEventListener("pointerdown", indSettingsOutside, true);
   else document.removeEventListener("pointerdown", indSettingsOutside, true);
 });
@@ -334,8 +342,33 @@ function onAddSession(): void {
 
 
 // Indicator toggle/* ── RSI indicator (native LWC v5 sub-pane) ──────────────────────────── */
-const rsiPaneH = ref(0);
-const overlayBottom = computed(() => axisBottomH.value + (indicators.rsiAdded && indicators.rsiVisible ? rsiPaneH.value : 0));
+/** Measured pixel height of every pane (index-aligned with LWC panes).
+ *  Overlay anchors (sessions/VP/drawings in the MAIN pane) offset by the
+ *  total height of the sub-panes BELOW the main pane — with any number of
+ *  RSI + Pine sub-panes, not just RSI alone. */
+const subPaneHeights = ref<number[]>([]);
+function refreshPaneHeights(): void {
+  subPaneHeights.value = adapter?.paneHeights() ?? [];
+}
+const heightAt = (idx: number): number => subPaneHeights.value[idx] ?? 0;
+const overlayBottom = computed(() => {
+  let h = axisBottomH.value;
+  if (indicators.rsiAdded && indicators.rsiVisible) h += heightAt(1);
+  for (const id of pine.currentAdded()) {
+    const entry = pineRuntimes.get(id);
+    if (!entry || entry.ownPane === null) continue;
+    if (pine.isVisible(market.instrument, id)) h += heightAt(entry.ownPane);
+  }
+  return h;
+});
+/** The built-in RSI legend anchors to the TOP of the RSI pane — which is
+ *  only `rsiPaneH` above the time axis when RSI is the LAST pane. With
+ *  Pine sub-panes below it, their heights must be counted too. */
+const rsiLegendBottom = computed(() => {
+  let h = axisBottomH.value;
+  for (let i = 2; i < subPaneHeights.value.length; i++) h += subPaneHeights.value[i]!;
+  return h;
+});
 /** Indicator math (computeRsi / computeSma / computeEma) lives in
  *  @/chart/indicators — imported above. */
 
@@ -406,7 +439,7 @@ function pushRsiData(): void {
     points.push({ time: candles[i]!.time, value: v });
   }
   commitWhenStable(() => adapter?.setRsiData(points));
-  rsiPaneH.value = adapter.rsiPaneHeight();
+  nextTick(refreshPaneHeights);
 }
 
 function syncRsiIndicator(): void {
@@ -417,16 +450,178 @@ function syncRsiIndicator(): void {
     pushRsiData();
   } else {
     adapter.removeRsi();
-    rsiPaneH.value = 0;
+    nextTick(refreshPaneHeights);
   }
 }
+// RSI STYLE/LEVEL changes only — the rsiAdded toggle is owned by the pine
+// pane rebuild below (one atomic structure rebuild avoids pane collisions).
 watch(
-  () => [indicators.rsiAdded, indicators.rsiLength, indicators.rsiColor, indicators.rsiUpper, indicators.rsiLower, indicators.rsiLevelColor],
-  () => syncRsiIndicator()
+  () => [indicators.rsiLength, indicators.rsiColor, indicators.rsiUpper, indicators.rsiLower, indicators.rsiLevelColor],
+  () => {
+    if (!indicators.rsiAdded || !adapter) return;
+    adapter.setRsiStyle(indicators.rsiColor);
+    adapter.setRsiLevels(indicators.rsiUpper, indicators.rsiLower, indicators.rsiLevelColor);
+    pushRsiData();
+  }
 );
 watch(() => indicators.rsiVisible, () => syncRsiIndicator());
 // Keep the overlay layers above the LWC pane separator when the user drags it
-watch(() => indicators.rsiAdded, () => { nextTick(() => { rsiPaneH.value = adapter?.rsiPaneHeight() ?? 0; }); });
+watch(() => indicators.rsiAdded, () => { nextTick(refreshPaneHeights); });
+
+/* ── Pine Script user indicators (stores/pine + @/pine engine) ──────────
+ * Each added script owns a PineVM (incremental bar-loop runtime). ANY pane
+ * structure change (script add/remove/edit, RSI toggle, symbol switch)
+ * triggers ONE atomic rebuild: RSI series + all pine series are removed,
+ * panes are trimmed back to the main pane, then re-added in a fixed order
+ * (RSI pane 1, non-overlay pine panes 2…) and re-filled. Positional pane
+ * indices in LWC shift when panes disappear — the atomic rebuild is what
+ * keeps built-in RSI + custom pine RSIs from colliding in one pane. */
+const pine = usePineStore();
+const pineEditorOpen = computed(() => pine.editorOpen);
+
+interface PineEntry {
+  vm: PineVM;
+  overlay: boolean;
+  /** Plot channel ids this entry owns (adapter series). */
+  plotIds: number[];
+  ownPane: number | null;
+  /** Script code the VM was compiled from — changed code → recompile. */
+  codeSnapshot: string;
+  /** Declared inputs (for the legend's settings popup). */
+  inputs: PineInputDecl[];
+}
+const pineRuntimes = new Map<string, PineEntry>();
+
+function pineScriptName(id: string): string {
+  return pine.scripts.find((s) => s.id === id)?.name ?? "Script";
+}
+
+function pineInputsFor(id: string): PineInputDecl[] {
+  return pineRuntimes.get(id)?.inputs ?? [];
+}
+
+/**
+ * ONE atomic pane-structure rebuild: everything off the main pane is
+ * removed, panes trimmed to 1, then RSI (pane 1) and pine scripts (pane 0
+ * for overlay / 2+ for sub-panes) come back in a deterministic order with
+ * fresh series and full data.
+ */
+function rebuildAllPanes(): void {
+  if (!adapter) return;
+  // 1) tear down every non-main series
+  adapter.removeRsi();
+  for (const entry of pineRuntimes.values()) {
+    for (const plotId of entry.plotIds) adapter.removePine(plotId);
+  }
+  pineRuntimes.clear();
+  adapter.trimPanes(1);
+  // 2) RSI first — it owns pane 1 when enabled
+  if (indicators.rsiAdded) {
+    adapter.setRsiStyle(indicators.rsiColor);
+    adapter.setRsiLevels(indicators.rsiUpper, indicators.rsiLower, indicators.rsiLevelColor);
+    pushRsiData();
+  }
+  // 3) compile + place pine scripts
+  let nextPane = indicators.rsiAdded ? 2 : 1;
+  for (const id of pine.currentAdded()) {
+    const script = pine.scripts.find((s) => s.id === id);
+    if (!script) continue;
+    const res = compile(script.code);
+    if (!res.ok) continue; // broken code — the editor shows the error
+    const vm = res.script.vm;
+    vm.setInputValues(pine.inputValuesFor(id));
+    vm.reset();
+    const entry: PineEntry = { vm, overlay: res.script.overlay, plotIds: [], ownPane: null, codeSnapshot: script.code, inputs: res.script.inputs };
+    pineRuntimes.set(id, entry);
+    const ownPane = res.script.overlay ? null : nextPane++;
+    entry.ownPane = ownPane;
+    for (const plot of vm.currentPlots()) {
+      entry.plotIds.push(plot.id);
+      adapter.addPineSeries(plot.id, {
+        paneIndex: res.script.overlay ? 0 : ownPane!,
+        style: plot.style,
+        color: plot.color,
+        lineWidth: plot.lineWidth,
+      });
+      adapter.setPineVisible(plot.id, pine.isVisible(market.instrument, id));
+    }
+  }
+  // 4) data for every fresh series (VMs run incrementally; the series are
+  //    brand new so the full commit is forced)
+  pushPineData(true, true);
+  adapter.trimPanes(1 + (indicators.rsiAdded ? 1 : 0) + pineRuntimes.size);
+  nextTick(refreshPaneHeights);
+}
+
+/** Runs every active VM and commits plots. `full` = whole-series commit
+ *  (structure changed / history changed); otherwise tail-only. `force`
+ *  pushes data even when the VM reports nothing changed (fresh series). */
+function pushPineData(full: boolean, force = false): void {
+  if (!adapter) return;
+  const candles = sanitizeCandles(displayCandles.value);
+  for (const id of pine.currentAdded()) {
+    const entry = pineRuntimes.get(id);
+    if (!entry) continue;
+    entry.vm.setInputValues(pine.inputValuesFor(id));
+    const ran = entry.vm.run(candles);
+    if (!ran && !force) continue;
+    for (const plot of entry.vm.currentPlots()) {
+      if (full) {
+        adapter.setPineData(plot.id, plot.data);
+      } else {
+        const last = plot.data[plot.data.length - 1];
+        if (!last) continue;
+        try {
+          adapter.updatePineLast(plot.id, last);
+        } catch (err) {
+          if (err instanceof PineTailError) {
+            adapter.setPineData(plot.id, plot.data);
+          }
+        }
+      }
+    }
+  }
+}
+
+// Structure watcher: chart membership, script edits, and the built-in RSI
+// toggle all go through the one atomic rebuild.
+watch(
+  () => [pine.currentAdded().join(","), pine.scripts.map((s) => `${s.id}:${s.code}`).join("|"), indicators.rsiAdded],
+  () => rebuildAllPanes()
+);
+// Eye toggles — cheap per-series option, no rebuild
+watch(
+  () => JSON.stringify(pine.visibleMap),
+  () => {
+    if (!adapter) return;
+    for (const id of pine.currentAdded()) {
+      const entry = pineRuntimes.get(id);
+      if (!entry) continue;
+      const on = pine.isVisible(market.instrument, id);
+      for (const plotId of entry.plotIds) adapter.setPineVisible(plotId, on);
+    }
+  }
+);
+// Input values changed (editor dock or legend popup) — recompute from scratch
+watch(
+  () => JSON.stringify(pine.currentAdded().map((id) => pine.inputValuesFor(id))),
+  () => {
+    for (const id of pine.currentAdded()) {
+      const entry = pineRuntimes.get(id);
+      if (entry) entry.vm.reset();
+    }
+    pushPineData(true);
+  }
+);
+// Symbol/timeframe switch: fresh history → VMs must reset (their data is
+// per symbol+timeframe).
+watch(
+  () => [market.instrument, market.timeframe],
+  () => {
+    for (const entry of pineRuntimes.values()) entry.vm.reset();
+    nextTick(() => pushPineData(true));
+  }
+);
 
 // Indicator toggles don't move the chart — re-project the boxes directly
 watch(
@@ -1444,7 +1639,7 @@ function rebuildChart(): void {
   if (indicators.rsiAdded) {
     adapter.setRsiStyle(indicators.rsiColor);
     adapter.setRsiLevels(indicators.rsiUpper, indicators.rsiLower, indicators.rsiLevelColor);
-    rsiPaneH.value = adapter.rsiPaneHeight();
+    nextTick(refreshPaneHeights);
   }
   // Replay keeps its frozen scale and hidden live label
   adapter.setPriceAutoScale(!replay.active);
@@ -1733,6 +1928,12 @@ function commitChartDataInner(candles: Candle[], freshMount = false): void {
     if (indicators.smaAdded) adapter.setMaData("sma", []);
     if (indicators.emaAdded) adapter.setMaData("ema", []);
     if (indicators.rsiAdded) adapter.setRsiData([]);
+    for (const id of pine.currentAdded()) {
+      const entry = pineRuntimes.get(id);
+      if (!entry) continue;
+      entry.vm.reset();
+      for (const plotId of entry.plotIds) adapter.setPineData(plotId, []);
+    }
     return;
   }
   const pts = maRsiPointsFor(safe);
@@ -1740,6 +1941,9 @@ function commitChartDataInner(candles: Candle[], freshMount = false): void {
   if (indicators.smaAdded) adapter.setMaData("sma", pts.sma);
   if (indicators.emaAdded) adapter.setMaData("ema", pts.ema);
   if (indicators.rsiAdded) adapter.setRsiData(pts.rsi);
+  // Pine scripts ride the same atomic commit (incremental VMs recompute
+  // only what the new history actually changed).
+  rebuildAllPanes();
   // Full history commits are the only thing that extends the settle
   // window: the chart layout needs a few frames after a big setData, but
   // routine tail ticks must not keep the per-frame projection loop alive.
@@ -1777,6 +1981,8 @@ function commitChartTailInner(lastCandle: Candle): void {
   if (indicators.smaAdded && pts.sma.length) adapter.updateMaLast("sma", pts.sma[pts.sma.length - 1]!);
   if (indicators.emaAdded && pts.ema.length) adapter.updateMaLast("ema", pts.ema[pts.ema.length - 1]!);
   if (indicators.rsiAdded && pts.rsi.length) adapter.updateRsiLast(pts.rsi[pts.rsi.length - 1]!);
+  // Pine tail: the incremental VM re-runs just the last bar per tick.
+  pushPineData(false);
 }
 
 watch(
@@ -2056,10 +2262,12 @@ function updateCountdown() {
   // UTC-aligned (Monday weeks, calendar months). Using the wrong convention
   // counts down to a moment where no candle ever opens (e.g. a Binance 4h
   // showing 1:37 instead of 0:37 — exactly one hour of NY-offset drift).
-  // Dukascopy is UTC-aligned like Binance (its history is built on UTC buckets)
+  // Dukascopy is UTC-aligned like Binance (its history is built on UTC buckets),
+  // and so is cTrader (trendbars are UTC-epoch based like Binance's klines).
   const isUtcAligned =
     providerOf(market.instrument) === "binance" ||
-    providerOf(market.instrument) === "dukascopy";
+    providerOf(market.instrument) === "dukascopy" ||
+    providerOf(market.instrument) === "ctrader";
   let next: number;
   if (isUtcAligned) {
     if (sec === 2592000) {
@@ -2942,7 +3150,7 @@ function recalcRectsNow(): void {
   computeSessionBoxes();
   // Fixed Range Volume Profile (same triggers; window anchors → histogram)
   computeVpPixels();
-  if (indicators.rsiAdded) rsiPaneH.value = adapter.rsiPaneHeight();
+  if (indicators.rsiAdded) refreshPaneHeights();
 
   // Trendlines: endpoints project directly (no min/max — a line keeps its
   // drawn direction; vertical lines with equal times are valid).
@@ -5060,10 +5268,11 @@ onMounted(async () => {
   // over the demo panel, legend etc. stay untouched).
   const onOverlayWheel = (e: WheelEvent) => {
     if ((e.target as HTMLElement)?.tagName === "CANVAS") return;
-    // UI islands on the pane (indicator legend/settings) scroll their own
-    // content — never zoom the chart from them.
+    // UI islands on the pane (indicator legend/settings, the Pine editor
+    // dock) scroll their own content — never zoom the chart from them.
     const t = e.target as HTMLElement | null;
     if (t?.closest?.(".indicator-legend")) return;
+    if (t?.closest?.(".pine-editor")) return;
     const canvas = el.querySelector("canvas");
     if (!canvas) return;
     const r = canvas.getBoundingClientRect();
@@ -5123,6 +5332,7 @@ onMounted(async () => {
     indSettingsOpen.value = false;
     smaSettingsOpen.value = false;
     emaSettingsOpen.value = false;
+    pineSettingsId.value = null;
     // Demo limit placement: a click sets the draft entry price
     if (demo.active && draft.value) {
       if (e.button !== 0 || !isInChartArea(e) || !adapter || !containerRef.value) return;
@@ -5768,7 +5978,7 @@ onBeforeUnmount(() => {
           <span v-if="idx === 0"> / </span>
         </template>
         - {{ timeframeBadge }}
-        - {{ instrument && providerOf(instrument) === "binance" ? "BINANCE" : providerOf(instrument) === "dukascopy" ? "DUKASCOPY" : "OANDA" }}
+        - {{ instrument && providerOf(instrument) === "binance" ? "BINANCE" : providerOf(instrument) === "dukascopy" ? "DUKASCOPY" : providerOf(instrument) === "ctrader" ? "CTRADER" : "OANDA" }}
       </span>
     </div>
 
@@ -5950,7 +6160,95 @@ onBeforeUnmount(() => {
           <div class="vp-set-hint">Drag the dashed lines to resize the range</div>
         </div>
       </div>
+      <!-- Pine Script user indicators: same legend controls as the built-ins
+           (eye / inputs / remove) plus the script editor pencil. -->
+      <div v-for="pid in pine.currentAdded()" :key="pid" class="legend-row">
+        <span class="ind-legend-name pine-legend-name" :class="{ off: !pine.isVisible(market.instrument, pid) }">
+          <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" style="opacity:0.75"><text x="3" y="17" font-size="13" font-weight="700" font-family="Georgia, serif" font-style="italic" fill="currentColor">ƒx</text></svg>
+          {{ pineScriptName(pid) }}
+        </span>
+        <button class="ind-legend-btn" type="button" :title="pine.isVisible(market.instrument, pid) ? 'Hide' : 'Show'" @click="pine.setVisible(market.instrument, pid, !pine.isVisible(market.instrument, pid))">
+          <svg v-if="pine.isVisible(market.instrument, pid)" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" /><circle cx="12" cy="12" r="2.6" /></svg>
+          <svg v-else viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5c2 0 3.7.6 5.1 1.5M22 12s-3.5 6.5-10 6.5c-2 0-3.7-.6-5.1-1.5" /><path d="M4 20L20 4" /></svg>
+        </button>
+        <button v-if="pineInputsFor(pid).length > 0" class="ind-legend-btn" type="button" title="Inputs" @click="pineSettingsId = pineSettingsId === pid ? null : pid">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l-.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z" /></svg>
+        </button>
+        <button class="ind-legend-btn" type="button" title="Edit script" @click.stop="pine.openEditor(pid)">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+        </button>
+        <button class="ind-legend-btn" type="button" title="Remove" @click.stop="pine.removeFromCurrent(pid)">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+        <!-- Inputs popup (gear) — values live in the pine store and re-run
+             the script on change, exactly like the built-in indicator settings -->
+        <div v-if="pineSettingsId === pid" class="ind-settings ma-settings" @click.stop>
+          <div class="ind-settings-title">{{ pineScriptName(pid) }} — inputs</div>
+          <div v-for="inp in pineInputsFor(pid)" :key="inp.title" class="ind-set-row">
+            <span class="pine-inp-label" :title="inp.title">{{ inp.title }}</span>
+            <input
+              v-if="inp.type === 'int'"
+              class="rsi-num"
+              type="number"
+              step="1"
+              :value="Number(pine.inputValuesFor(pid)[inp.title] ?? inp.def)"
+              @change="pine.setInputValues(pid, { ...pine.inputValuesFor(pid), [inp.title]: Math.round(Number(($event.target as HTMLInputElement).value)) })"
+            />
+            <input
+              v-else-if="inp.type === 'float'"
+              class="rsi-num"
+              type="number"
+              step="any"
+              :value="Number(pine.inputValuesFor(pid)[inp.title] ?? inp.def)"
+              @change="pine.setInputValues(pid, { ...pine.inputValuesFor(pid), [inp.title]: Number(($event.target as HTMLInputElement).value) })"
+            />
+            <button
+              v-else-if="inp.type === 'bool'"
+              class="pine-inp-check"
+              :class="{ on: Boolean(pine.inputValuesFor(pid)[inp.title] ?? inp.def) }"
+              type="button"
+              @click="pine.setInputValues(pid, { ...pine.inputValuesFor(pid), [inp.title]: !(pine.inputValuesFor(pid)[inp.title] ?? inp.def) })"
+            >
+              {{ Boolean(pine.inputValuesFor(pid)[inp.title] ?? inp.def) ? "ON" : "OFF" }}
+            </button>
+            <input
+              v-else-if="inp.type === 'color'"
+              class="ind-set-color"
+              type="color"
+              :value="String(pine.inputValuesFor(pid)[inp.title] ?? inp.def)"
+              @input="pine.setInputValues(pid, { ...pine.inputValuesFor(pid), [inp.title]: String(($event.target as HTMLInputElement).value) })"
+            />
+            <select
+              v-else-if="inp.type === 'string' && inp.options?.length"
+              class="pine-inp-select"
+              :value="String(pine.inputValuesFor(pid)[inp.title] ?? inp.def)"
+              @change="pine.setInputValues(pid, { ...pine.inputValuesFor(pid), [inp.title]: String(($event.target as HTMLSelectElement).value) })"
+            >
+              <option v-for="o in inp.options" :key="o" :value="o">{{ o }}</option>
+            </select>
+            <select
+              v-else-if="inp.type === 'source'"
+              class="pine-inp-select"
+              :value="String(pine.inputValuesFor(pid)[inp.title] ?? inp.def)"
+              @change="pine.setInputValues(pid, { ...pine.inputValuesFor(pid), [inp.title]: String(($event.target as HTMLSelectElement).value) })"
+            >
+              <option v-for="o in ['close', 'open', 'high', 'low', 'hl2', 'hlc3', 'ohlc4', 'volume']" :key="o" :value="o">{{ o }}</option>
+            </select>
+            <input
+              v-else
+              class="pine-inp-select"
+              type="text"
+              :value="String(pine.inputValuesFor(pid)[inp.title] ?? inp.def)"
+              @change="pine.setInputValues(pid, { ...pine.inputValuesFor(pid), [inp.title]: String(($event.target as HTMLInputElement).value) })"
+            />
+          </div>
+          <div v-if="pineInputsFor(pid).length === 0" class="vp-set-hint">No inputs declared</div>
+        </div>
+      </div>
     </div>
+
+    <!-- Pine Script editor dock (bottom overlay) -->
+    <PineEditor v-if="pineEditorOpen" />
 
     <div v-if="isLoading" class="overlay center loading-only">
       <span class="overlay-spinner large"></span>
@@ -7187,7 +7485,7 @@ onBeforeUnmount(() => {
 
     <!-- RSI indicator sub-pane (TradingView-style, under the chart) -->
     <!-- RSI legend floats over the LWC sub-pane (bottom-left, above the time axis) -->
-    <div v-if="indicators.rsiAdded && instrument" class="rsi-legend" :style="{ bottom: overlayBottom + 6 + 'px' }">
+    <div v-if="indicators.rsiAdded && instrument" class="rsi-legend" :style="{ bottom: rsiLegendBottom + 6 + 'px' }">
       <span class="rsi-name" :style="{ color: indicators.rsiColor }">RSI {{ indicators.rsiLength }}</span>
       <button class="rsi-legend-btn" type="button" title="Settings" aria-label="RSI settings" @click="rsiSettingsOpen = !rsiSettingsOpen">
         <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z" /></svg>
@@ -7766,6 +8064,47 @@ onBeforeUnmount(() => {
 .ind-legend-name.off {
   text-decoration: line-through;
   opacity: 0.55;
+}
+.pine-legend-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text);
+}
+.pine-inp-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pine-inp-select {
+  max-width: 92px;
+  background: var(--btn-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 11px;
+  padding: 4px 6px;
+  outline: none;
+}
+.pine-inp-check {
+  width: 50px;
+  border-radius: 99px;
+  border: 1px solid var(--glass-border);
+  background: var(--btn-bg);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.pine-inp-check.on {
+  background: rgba(45, 212, 167, 0.15);
+  color: var(--live);
+  border-color: rgba(45, 212, 167, 0.3);
 }
 .ind-legend-btn {
   width: 18px;

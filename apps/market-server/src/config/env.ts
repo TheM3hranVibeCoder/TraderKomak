@@ -66,6 +66,9 @@ export interface AppConfig {
   dataDir: string;
   /** Secret gating the Binance relay routes (empty = relay disabled). */
   binanceRelaySecret: string;
+  /** Shared secret for our edge Worker's X-Tk-Edge-Auth header (optional
+   *  hardening — see util/clientIp.ts). Empty = structural rules only. */
+  edgeSharedSecret: string;
   oanda: {
     /** Never exposed anywhere — only used inside Authorization headers. */
     apiToken: string;
@@ -77,6 +80,23 @@ export interface AppConfig {
   binance: {
     apiUrl: string;
     streamUrl: string;
+  };
+  /** cTrader Open API (US30 index CFD). OPTIONAL: when the credentials are
+   *  missing the server still starts and simply serves no cTrader data —
+   *  unlike OANDA, which is required. Secrets never leave the server. */
+  ctrader: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    clientId: string;
+    clientSecret: string;
+    /** ctidTraderAccountId (numeric). */
+    accountId: string;
+    accessToken: string;
+    refreshToken: string;
+    /** Env override for the broker's exact US30 symbol name (varies by
+     *  broker: "US30", "US30.cash", "USA30", "DJI30"…). Empty = auto. */
+    symbolName: string;
   };
   /** instrument:timeframe pairs aggregated even with no subscribers. */
   persistentAggregations: Array<{ instrument: string; timeframe: string }>;
@@ -159,10 +179,31 @@ export function loadConfig(): AppConfig {
       apiUrl: optionalEnv("BINANCE_API_URL", "https://api.binance.com").replace(/\/$/, ""),
       streamUrl: optionalEnv("BINANCE_STREAM_URL", "wss://stream.binance.com:9443").replace(/\/$/, ""),
     },
+    ctrader: {
+      host: optionalEnv("CTRADER_HOST", "demo.ctraderapi.com"),
+      port: Number.parseInt(optionalEnv("CTRADER_PORT", "5035"), 10),
+      clientId: optionalEnv("CTRADER_CLIENT_ID", ""),
+      clientSecret: optionalEnv("CTRADER_CLIENT_SECRET", ""),
+      accountId: optionalEnv("CTRADER_ACCOUNT_ID", ""),
+      accessToken: optionalEnv("CTRADER_ACCESS_TOKEN", ""),
+      refreshToken: optionalEnv("CTRADER_REFRESH_TOKEN", ""),
+      symbolName: optionalEnv("CTRADER_US30_SYMBOL", ""),
+      // An access token OR a refresh token is enough to start — the server
+      // refreshes and persists the rotated pair on its own. The numeric
+      // ctidTraderAccountId is ALSO optional: when empty it is discovered
+      // from the token on the first connect (logged + written to the token
+      // store file — copy it into VITE_CTRADER_ACCOUNT_ID for browser-direct).
+      enabled:
+        optionalEnv("CTRADER_CLIENT_ID", "") !== "" &&
+        optionalEnv("CTRADER_CLIENT_SECRET", "") !== "" &&
+        (optionalEnv("CTRADER_ACCESS_TOKEN", "") !== "" ||
+          optionalEnv("CTRADER_REFRESH_TOKEN", "") !== ""),
+    },
     /** Secret gating the Binance relay routes (see routes/binance-relay.ts).
      *  Empty = relay disabled. Set it on deployments that must serve other
      *  servers located where Binance is geo-blocked. */
     binanceRelaySecret: optionalEnv("BINANCE_RELAY_SECRET", ""),
+    edgeSharedSecret: optionalEnv("EDGE_SHARED_SECRET", ""),
     persistentAggregations: persistentAggregationsRaw,
     chatAdminKey: optionalEnv("CHAT_ADMIN_KEY", ""),
     chatOwnerNick: optionalEnv("CHAT_OWNER_NICK", "mehran"),

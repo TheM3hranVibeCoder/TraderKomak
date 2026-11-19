@@ -5,6 +5,7 @@ import { useWatchlistStore } from "@/stores/watchlist";
 import { useMarketStore } from "@/stores/market";
 import { WatchWsClient } from "@/services/watchWs";
 import { fetchCandles } from "@/services/api";
+import { ctraderDirect, ctraderDirectConfigured } from "@/services/ctraderDirect";
 import { currencyFlagUrl, commodityIcon, symbolParts } from "@/utils/flags";
 
 const watchlist = useWatchlistStore();
@@ -249,6 +250,22 @@ function onClickRow(inst: string): void {
 }
 
 let watchWs: WatchWsClient | null = null;
+/** US30 watchlist prices ride the browser-direct cTrader connection when
+ *  configured (same no-server-bandwidth policy as the chart); the server
+ *  watch WS stays the source for every other provider. */
+let offCtraderTick: (() => void) | null = null;
+
+function serverWatchList(): string[] {
+  const all = [...watchlist.instruments];
+  if (!ctraderDirectConfigured()) return all;
+  return all.filter((i) => providerOf(i) !== "ctrader");
+}
+
+function syncCtraderWatch(): void {
+  if (!ctraderDirectConfigured()) return;
+  const list = watchlist.instruments.filter((i) => providerOf(i) === "ctrader");
+  ctraderDirect.setWatchInstruments(list);
+}
 
 /** Symbols already seeded this session — avoids refetching on every change. */
 const seeded = new Set<string>();
@@ -303,7 +320,14 @@ onMounted(() => {
     watchlist.updatePrice(tick.instrument, tick.bid, tick.ask, tick.mid, tick.timestamp);
   });
   watchWs.connect();
-  watchWs.setInstruments(watchlist.instruments);
+  watchWs.setInstruments(serverWatchList());
+
+  if (ctraderDirectConfigured()) {
+    offCtraderTick = ctraderDirect.addTickListener((tick) => {
+      watchlist.updatePrice(tick.instrument, tick.bid, tick.ask, tick.mid, tick.timestamp);
+    });
+    syncCtraderWatch();
+  }
 
   // Seed price + % for all watchlist symbols in parallel (works while closed)
   seedNewSymbols();
@@ -322,7 +346,8 @@ onMounted(() => {
     () => watchlist.instruments.join(","),
     (joined) => {
       const arr = joined ? joined.split(",") : [];
-      watchWs?.setInstruments(arr);
+      watchWs?.setInstruments(serverWatchList());
+      syncCtraderWatch();
       // Seed only the newly added symbol(s) — instant % for new rows
       seedNewSymbols();
     }
@@ -332,6 +357,11 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (seedRetryTimer) clearInterval(seedRetryTimer);
   watchWs?.disconnect();
+  if (offCtraderTick) {
+    offCtraderTick();
+    offCtraderTick = null;
+  }
+  ctraderDirect.setWatchInstruments([]);
 });
 </script>
 
@@ -401,7 +431,7 @@ onBeforeUnmount(() => {
                 <span v-if="idx === 0"> / </span>
               </template>
             </span>
-            <span class="watch-sub">{{ providerOf(inst) === "binance" ? "BINANCE" : providerOf(inst) === "dukascopy" ? "DUKASCOPY" : "OANDA" }}</span>
+            <span class="watch-sub">{{ providerOf(inst) === "binance" ? "BINANCE" : providerOf(inst) === "dukascopy" ? "DUKASCOPY" : providerOf(inst) === "ctrader" ? "CTRADER" : "OANDA" }}</span>
           </div>
           <div class="watch-right">
             <span class="watch-price">{{ formatPrice(inst, watchlist.prices.get(inst)?.mid ?? null) }}</span>

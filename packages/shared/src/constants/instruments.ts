@@ -1,9 +1,10 @@
 /**
  * Supported trading instruments across providers.
  *
- * Two providers in Phase-B:
- *   • OANDA  — forex/metals/indices, canonical form uses "_"  (EUR_USD)
- *   • Binance — crypto spot,        canonical form concatenated (BTCUSDT)
+ * Providers:
+ *   • OANDA   — forex/metals/indices, canonical form uses "_"  (EUR_USD)
+ *   • Binance — crypto spot,          canonical form concatenated (BTCUSDT)
+ *   • cTrader — index CFDs not covered by OANDA, plain symbol name (US30)
  *
  * `providerOf()` decides routing everywhere (history, stream, labels);
  * nothing else in the codebase hard-codes a provider.
@@ -106,11 +107,20 @@ export const SUPPORTED_DUKASCOPY = [
   "D_BTC_USD",
 ] as const;
 
+/** cTrader Open API symbols — only indices OANDA does not carry (US30 /
+ *  Dow Jones; S&P and Nasdaq are already served by OANDA's SPX500_USD and
+ *  NAS100_USD). cTrader has no anonymous browser access (binary protobuf
+ *  over TCP + OAuth), so these are served by the market server. */
+export const SUPPORTED_CTRADER = [
+  "US30",
+] as const;
+
 /** Every symbol the app accepts, any provider. */
 export const SEARCHABLE_INSTRUMENTS: readonly string[] = [
   ...SUPPORTED_INSTRUMENTS,
   ...SUPPORTED_BINANCE,
   ...SUPPORTED_DUKASCOPY,
+  ...SUPPORTED_CTRADER,
 ];
 
 export type Instrument = (typeof SUPPORTED_INSTRUMENTS)[number];
@@ -120,16 +130,18 @@ export type AnyInstrument = Instrument | BinanceSymbol;
 /** Default instrument used on first load. Configuration, not hard-coding. */
 export const DEFAULT_INSTRUMENT: Instrument = "XAU_USD";
 
-export type ProviderId = "oanda" | "binance" | "dukascopy";
+export type ProviderId = "oanda" | "binance" | "dukascopy" | "ctrader";
 
 const BINANCE_SET: ReadonlySet<string> = new Set(SUPPORTED_BINANCE);
 const DUKASCOPY_SET: ReadonlySet<string> = new Set(SUPPORTED_DUKASCOPY);
+const CTRADER_SET: ReadonlySet<string> = new Set(SUPPORTED_CTRADER);
 
 /** Which provider owns a canonical instrument. Unknown → oanda. */
 export function providerOf(instrument: string): ProviderId {
   const norm = normalizeInstrument(instrument);
   if (BINANCE_SET.has(norm)) return "binance";
   if (DUKASCOPY_SET.has(norm)) return "dukascopy";
+  if (CTRADER_SET.has(norm)) return "ctrader";
   return "oanda";
 }
 
@@ -140,6 +152,9 @@ export function dukasSymbolOf(instrument: string): string {
 
 const JPY_QUOTE = new Set(["USD_JPY", "EUR_JPY", "GBP_JPY", "AUD_JPY"]);
 const METAL = new Set(["XAU_USD", "XAG_USD"]);
+/** Stock-index CFDs display 2 decimals everywhere (watchlist rows, chart
+ *  price axis, OHLC readout) — 7000.25 / 27500.20, per user request. */
+const INDEX = new Set(["SPX500_USD", "NAS100_USD", "US30"]);
 const CRYPTO_MAJOR = new Set(["BTCUSDT", "ETHUSDT", "BNBUSDT"]);
 const CRYPTO_MINOR: ReadonlySet<string> = new Set(SUPPORTED_BINANCE.filter((s) => !CRYPTO_MAJOR.has(s)));
 /** Sub-cent coins — 4 decimals renders 0.0000; these need 8. */
@@ -170,7 +185,8 @@ export function displayInstrument(instrument: string): string {
 /**
  * Price-display precision:
  * - OANDA crypto pairs: BTC 1 · ETH 2 (explicit overrides)
- * - JPY quotes: 3 · metals: 2 · crypto majors (BTC/ETH/BNB on Binance): 2
+ * - JPY quotes: 3 · metals: 2 · stock indices: 2 (7000.25 / 27500.20)
+ * - crypto majors (BTC/ETH/BNB on Binance): 2
  * - smaller caps (SOL/XRP/ADA/DOGE): 4 · everything else: 5
  */
 export function instrumentPrecision(instrument: string): number {
@@ -179,6 +195,7 @@ export function instrumentPrecision(instrument: string): number {
   if (override !== undefined) return override;
   if (JPY_QUOTE.has(norm)) return 3;
   if (METAL.has(norm)) return 2;
+  if (INDEX.has(norm)) return 2;
   if (CRYPTO_MAJOR.has(norm)) return 2;
   if (CRYPTO_MICRO.has(norm)) return 8;
   if (CRYPTO_MINOR.has(norm)) return 4;
@@ -199,7 +216,7 @@ export function instrumentPipSize(instrument: string): number {
   if (JPY_QUOTE.has(norm)) return 0.01;
   if (METAL.has(norm)) return 0.01;
   if (norm === "BTC_USD" || norm === "ETH_USD" || CRYPTO_MAJOR.has(norm) || CRYPTO_MINOR.has(norm) || CRYPTO_MICRO.has(norm)) return 1;
-  if (norm === "SPX500_USD" || norm === "NAS100_USD" || norm === "BCO_USD") return 1;
+  if (INDEX.has(norm) || norm === "BCO_USD") return 1;
   return 0.0001;
 }
 

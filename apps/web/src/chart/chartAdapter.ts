@@ -16,8 +16,11 @@ import {
   ColorType,
   CrosshairMode,
   LineStyle,
+  LineType,
   CandlestickSeries,
   LineSeries,
+  HistogramSeries,
+  AreaSeries,
   TickMarkType,
   TrackingModeExitMode,
 } from "lightweight-charts";
@@ -67,6 +70,8 @@ export interface ChartAdapter {
   setRsiLevels(upper: number, lower: number, color: string): void;
   removeRsi(): void;
   rsiPaneHeight(): number;
+  /** Pixel height of every pane, index-aligned (main pane = 0). */
+  paneHeights(): number[];
   /** Axis text/border colors; null = follow the active theme. */
   setAxisColors(o: { text: string | null; border: string | null }): void;
   /** Crosshair line colors; null = follow the active theme. */
@@ -110,6 +115,23 @@ export interface ChartAdapter {
    *  corruption — e.g. the intermittent "Value is null"). The host rebuilds
    *  the chart in place instead of leaving a permanently blank canvas. */
   onChartCrash(cb: (err: unknown) => void): void;
+  /** ── Pine Script user indicators ── */
+  /** Creates (or replaces) one series for a plot channel. paneIndex 0 =
+   *  overlay on price; higher = own sub-pane. */
+  addPineSeries(id: string | number, opts: { paneIndex: number; style: "line" | "histogram" | "area" | "stepline"; color: string; lineWidth: number }): void;
+  /** Full commit of a plot channel's points (per-point colors for histograms). */
+  setPineData(id: string | number, data: Array<{ time: number; value?: number; color?: string }>): void;
+  /** Tail update for live ticks — cheap; falls back internally when the
+   *  tail contract breaks (caller then does a full setPineData). */
+  updatePineLast(id: string | number, point: { time: number; value?: number; color?: string }): void;
+  setPineColor(id: string | number, color: string): void;
+  /** Eye toggle for a pine plot channel. */
+  setPineVisible(id: string | number, on: boolean): void;
+  removePine(id: string | number): void;
+  /** Removes trailing empty panes beyond `keepPanes` (RSI + pine lifecycle). */
+  trimPanes(keepPanes: number): void;
+  /** True when the pane at `index` exists. */
+  hasPane(index: number): boolean;
 }
 
 function toLW(c: Candle): CandlestickData<Time> {
@@ -144,6 +166,32 @@ function chainTo(prevClose: number, candle: Candle): Candle {
 /** Empty bars of right margin so the future candle has space. */
 const RIGHT_MARGIN_BARS = 15;
 
+/** Thrown by updatePineLast when the tail contract breaks — the caller
+ *  responds with a full setPineData commit. */
+export class PineTailError extends Error {
+  constructor() {
+    super("pine tail contract broken");
+    this.name = "PineTailError";
+  }
+}
+
+/** css color with a new alpha multiplier (hex or rgba input). */
+function withAlpha(css: string, alpha: number): string {
+  const m = css.match(/rgba?\(([^)]+)\)/);
+  if (m) {
+    const parts = m[1]!.split(",").map((s) => Number.parseFloat(s.trim()));
+    return `rgba(${parts[0] ?? 0},${parts[1] ?? 0},${parts[2] ?? 0},${alpha})`;
+  }
+  const hex = css.replace("#", "");
+  if (hex.length === 6) {
+    const r = Number.parseInt(hex.slice(0, 2), 16);
+    const g = Number.parseInt(hex.slice(2, 4), 16);
+    const b = Number.parseInt(hex.slice(4, 6), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  return css;
+}
+
 function themeColors(isDark: boolean) {
   if (isDark) {
     // Colorful dark gradient: deep indigo → midnight blue with violet tint
@@ -175,6 +223,35 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
    *  calls on a destroyed chart with "Value is null"). */
   let dead = false;
   let crashCb: ((err: unknown) => void) | null = null;
+
+  // ── Pine Script user indicator series ──
+  interface PineSeriesEntry {
+    series: ISeriesApi<"Line" | "Area" | "Histogram">;
+    paneIndex: number;
+    style: "line" | "histogram" | "area" | "stepline";
+    color: string;
+    lineWidth: number;
+  }
+  const pineSeries = new Map<string | number, PineSeriesEntry>();
+
+  function applyPineOptions(e: PineSeriesEntry, color: string, lineWidth: number): void {
+    e.color = color;
+    e.lineWidth = lineWidth;
+    if (e.style === "histogram") {
+      e.series.applyOptions({ color, topColor: color, bottomColor: color } as never);
+    } else if (e.style === "area") {
+      e.series.applyOptions({ color, topColor: withAlpha(color, 0.28), bottomColor: withAlpha(color, 0.04), lineWidth } as never);
+    } else {
+      e.series.applyOptions({ color, lineWidth } as never);
+    }
+  }
+
+  /** Main pane dominates; every sub-pane (RSI, pine) gets a compact share. */
+  function rebalancePaneStretch(): void {
+    const panes = chart.panes();
+    panes.forEach((p, i) => p.setStretchFactor(i === 0 ? 4 : 1));
+  }
+
 
   /* ── Visitor-local time formatting for the time scale + crosshair ────
    *  Lightweight-Charts renders raw timestamps in UTC by default; these
@@ -437,6 +514,9 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
   function rsiPaneHeight(): number {
     const panes = chart.panes();
     return panes.length > 1 ? panes[1]!.getHeight() : 0;
+  }
+  function paneHeights(): number[] {
+    return chart.panes().map((p) => p.getHeight());
   }
   /** Flips true after the first non-empty dataset — enables view preservation. */
   let hadDataOnce = false;
@@ -1007,6 +1087,130 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
 
     onChartCrash(cb: (err: unknown) => void): void {
       crashCb = cb;
+    },
+
+    // ── Pine Script user indicators ──────────────────────────────────────
+
+    addPineSeries(
+      id: string | number,
+      opts: { paneIndex: number; style: "line" | "histogram" | "area" | "stepline"; color: string; lineWidth: number }
+    ): void {
+      const existing = pineSeries.get(id);
+      if (existing) {
+        // Same pane + style → restyle in place; otherwise recreate.
+        if (existing.paneIndex === opts.paneIndex && existing.style === opts.style) {
+          applyPineOptions(existing, opts.color, opts.lineWidth);
+          return;
+        }
+        this.removePine(id);
+      }
+      while (chart.panes().length <= opts.paneIndex) chart.addPane();
+      const common = {
+        priceLineVisible: false,
+        lastValueVisible: true,
+        crosshairMarkerVisible: opts.style !== "histogram",
+      };
+      let s: ISeriesApi<"Line" | "Area" | "Histogram">;
+      if (opts.style === "histogram") {
+        s = chart.addSeries(
+          HistogramSeries,
+          {
+            ...common,
+            color: opts.color,
+            topColor: opts.color,
+            bottomColor: opts.color,
+            priceLineVisible: false,
+          } as never,
+          opts.paneIndex
+        );
+      } else if (opts.style === "area") {
+        s = chart.addSeries(
+          AreaSeries,
+          { ...common, color: opts.color, topColor: withAlpha(opts.color, 0.28), bottomColor: withAlpha(opts.color, 0.04), lineWidth: opts.lineWidth } as never,
+          opts.paneIndex
+        );
+      } else {
+        s = chart.addSeries(
+          LineSeries,
+          {
+            ...common,
+            color: opts.color,
+            lineWidth: opts.lineWidth,
+            lineType: opts.style === "stepline" ? LineType.WithSteps : LineType.Simple,
+          } as never,
+          opts.paneIndex
+        );
+      }
+      pineSeries.set(id, { series: s, paneIndex: opts.paneIndex, style: opts.style, color: opts.color, lineWidth: opts.lineWidth });
+      rebalancePaneStretch();
+    },
+
+    setPineData(id: string | number, data: Array<{ time: number; value?: number; color?: string }>): void {
+      const e = pineSeries.get(id);
+      if (!e) return;
+      // { time } without value = whitespace data → breaks the drawn line
+      e.series.setData(
+        data.map((d) =>
+          d.value === undefined || !Number.isFinite(d.value)
+            ? { time: d.time as Time }
+            : { time: d.time as Time, value: d.value, ...(d.color ? { color: d.color } : {}) }
+        ) as never
+      );
+    },
+
+    updatePineLast(id: string | number, point: { time: number; value?: number; color?: string }): void {
+      const e = pineSeries.get(id);
+      if (!e) return;
+      try {
+        e.series.update(
+          (point.value === undefined || !Number.isFinite(point.value)
+            ? { time: point.time as Time }
+            : { time: point.time as Time, value: point.value, ...(point.color ? { color: point.color } : {}) }) as never
+        );
+      } catch {
+        // Tail contract broke (out-of-order / older correction) — the caller
+        // follows up with a full setPineData commit.
+        throw new PineTailError();
+      }
+    },
+
+    setPineColor(id: string | number, color: string): void {
+      const e = pineSeries.get(id);
+      if (!e) return;
+      applyPineOptions(e, color, e.lineWidth);
+    },
+
+    setPineVisible(id: string | number, on: boolean): void {
+      const e = pineSeries.get(id);
+      if (!e) return;
+      e.series.applyOptions({ visible: on } as never);
+    },
+
+    removePine(id: string | number): void {
+      const e = pineSeries.get(id);
+      if (!e) return;
+      chart.removeSeries(e.series);
+      pineSeries.delete(id);
+    },
+
+    trimPanes(keepPanes: number): void {
+      while (chart.panes().length > Math.max(1, keepPanes)) {
+        const idx = chart.panes().length - 1;
+        try {
+          chart.removePane(idx);
+        } catch {
+          break; // pane still owns a series — never fight the library
+        }
+      }
+      rebalancePaneStretch();
+    },
+
+    hasPane(index: number): boolean {
+      return chart.panes().length > index;
+    },
+
+    paneHeights(): number[] {
+      return paneHeights();
     },
   };
 

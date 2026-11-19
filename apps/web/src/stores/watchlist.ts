@@ -3,7 +3,41 @@ import { ref, watch } from "vue";
 import { SEARCHABLE_INSTRUMENTS, displayInstrument, normalizeInstrument } from "@traderkomak/shared";
 
 const STORAGE_KEY = "tk-watchlist";
-const DEFAULT_WATCH = ["XAU_USD", "XAG_USD", "BTCUSDT", "ETHUSDT", "EUR_USD", "GBP_USD"];
+const DEFAULT_WATCH = [
+  "XAU_USD",
+  "XAG_USD",
+  "SPX500_USD",
+  "NAS100_USD",
+  "BTCUSDT",
+  "ETHUSDT",
+  "EUR_USD",
+  "GBP_USD",
+  "US30",
+];
+
+/** Stock-index rows added to EVERY existing watchlist (once, per user
+ *  request): OANDA's SPX500/NAS100 plus cTrader's US30 — appended without
+ *  touching the symbols the user already picked. A localStorage flag marks
+ *  the migration done so a symbol the user deliberately removes afterwards
+ *  never comes back on the next boot. */
+const INDEX_DEFAULTS = ["SPX500_USD", "NAS100_USD", "US30"];
+const INDEX_MIGRATION_FLAG = "tk-watchlist-idx-migrated";
+const WATCH_CAP = 25;
+
+/** Appends any missing index defaults to a stored list. Pure apart from the
+ *  one-time migration flag; returns the (possibly new) list and whether it
+ *  changed. Reused by the cloud-sync restore so signed-in users whose cloud
+ *  row predates the change also get the rows. */
+export function ensureIndexDefaults(list: string[]): { list: string[]; changed: boolean } {
+  let migrated = false;
+  try { migrated = localStorage.getItem(INDEX_MIGRATION_FLAG) === "1"; } catch {}
+  if (migrated) return { list, changed: false };
+  try { localStorage.setItem(INDEX_MIGRATION_FLAG, "1"); } catch {}
+  const missing = INDEX_DEFAULTS.filter((s) => !list.includes(s));
+  if (missing.length === 0) return { list, changed: false };
+  const merged = [...list, ...missing].slice(0, WATCH_CAP);
+  return { list: merged, changed: true };
+}
 
 /** Crypto rows moved from the OANDA pairs to the Binance spot pairs —
  *  migrate stored lists once so existing users see the new rows too. */
@@ -21,6 +55,11 @@ function loadWatch(): string[] {
         // Keep the migration idempotent without rewriting history every load
         if (parsed.some((x: string) => MIGRATIONS[x])) {
           try { localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated)); } catch {}
+        }
+        const ensured = ensureIndexDefaults(migrated);
+        if (ensured.changed) {
+          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(ensured.list)); } catch {}
+          return ensured.list;
         }
         return migrated;
       }
@@ -94,7 +133,7 @@ export const useWatchlistStore = defineStore("watchlist", () => {
     const norm = normalizeInstrument(instrument);
     if (!SEARCHABLE_INSTRUMENTS.includes(norm as never)) return false;
     if (instruments.value.includes(norm)) return false;
-    if (instruments.value.length >= 20) return false;
+    if (instruments.value.length >= WATCH_CAP) return false;
     instruments.value = [...instruments.value, norm];
     return true;
   }

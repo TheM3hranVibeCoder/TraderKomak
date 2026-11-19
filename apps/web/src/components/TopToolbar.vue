@@ -5,6 +5,7 @@ import { useReplayStore } from "@/stores/replay";
 import { useDemoStore } from "@/stores/demo";
 import { useThemeStore } from "@/stores/theme";
 import { useIndicatorsStore } from "@/stores/indicators";
+import { usePineStore } from "@/stores/pine";
 import { useAuthStore } from "@/stores/auth";
 import { useChatStore } from "@/stores/chat";
 import AdminPanel from "./AdminPanel.vue";
@@ -26,6 +27,7 @@ const replay = useReplayStore();
 const demo = useDemoStore();
 const themeStore = useThemeStore();
 const indicators = useIndicatorsStore();
+const pine = usePineStore();
 const auth = useAuthStore();
 const chat = useChatStore();
 const adminOpen = ref(false);
@@ -271,6 +273,34 @@ function toggleReplay(): void {
             <svg v-if="indicators.vpAdded" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12l5 5L20 7" /></svg>
           </span>
           <span class="ind-item-name">Fixed Volume Profile</span>
+        </button>
+
+        <!-- Pine Script: the visitor's own indicators -->
+        <div class="pine-divider" role="separator"></div>
+        <button class="ind-item pine-new" type="button" @click="pine.openEditor(null)">
+          <span class="pine-plus">＋</span>
+          <span class="ind-item-name">New Pine indicator</span>
+        </button>
+        <button
+          v-for="s in pine.scripts"
+          :key="s.id"
+          class="ind-item pine-row"
+          type="button"
+          role="menuitemcheckbox"
+          :aria-checked="pine.isAdded(s.id)"
+          :title="s.name"
+          @click="pine.toggleAdded(s.id)"
+        >
+          <span class="ind-check" :class="{ on: pine.isAdded(s.id) }">
+            <svg v-if="pine.isAdded(s.id)" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12l5 5L20 7" /></svg>
+          </span>
+          <span class="ind-item-name pine-script-name" @click.stop="pine.openEditor(s.id)">{{ s.name }}</span>
+          <span class="pine-edit" title="Edit script" @click.stop="pine.openEditor(s.id)">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+          </span>
+          <span class="pine-del" title="Delete script" @click.stop="pine.removeScript(s.id)">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </span>
         </button>
       </div>
     </Teleport>
@@ -749,6 +779,57 @@ function toggleReplay(): void {
   font-size: 10px;
   color: var(--text-muted);
   margin-top: 1px;
+}
+/* ── Pine Script section in the indicators dropdown ── */
+.pine-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 8px;
+}
+.pine-new {
+  color: var(--accent, #3b82f6);
+  font-weight: 800;
+}
+.pine-plus {
+  width: 16px;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+}
+.pine-script-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+}
+.ind-item.pine-row {
+  grid-template-columns: auto 1fr auto auto;
+  grid-template-areas: "check name edit del";
+}
+.pine-edit,
+.pine-del {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 120ms, color 120ms, background 120ms;
+  cursor: pointer;
+}
+.ind-item:hover .pine-edit,
+.ind-item:hover .pine-del {
+  opacity: 1;
+}
+.pine-edit:hover,
+.pine-del:hover {
+  color: var(--text);
+  background: var(--btn-hover);
+}
+.pine-del:hover {
+  color: #ef5350;
+  background: rgba(239, 83, 80, 0.1);
 }
 @media (max-width: 860px) {
   .toolbar {

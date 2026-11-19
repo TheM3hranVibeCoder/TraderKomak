@@ -36,9 +36,22 @@ import {
 } from "@traderkomak/shared";
 import type { WsHandlers } from "./wsClient";
 import { recordVolumes } from "./volumeFeed";
-import { currentOandaAccount, rotateOandaAccount, type OandaAccount } from "./oandaAccounts";
+import { cooldownOandaAccount, currentOandaAccount, oandaPoolState, rotateOandaAccount, type OandaAccount } from "./oandaAccounts";
 
 const OANDA_MAX_COUNT = 5000;
+
+/** Carries the HTTP status so failures can be told apart: 401/403 retire a
+ *  token, 429 only cools it down, network errors retire nothing. */
+export class OandaHttpError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly retryAfterMs?: number
+  ) {
+    super(message);
+    this.name = "OandaHttpError";
+  }
+}
 const MAX_BATCHES = 10;
 const REQUEST_TIMEOUT_MS = 25_000;
 const BACKOFF_BASE_MS = 350;
@@ -223,7 +236,8 @@ async function fetchBatch(
     } catch {
       // keep the generic message
     }
-    throw new Error(message);
+    const ra = Number(res.headers.get("retry-after"));
+    throw new OandaHttpError(message, res.status, Number.isFinite(ra) && ra > 0 ? ra * 1000 : undefined);
   }
   let body: RawOandaCandlesResponse;
   try {
@@ -267,6 +281,9 @@ export async function fetchOandaCandles(
   for (let batch = 0; batch < MAX_BATCHES && remaining > 0; batch++) {
     const batchCount = Math.min(remaining, OANDA_MAX_COUNT);
     let candles: Candle[] | null = null;
+    // Bounded retries per batch: 429 cools the token down, network errors
+    // never retire anything — a busy moment must not empty the whole pool.
+    let attempts = 0;
     for (;;) {
       const target: CandleTarget | null =
         useDirect && account
@@ -276,6 +293,9 @@ export async function fetchOandaCandles(
             : null;
       if (!target) {
         if (all.length > 0) break; // partial history beats a total failure
+        if (oandaPoolState() === "cooldown") {
+          throw new Error("OANDA rate-limited — try again in a minute");
+        }
         throw lastErr instanceof Error ? lastErr : new Error("OANDA data source unavailable");
       }
       try {
@@ -284,10 +304,30 @@ export async function fetchOandaCandles(
       } catch (err) {
         lastErr = err;
         if (target.kind === "direct") {
-          // 401/403/429 or a network failure: retire this practice account
-          // for the session and continue with the next one.
-          account = rotateOandaAccount(target.account);
-          if (!account) useDirect = false;
+          const status = err instanceof OandaHttpError ? err.status : undefined;
+          if (status === 401 || status === 403) {
+            // dead/revoked token — retire for the session
+            account = rotateOandaAccount(target.account);
+            attempts = 0;
+            if (!account) useDirect = false;
+          } else if (status === 429) {
+            // transient — cool down, keep the token alive for later
+            const wait = (err as OandaHttpError).retryAfterMs ?? 45_000;
+            account = cooldownOandaAccount(target.account, wait);
+            attempts = 0;
+            if (!account) {
+              useDirect = false;
+            } else {
+              await new Promise((r) => setTimeout(r, Math.min(2500, wait)));
+            }
+          } else if (attempts >= 3) {
+            // repeated network failure — stop hammering this batch
+            useDirect = false;
+            account = null;
+          } else {
+            attempts++;
+            await new Promise((r) => setTimeout(r, 700 * attempts));
+          }
         } else {
           if (all.length > 0) break;
           throw err;

@@ -2,7 +2,7 @@
 
 ## Layout (npm workspaces)
 - `packages/shared` — protocol types, instruments/timeframes, validation. **Build first**: `npm run build:shared`.
-- `apps/market-server` — Fastify + WebSocket hub, OANDA/Binance/Dukascopy providers, chat. Unit tests in `apps/market-server/test` (vitest, node env).
+- `apps/market-server` — Fastify + WebSocket hub, OANDA/Binance/Dukascopy/cTrader providers, chat. Unit tests in `apps/market-server/test` (vitest, node env).
 - `apps/web` — Vue 3 + Pinia + Lightweight Charts v5 SPA. No tests yet.
 - `supabase/schema.sql` — tables + RLS (profiles, user_emails, user_settings, admin_settings).
 - `cloudflare-worker/` — Iran-access relays: `binance-proxy.js` (+ `wrangler.toml`, Binance public data), `oanda/` (`oanda-proxy.js` + its own `wrangler.toml`; holds the OANDA token in Worker secrets) and `warmup/` (cron Worker pinging the market server's `/health` every 5 min so a free-tier instance never spins down).
@@ -14,7 +14,7 @@
 - Full build: `npm run build` (shared → server → web).
 
 ## Hard rules
-- Candle delivery avoids the market server where possible: the browser fetches Binance data directly (`apps/web/src/services/binanceDirect.ts`, public endpoints; on geo-block the client falls back to the market server, since Binance blocks datacenter IPs and a Cloudflare-Worker relay is not viable) and OANDA data through the `oanda-proxy` Cloudflare Worker. OANDA credentials must never reach the browser — server `.env` or Worker secrets only, never a `VITE_*` var. Aggregation parity is guaranteed by the shared engine in `packages/shared` (`CandleAggregator` + provider-aligned bucket starts run identically in `apps/web` and `apps/market-server`).
+- Candle delivery avoids the market server where possible: the browser fetches Binance data directly (`apps/web/src/services/binanceDirect.ts`, public endpoints; on geo-block the client falls back to the market server, since Binance blocks datacenter IPs and a Cloudflare-Worker relay is not viable), OANDA data through the `oanda-proxy` Cloudflare Worker, and cTrader data (US30) directly over cTrader's JSON WebSocket gateway (`apps/web/src/services/ctraderDirect.ts`; setup: `deploy/ctrader-setup.md` — the server only brokers the auto-refreshed access token via `/api/ctrader-session`). OANDA credentials must never reach the browser — server `.env` or Worker secrets only, never a `VITE_*` var (the cTrader demo app credentials in `VITE_CTRADER_*` are the documented exception — cTrader requires them per browser connection; see the guide's security notes). Aggregation parity is guaranteed by the shared engine in `packages/shared` (`CandleAggregator` + provider-aligned bucket starts run identically in `apps/web` and `apps/market-server`).
 - Protocol types live in `packages/shared`; changing them requires rebuilding shared (`npm run build:shared`) before other packages typecheck, and a market-server redeploy on Render.
 - Both `apps/web` and `apps/market-server` depend on the WS protocol — keep client and server message handling in sync in the same commit.
 - localStorage is an offline cache, never the source of truth; every save path must be quota-safe (try/catch).

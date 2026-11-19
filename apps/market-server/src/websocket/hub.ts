@@ -63,7 +63,8 @@ export class MarketHub {
     private readonly feed: CandleFeed,
     private readonly oanda: ProviderStream,
     private readonly log: Log,
-    private readonly binance?: ProviderStream
+    private readonly binance?: ProviderStream,
+    private readonly ctrader?: ProviderStream
   ) {}
 
   setUpstreamStatus(status: UpstreamStatus): void {
@@ -262,6 +263,7 @@ export class MarketHub {
     // Route each instrument to its own provider's stream
     this.oanda.setInstruments(all.filter((i) => providerOf(i) === "oanda"));
     this.binance?.setInstruments(all.filter((i) => providerOf(i) === "binance"));
+    this.ctrader?.setInstruments(all.filter((i) => providerOf(i) === "ctrader"));
   }
 
   private broadcast(message: ServerMessage): void {

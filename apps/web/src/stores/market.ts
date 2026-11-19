@@ -25,6 +25,8 @@ import {
   BinanceDirectStream,
 } from "@/services/binanceDirect";
 import { OandaDirectStream, oandaProxyConfigured } from "@/services/oandaDirect";
+import { oandaPoolState } from "@/services/oandaAccounts";
+import { CtraderDirectStream, ctraderDirectConfigured } from "@/services/ctraderDirect";
 
 // Progressive history: paint a screenful fast (~1 fetch to OANDA), then
 // lazy-load older candles in batches as the user scrolls back. Loading the
@@ -128,18 +130,22 @@ interface MarketStream {
   seed?(candle: Candle): void;
 }
 
-type StreamKind = "server" | "binance" | "oanda-proxy" | "off";
+type StreamKind = "server" | "binance" | "oanda-proxy" | "ctrader-direct" | "off";
 
 /** Which live-stream implementation should serve a pair: Binance symbols
  *  ALWAYS stream straight from Binance/mirrors over the visitor's own
  *  internet — never the market server (Render's metered bandwidth must not
  *  absorb Binance traffic; a blocked visitor sees the pair as unavailable
  *  instead). OANDA pairs go through the oanda-proxy worker when configured;
- *  without the config — and every Dukascopy pair (no browser source) — the
- *  pair is simply unavailable ("off"), never the market server. */
+ *  cTrader pairs (US30) stream DIRECTLY from cTrader's JSON WebSocket
+ *  gateway when browser-direct is configured (deployment opt-in via the
+ *  VITE_CTRADER_* vars) — the server relay is only the fallback when it is
+ *  not; every Dukascopy pair (no browser source, disabled) is unavailable
+ *  ("off"), never the market server. */
 function desiredStreamKind(instrument: string): StreamKind {
   const provider = providerOf(instrument);
   if (provider === "binance") return "binance";
+  if (provider === "ctrader") return ctraderDirectConfigured() ? "ctrader-direct" : "server";
   if (provider === "oanda" && oandaProxyConfigured()) return "oanda-proxy";
   return "off";
 }
@@ -217,7 +223,9 @@ export const useMarketStore = defineStore("market", () => {
     wsKind = kind;
     if (kind === "off") {
       const message = providerOf(instrument.value) === "oanda"
-        ? "OANDA data unavailable — proxy not configured"
+        ? oandaPoolState() === "cooldown"
+          ? "OANDA rate-limited — retrying shortly"
+          : "OANDA data unavailable — proxy not configured"
         : "Dukascopy data is not served by this deployment";
       return (ws = offlineStream(message));
     }
@@ -261,7 +269,9 @@ export const useMarketStore = defineStore("market", () => {
         ? new BinanceDirectStream(handlers)
         : kind === "oanda-proxy"
           ? new OandaDirectStream(handlers)
-          : new MarketWsClient(handlers);
+          : kind === "ctrader-direct"
+            ? new CtraderDirectStream(handlers)
+            : new MarketWsClient(handlers);
     ws.connect();
     return ws;
   }

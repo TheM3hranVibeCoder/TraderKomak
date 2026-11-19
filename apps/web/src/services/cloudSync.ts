@@ -8,7 +8,8 @@ import { isInstrument, isTimeframe } from "@traderkomak/shared";
 import type { Timeframe } from "@traderkomak/shared";
 import { supabase, supabaseReady, SUPABASE_URL, SUPABASE_ANON_KEY, getAccessTokenSync } from "./supabase";
 import { useAuthStore } from "@/stores/auth";
-import { useWatchlistStore } from "@/stores/watchlist";
+import { useWatchlistStore, ensureIndexDefaults } from "@/stores/watchlist";
+import { usePineStore } from "@/stores/pine";
 import { useDrawingsStore } from "@/stores/drawings";
 import { useMarketStore } from "@/stores/market";
 import { useThemeStore } from "@/stores/theme";
@@ -33,6 +34,12 @@ interface CloudData {
   timeframe?: string;
   /** Light/dark look — part of the account's saved setup. */
   theme?: "dark" | "light";
+  /** The visitor's own Pine Script indicators + input values + which
+   *  symbol each script sits on. */
+  pineScripts?: unknown;
+  pineInputs?: unknown;
+  pineAdded?: unknown;
+  pineVisible?: unknown;
 }
 
 const PUSH_DEBOUNCE_MS = 1500;
@@ -135,6 +142,7 @@ const ACCOUNT_KEYS = [
   "tk-instrument",
   "tk-timeframe",
   "tk-indicators-v1",
+  "tk-pine-v1",
   "tk-theme",
   LOCAL_CHANGE_KEY,
   SYNCED_AT_KEY,
@@ -177,6 +185,7 @@ function snapshot(): CloudData {
     watchlist: [...w.instruments],
     instrument: m.instrument,
     timeframe: m.timeframe,
+    ...usePineStore().snapshotForCloud(),
   };
 }
 
@@ -464,8 +473,26 @@ function applyLocal(cloud: CloudData, localBefore?: LocalDrawingsSnapshot): numb
 
     if (Array.isArray(cloud.watchlist)) {
       const list = [...new Set(cloud.watchlist.filter((x): x is string => typeof x === "string"))];
-      if (list.length) w.instruments = list;
+      if (list.length) {
+        // Index defaults (SPX500/NAS100/US30) are appended ONCE to restored
+        // lists too — a cloud row saved before the change must not hide them
+        // from existing users. Counted as a rescue so the merged list is
+        // pushed back up instead of being re-added on every boot.
+        const ensured = ensureIndexDefaults(list);
+        w.instruments = ensured.list;
+        if (ensured.changed) rescued++;
+      }
     }
+
+    // Pine Script indicators: union-merge so scripts saved on another
+    // device arrive here, and scripts created here push back up.
+    try {
+      const p = usePineStore();
+      if (cloud.pineScripts !== undefined || cloud.pineAdded !== undefined) {
+        const pineChanged = p.applyCloud(cloud.pineScripts, cloud.pineInputs, cloud.pineAdded, m.instrument, cloud.pineVisible);
+        if (pineChanged) rescued++;
+      }
+    } catch {}
 
     // Symbol/timeframe last — setInstrument may trigger a history fetch.
     // Only inside the boot window: a late-arriving cloud row must never
@@ -572,6 +599,7 @@ export function startCloudSync(): void {
         const w = useWatchlistStore();
         const m = useMarketStore();
         const ind = useIndicatorsStore();
+        const p = usePineStore();
         const onChange = () => {
           if (applying) return;
           schedulePush(userId);
@@ -580,6 +608,8 @@ export function startCloudSync(): void {
           watch(() => [d.drawings, d.lines, d.polys, d.positions, d.singles], onChange, { deep: true }),
           watch(() => [...w.instruments], onChange),
           watch(() => [m.instrument, m.timeframe], onChange),
+          // Pine scripts: creation/edit/inputs/chart membership all sync.
+          watch(() => [p.scripts, p.inputValues, p.addedMap], onChange, { deep: true }),
           // Light/dark is part of the account's setup: a toggle pushes it so the
           // other devices restore the same look.
           watch(() => useThemeStore().theme, onChange),

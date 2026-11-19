@@ -43,5 +43,22 @@ services:
       # Secrets — set these in the Render dashboard (sync: false):
       - key: CHAT_ADMIN_KEY
         sync: false
+      # Optional: matches cloudflare-worker/edge's EDGE_SHARED_SECRET
+      # (X-Tk-Edge-Auth hardening — see apps/market-server/src/util/clientIp.ts)
+      - key: EDGE_SHARED_SECRET
+        sync: false
+      # ── cTrader (US30) — optional; setup: deploy/ctrader-setup.md. Empty =
+      # cTrader disabled, server runs exactly as before. Tokens auto-refresh;
+      # the numeric account id is discovered from the token when omitted.
+      - key: CTRADER_CLIENT_ID
+        sync: false
+      - key: CTRADER_CLIENT_SECRET
+        sync: false
+      - key: CTRADER_ACCOUNT_ID
+        sync: false
+      - key: CTRADER_ACCESS_TOKEN
+        sync: false
+      - key: CTRADER_REFRESH_TOKEN
+        sync: false
       - key: CHAT_OWNER_NICK
         value: mehran

@@ -8,11 +8,17 @@
  *   - OANDA symbols   → DIRECTLY to OANDA's practice API with a practice-account
  *     token from the pool in oandaAccounts.ts (browser CORS is allowed), with the
  *     oanda-proxy Cloudflare Worker as fallback for ISPs that block OANDA.
+ *   - cTrader symbols → DIRECTLY to cTrader's JSON WebSocket gateway with
+ *     the visitor's own connection (ctraderDirect.ts), market-server relay
+ *     as fallback.
  *   - Everything else → the market-server REST API (as before).
  */
 import { isTimeframe, providerOf, type Candle } from "@traderkomak/shared";
 import { fetchBinanceCandles } from "./binanceDirect";
 import { fetchOandaCandles, oandaProxyConfigured } from "./oandaDirect";
+import { oandaPoolState } from "./oandaAccounts";
+import { fetchCtraderCandles, ctraderDirectConfigured } from "./ctraderDirect";
+import { httpBase } from "./httpUrl";
 
 interface CandlesResponse {
   instrument: string;
@@ -22,22 +28,6 @@ interface CandlesResponse {
 
 interface ErrorBody {
   error?: { code: string; message: string };
-}
-
-function httpBase(): string {
-  // VITE_API_HTTP_URL: "" (same origin, proxied) or explicit market-server URL.
-  const raw = (import.meta.env.VITE_API_HTTP_URL as string | undefined)?.trim();
-  if (raw) return raw.replace(/\/$/, "");
-  // Production serves the SPA from Vercel with NO /api proxy, so relative
-  // REST URLs would hit the SPA rewrite and return HTML. Derive the
-  // absolute market-server origin from the WS URL instead:
-  //   wss://edge.traderkomak.ir/ws → https://edge.traderkomak.ir
-  const ws = (import.meta.env.VITE_MARKET_WS_URL as string | undefined)?.trim();
-  if (ws) {
-    const m = /^wss?:\/\/([^/]+)/i.exec(ws);
-    if (m) return `${/^wss/i.test(ws) ? "https" : "http"}://${m[1]!}`;
-  }
-  return "";
 }
 
 /** Chat photos come from the server as an id (the history frame no longer
@@ -64,10 +54,29 @@ export async function fetchCandles(
       return fetchBinanceCandles(instrument, timeframe, count, to);
     }
     if (provider === "oanda") {
+      // All tokens cooling down after a rate limit is TEMPORARY — say so
+      // instead of claiming the proxy is missing.
+      if (oandaPoolState() === "cooldown") {
+        throw new Error("OANDA rate-limited — try again in a minute");
+      }
       if (oandaProxyConfigured()) return fetchOandaCandles(instrument, timeframe, count, to);
       // OANDA without its proxy config: no server fallback — the market
       // server's metered bandwidth must never serve OANDA data.
       throw new Error("OANDA data unavailable — proxy not configured");
+    }
+    if (provider === "ctrader") {
+      // Browser-direct primary (cTrader's JSON WebSocket — the visitor's
+      // own internet carries the data, exactly like OANDA/Binance), with
+      // the market server as a relay fallback when the direct connection
+      // fails (blocked ISP, WS handshake rejected…).
+      if (ctraderDirectConfigured()) {
+        try {
+          return await fetchCtraderCandles(instrument, timeframe, count, to);
+        } catch {
+          // fall through to the server relay
+        }
+      }
+      return fetchServerCandles(instrument, timeframe, count, to);
     }
     if (provider === "dukascopy") {
       // Dukascopy has no browser-direct source; serving it from the market
