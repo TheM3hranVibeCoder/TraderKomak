@@ -36,10 +36,13 @@ export function currencyFlagUrl(currency: string): string | null {
   // badge (extra-bold, tight baseline) so they read clearly at 16px.
   const idx = INDEX_LOGOS[currency];
   if (idx) {
+    // Digits fill the badge but stay INSIDE the circle: textLength pins the
+    // exact width (2 vs 3 digits), the baseline centers the cap height.
+    const len = idx.label.length === 3 ? 25 : 17;
     return svgDataUri(
       `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>` +
         `<circle cx='16' cy='16' r='16' fill='${idx.bg}'/>` +
-        `<text x='16' y='21.5' font-family='Arial,Helvetica,sans-serif' font-size='16' font-weight='800' fill='#ffffff' text-anchor='middle'>${idx.label}</text>` +
+        `<text x='16' y='21.7' font-family='Arial,Helvetica,sans-serif' font-size='16' font-weight='800' fill='#ffffff' text-anchor='middle' textLength='${len}' lengthAdjust='spacingAndGlyphs'>${idx.label}</text>` +
         `</svg>`
     );
   }
