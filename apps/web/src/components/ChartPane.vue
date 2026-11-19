@@ -7672,7 +7672,7 @@ onBeforeUnmount(() => {
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text);
   cursor: pointer;
   padding: 0;
 }
@@ -8057,7 +8057,8 @@ onBeforeUnmount(() => {
 .ind-legend-name {
   font-size: 10.5px;
   font-weight: 800;
-  color: var(--text-muted);
+  /* theme-opposite ink: dark on the light chart bg, light on dark */
+  color: var(--text);
   margin-right: 3px;
   white-space: nowrap;
 }
@@ -8107,6 +8108,7 @@ onBeforeUnmount(() => {
   border-color: rgba(45, 212, 167, 0.3);
 }
 .ind-legend-btn {
+  color: var(--text);
   width: 18px;
   height: 18px;
   display: grid;

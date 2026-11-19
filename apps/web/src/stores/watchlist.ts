@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
 import { SEARCHABLE_INSTRUMENTS, displayInstrument, normalizeInstrument } from "@traderkomak/shared";
+import { useAuthStore } from "@/stores/auth";
 
 const STORAGE_KEY = "tk-watchlist";
 const DEFAULT_WATCH = [
@@ -21,22 +22,16 @@ const DEFAULT_WATCH = [
  *  the migration done so a symbol the user deliberately removes afterwards
  *  never comes back on the next boot. */
 const INDEX_DEFAULTS = ["SPX500_USD", "NAS100_USD", "US30"];
+/** Guests use the bare key; signed-in users get a PER-ACCOUNT key — a cloud
+ *  row that predates the index defaults must get them appended exactly once
+ *  per account (the old single shared key was consumed by the local load
+ *  before the cloud row replaced the list, so signed-in users never saw the
+ *  new rows — the "SPX500/NAS100 missing from my watchlist" report). */
 const INDEX_MIGRATION_FLAG = "tk-watchlist-idx-migrated";
 const WATCH_CAP = 25;
 
-/** Appends any missing index defaults to a stored list. Pure apart from the
- *  one-time migration flag; returns the (possibly new) list and whether it
- *  changed. Reused by the cloud-sync restore so signed-in users whose cloud
- *  row predates the change also get the rows. */
-export function ensureIndexDefaults(list: string[]): { list: string[]; changed: boolean } {
-  let migrated = false;
-  try { migrated = localStorage.getItem(INDEX_MIGRATION_FLAG) === "1"; } catch {}
-  if (migrated) return { list, changed: false };
-  try { localStorage.setItem(INDEX_MIGRATION_FLAG, "1"); } catch {}
-  const missing = INDEX_DEFAULTS.filter((s) => !list.includes(s));
-  if (missing.length === 0) return { list, changed: false };
-  const merged = [...list, ...missing].slice(0, WATCH_CAP);
-  return { list: merged, changed: true };
+function migrationFlagKey(owner: string | null): string {
+  return owner ? `${INDEX_MIGRATION_FLAG}:${owner}` : INDEX_MIGRATION_FLAG;
 }
 
 /** Crypto rows moved from the OANDA pairs to the Binance spot pairs —
@@ -55,11 +50,6 @@ function loadWatch(): string[] {
         // Keep the migration idempotent without rewriting history every load
         if (parsed.some((x: string) => MIGRATIONS[x])) {
           try { localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated)); } catch {}
-        }
-        const ensured = ensureIndexDefaults(migrated);
-        if (ensured.changed) {
-          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(ensured.list)); } catch {}
-          return ensured.list;
         }
         return migrated;
       }
@@ -231,5 +221,34 @@ export const useWatchlistStore = defineStore("watchlist", () => {
     prices.value = new Map(prices.value);
   }
 
-  return { instruments, prices, isOpen, add, remove, toggle, updatePrice, setPrevClose, seedStaticQuote };
+  /** One-time index-defaults migration (SPX500/NAS100/US30), tracked per
+   *  owner: guests use the device key, signed-in users a per-account key —
+   *  so it applies once to whichever list ends up authoritative (local for
+   *  guests, the cloud row for signed-in users) and afterwards respects
+   *  removals. Returns true when the list changed. */
+  function applyIndexMigrationOnce(owner: string | null): boolean {
+    let migrated = false;
+    try { migrated = localStorage.getItem(migrationFlagKey(owner)) === "1"; } catch {}
+    if (migrated) return false;
+    try { localStorage.setItem(migrationFlagKey(owner), "1"); } catch {}
+    const missing = INDEX_DEFAULTS.filter((s) => !instruments.value.includes(s));
+    const room = Math.max(0, WATCH_CAP - instruments.value.length);
+    const add = missing.slice(0, room);
+    if (add.length === 0) return false;
+    instruments.value = [...instruments.value, ...add];
+    return true;
+  }
+
+  // Guests get the migration when their (lack of) session is definitive;
+  // signed-in users get it from the cloud-sync restore instead.
+  const auth = useAuthStore();
+  watch(
+    () => auth.status,
+    (s) => {
+      if (s === "guest") applyIndexMigrationOnce(null);
+    },
+    { immediate: true }
+  );
+
+  return { instruments, prices, isOpen, add, remove, toggle, updatePrice, setPrevClose, seedStaticQuote, applyIndexMigrationOnce };
 });

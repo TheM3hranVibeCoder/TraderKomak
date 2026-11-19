@@ -8,7 +8,7 @@ import { isInstrument, isTimeframe } from "@traderkomak/shared";
 import type { Timeframe } from "@traderkomak/shared";
 import { supabase, supabaseReady, SUPABASE_URL, SUPABASE_ANON_KEY, getAccessTokenSync } from "./supabase";
 import { useAuthStore } from "@/stores/auth";
-import { useWatchlistStore, ensureIndexDefaults } from "@/stores/watchlist";
+import { useWatchlistStore } from "@/stores/watchlist";
 import { usePineStore } from "@/stores/pine";
 import { useDrawingsStore } from "@/stores/drawings";
 import { useMarketStore } from "@/stores/market";
@@ -474,13 +474,11 @@ function applyLocal(cloud: CloudData, localBefore?: LocalDrawingsSnapshot): numb
     if (Array.isArray(cloud.watchlist)) {
       const list = [...new Set(cloud.watchlist.filter((x): x is string => typeof x === "string"))];
       if (list.length) {
-        // Index defaults (SPX500/NAS100/US30) are appended ONCE to restored
-        // lists too — a cloud row saved before the change must not hide them
-        // from existing users. Counted as a rescue so the merged list is
-        // pushed back up instead of being re-added on every boot.
-        const ensured = ensureIndexDefaults(list);
-        w.instruments = ensured.list;
-        if (ensured.changed) rescued++;
+        w.instruments = list;
+        // Index defaults (SPX500/NAS100/US30) append ONCE per account to the
+        // restored cloud list too — counted as a rescue so the merged list
+        // is pushed back up instead of being re-added on every boot.
+        if (w.applyIndexMigrationOnce(useAuthStore().userId)) rescued++;
       }
     }
 
@@ -686,6 +684,12 @@ export function startCloudSync(): void {
           }
           if (!forceApply && localAt > syncedAt) {
             // Local wins and is already on screen: nothing to wait for.
+            // The index-defaults migration still applies to the LOCAL list
+            // (the effective one) when this account hasn't had it yet.
+            try {
+              const w = useWatchlistStore();
+              w.applyIndexMigrationOnce(userId);
+            } catch {}
             endRestore();
             await push(userId);
             return true;
@@ -725,7 +729,12 @@ export function startCloudSync(): void {
           if (changesAfter !== changesBefore || rescued > 0) schedulePush(userId);
           endRestore();
         } else {
-          // First login for this account — seed the cloud with local state.
+          // First login for this account — seed the cloud with local state
+          // (with the index defaults applied once for this account).
+          try {
+            const w = useWatchlistStore();
+            w.applyIndexMigrationOnce(userId);
+          } catch {}
           await push(userId);
           // A forced switch holds the change-guard while the cloud row lands;
           // the seed push above already stored the defaults, so release it or
