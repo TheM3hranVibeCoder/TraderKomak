@@ -598,6 +598,7 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
   vertical-align: middle;
 }
+
 .flag-emoji {
   font-size: 12px;
   line-height: 1;

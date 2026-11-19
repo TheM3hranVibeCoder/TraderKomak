@@ -25,14 +25,21 @@ const INDEX_LOGOS: Record<string, { label: string; bg: string }> = {
   US30: { label: "30", bg: "#334155" }, // slate — Dow 30
 };
 
+/** True for the round number badges — callers render them larger than
+ *  currency flags so the digits stay readable. */
+export function isIndexLogo(currency: string): boolean {
+  return INDEX_LOGOS[currency] !== undefined;
+}
+
 export function currencyFlagUrl(currency: string): string | null {
-  // Stock indices → round number logo (TradingView-style)
+  // Stock indices → round number logo (TradingView-style): digits fill the
+  // badge (extra-bold, tight baseline) so they read clearly at 16px.
   const idx = INDEX_LOGOS[currency];
   if (idx) {
     return svgDataUri(
       `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>` +
         `<circle cx='16' cy='16' r='16' fill='${idx.bg}'/>` +
-        `<text x='16' y='20.5' font-family='Arial,Helvetica,sans-serif' font-size='12' font-weight='bold' fill='#ffffff' text-anchor='middle'>${idx.label}</text>` +
+        `<text x='16' y='21.5' font-family='Arial,Helvetica,sans-serif' font-size='16' font-weight='800' fill='#ffffff' text-anchor='middle'>${idx.label}</text>` +
         `</svg>`
     );
   }
