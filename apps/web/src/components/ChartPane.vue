@@ -5975,7 +5975,7 @@ onBeforeUnmount(() => {
           <img v-if="flagFor(part).type === 'flag'" :src="flagFor(part).value" :alt="part" class="flag-img" />
           <span v-else class="flag-emoji">{{ flagFor(part).value }}</span>
           {{ part }}
-          <span v-if="idx === 0"> / </span>
+          <span v-if="idx === 0 && symbolParts(instrument).length > 1"> / </span>
         </template>
         - {{ timeframeBadge }}
         - {{ instrument && providerOf(instrument) === "binance" ? "BINANCE" : providerOf(instrument) === "dukascopy" ? "DUKASCOPY" : providerOf(instrument) === "ctrader" ? "CTRADER" : "OANDA" }}

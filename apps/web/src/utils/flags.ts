@@ -18,7 +18,24 @@ export function symbolParts(instrument: string): string[] {
   return displayInstrument(instrument).split("/");
 }
 
+/** Stock-index CFDs → TradingView-style round number badges (500 / 100). */
+const INDEX_LOGOS: Record<string, { label: string; bg: string }> = {
+  SPX500: { label: "500", bg: "#1E3A8A" }, // navy — S&P 500
+  NAS100: { label: "100", bg: "#2563EB" }, // blue — Nasdaq 100
+  US30: { label: "30", bg: "#334155" }, // slate — Dow 30
+};
+
 export function currencyFlagUrl(currency: string): string | null {
+  // Stock indices → round number logo (TradingView-style)
+  const idx = INDEX_LOGOS[currency];
+  if (idx) {
+    return svgDataUri(
+      `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>` +
+        `<circle cx='16' cy='16' r='16' fill='${idx.bg}'/>` +
+        `<text x='16' y='20.5' font-family='Arial,Helvetica,sans-serif' font-size='12' font-weight='bold' fill='#ffffff' text-anchor='middle'>${idx.label}</text>` +
+        `</svg>`
+    );
+  }
   // Fiat → country flags
   const flags: Record<string, string> = {
     EUR: "eu",
@@ -29,10 +46,6 @@ export function currencyFlagUrl(currency: string): string | null {
     AUD: "au",
     CAD: "ca",
     NZD: "nz",
-    // US indices carry the US flag
-    SPX500: "us",
-    NAS100: "us",
-    US30: "us",
     DE30: "de",
     UK100: "gb",
     JP225: "jp",

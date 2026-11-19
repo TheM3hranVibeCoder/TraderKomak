@@ -166,9 +166,14 @@ const OANDA_CRYPTO_PRECISION: Record<string, number> = {
   ETH_USD: 2,
 };
 
+/** Stock indices display under their bare name — SPX500_USD → "SPX500",
+ *  NAS100_USD → "NAS100" (no quote-currency suffix; TradingView-style). */
+const BARE_NAME_DISPLAY = new Set(["SPX500_USD", "NAS100_USD"]);
+
 /** Human-friendly display: EUR_USD → "EUR/USD", BTCUSDT → "BTC/USDT". */
 export function displayInstrument(instrument: string): string {
   const norm = normalizeInstrument(instrument).replace(/^D_/, "");
+  if (BARE_NAME_DISPLAY.has(norm)) return norm.split("_")[0]!;
   if (!norm.includes("_")) {
     // Crypto: split a known quote suffix off the base
     const quotes = ["USDT", "USDC", "FDUSD", "TUSD"];

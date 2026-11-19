@@ -13,7 +13,6 @@ const DEFAULT_WATCH = [
   "ETHUSDT",
   "EUR_USD",
   "GBP_USD",
-  "US30",
 ];
 
 /** Stock-index rows added to EVERY existing watchlist (once, per user
@@ -21,17 +20,17 @@ const DEFAULT_WATCH = [
  *  touching the symbols the user already picked. A localStorage flag marks
  *  the migration done so a symbol the user deliberately removes afterwards
  *  never comes back on the next boot. */
-const INDEX_DEFAULTS = ["SPX500_USD", "NAS100_USD", "US30"];
+const INDEX_DEFAULTS = ["SPX500_USD", "NAS100_USD"];
 /** Guests use the bare key; signed-in users get a PER-ACCOUNT key — a cloud
  *  row that predates the index defaults must get them appended exactly once
  *  per account (the old single shared key was consumed by the local load
  *  before the cloud row replaced the list, so signed-in users never saw the
  *  new rows — the "SPX500/NAS100 missing from my watchlist" report). */
-const INDEX_MIGRATION_FLAG = "tk-watchlist-idx-migrated";
+const MIGRATION_VERSION = "v2";
 const WATCH_CAP = 25;
 
 function migrationFlagKey(owner: string | null): string {
-  return owner ? `${INDEX_MIGRATION_FLAG}:${owner}` : INDEX_MIGRATION_FLAG;
+  return owner ? `tk-watchlist-migrated:${MIGRATION_VERSION}:${owner}` : `tk-watchlist-migrated:${MIGRATION_VERSION}`;
 }
 
 /** Crypto rows moved from the OANDA pairs to the Binance spot pairs —
@@ -231,12 +230,22 @@ export const useWatchlistStore = defineStore("watchlist", () => {
     try { migrated = localStorage.getItem(migrationFlagKey(owner)) === "1"; } catch {}
     if (migrated) return false;
     try { localStorage.setItem(migrationFlagKey(owner), "1"); } catch {}
+    let changed = false;
+    // US30 (cTrader) has no data source configured yet — drop the dead row
+    // from lists that received it in the earlier migration.
+    const filtered = instruments.value.filter((s) => s !== "US30");
+    if (filtered.length !== instruments.value.length) {
+      instruments.value = filtered;
+      changed = true;
+    }
     const missing = INDEX_DEFAULTS.filter((s) => !instruments.value.includes(s));
     const room = Math.max(0, WATCH_CAP - instruments.value.length);
     const add = missing.slice(0, room);
-    if (add.length === 0) return false;
-    instruments.value = [...instruments.value, ...add];
-    return true;
+    if (add.length > 0) {
+      instruments.value = [...instruments.value, ...add];
+      changed = true;
+    }
+    return changed;
   }
 
   // Guests get the migration when their (lack of) session is definitive;
