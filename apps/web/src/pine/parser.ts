@@ -45,7 +45,11 @@ export type Stmt =
   | { kind: "tupleDecl"; names: string[]; expr: Expr; line: number }
   | { kind: "ifStmt"; branches: { cond: Expr; body: Stmt[] }[]; elseBody: Stmt[]; line: number }
   | { kind: "forStmt"; varName: string; from: Expr; to: Expr; by: Expr | null; body: Stmt[]; line: number }
+  | { kind: "forInStmt"; varName: string; iter: Expr; body: Stmt[]; line: number }
+  | { kind: "whileStmt"; cond: Expr; body: Stmt[]; line: number }
   | { kind: "funcDecl"; name: string; params: string[]; body: Stmt[]; line: number }
+  | { kind: "methodDecl"; name: string; typeName: string; params: string[]; body: Stmt[]; line: number }
+  | { kind: "typeDecl"; name: string; fields: string[]; line: number }
   | { kind: "exprStmt"; expr: Expr; line: number }
   | { kind: "break"; line: number }
   | { kind: "continue"; line: number }
@@ -58,9 +62,9 @@ export interface Program {
 }
 
 const TYPE_KEYWORDS = new Set(["float", "int", "bool", "color", "string", "simple", "series", "const"]);
-const UNSUPPORTED = new Set(["import", "export", "switch", "while", "type", "method", "class", "enum", "array", "matrix", "map", "request", "strategy", "alert", "alertcondition", "plotshape", "plotchar", "plotcandle", "barcolor", "bgcolor", "fill", "transp"]);
+const UNSUPPORTED = new Set(["import", "export", "strategy", "request", "matrix", "map", "class", "enum", "alert"]);
 
-class Parser {
+export class Parser {
   private pos = 0;
   constructor(private readonly tokens: Token[]) {}
 
@@ -155,6 +159,14 @@ class Parser {
       }
       if (t.value === "if") return this.parseIfStatement();
       if (t.value === "for") return this.parseForStatement();
+      if (t.value === "type") return this.parseTypeDecl();
+      if (t.value === "method") return this.parseMethodDecl();
+      if (t.value === "while") return this.parseWhileStatement();
+      // Generic type declaration: array<SessionInfo> infos = …
+      if (this.peek(1).type === "op" && this.peek(1).value === "<") {
+        const declEnd = this.findGenericDeclEnd();
+        if (declEnd >= 0) return this.parseGenericDecl();
+      }
       if (t.value === "break" && this.peek(1).type === "newline") {
         this.next();
         this.consumeEos();
@@ -203,6 +215,36 @@ class Parser {
       }
       // Not a destructuring after all — rewind and parse as expression
       this.pos = save;
+    }
+
+    // Dotted assignment: this.active := value / obj.count += value
+    if (t.type === "ident") {
+      let i = this.pos;
+      let sawDot = false;
+      while (i < this.tokens.length) {
+        const tk = this.tokens[i]!;
+        if (tk.type === "ident") { i++; continue; }
+        if (tk.type === "op" && tk.value === "." && !sawDot) { sawDot = true; i++; continue; }
+        if (tk.type === "op" && [":=", "=", "+=", "-=", "*=", "/=", "%="].includes(tk.value) && sawDot) {
+          const nameEnd = i;
+          const nameParts: string[] = [this.tokens[this.pos]!.value];
+          for (let j = this.pos + 1; j < nameEnd; j++) {
+            if (this.tokens[j]!.value === "." ) continue;
+            nameParts.push(this.tokens[j]!.value);
+          }
+          this.pos = nameEnd + 1;
+          const expr = this.parseExpr();
+          this.consumeEos();
+          const op = this.tokens[nameEnd]!.value;
+          const dottedName = nameParts.join(".");
+          if (expr.kind === "ifExpr") {
+            return this.desugarIfAssign(dottedName, expr, op, t.line);
+          }
+          if (op === "=") return { kind: "varDecl", name: dottedName, expr, isVar: false, typeAnn: null, line: t.line };
+          return { kind: "assign", name: dottedName, op, expr, line: t.line };
+        }
+        break;
+      }
     }
 
     // Assignment (incl. compound ops) vs expression statement: parse an
@@ -271,18 +313,28 @@ class Parser {
   }
 
   private parseDeclHead(): { name: string; typeAnn: string | null } {
-    let typeAnn: string | null = null;
-    let name = "";
-    // series float x = / float x =  / x =
-    if (TYPE_KEYWORDS.has(this.peek().value)) {
-      typeAnn = this.next().value;
-      if (TYPE_KEYWORDS.has(this.peek().value) && this.peek().type === "ident") {
-        // "series float" style double annotation
-        this.next();
-      }
+    // Scan to the '=' at angle/paren depth 0 on this line; the declared name
+    // is the LAST identifier before it (covers `var array<T> x = …` and
+    // `float x = …` — the type annotation tokens are skipped wholesale).
+    let eq = -1;
+    let depth = 0;
+    for (let i = this.pos; i < this.tokens.length; i++) {
+      const t = this.tokens[i]!;
+      if (t.type === "op") {
+        if (t.value === "<" || t.value === "(" || t.value === "[") depth++;
+        else if (t.value === ">" || t.value === ")" || t.value === "]") depth--;
+        else if (t.value === "=" && depth === 0) {
+          eq = i;
+          break;
+        }
+      } else if (t.type === "newline") break;
     }
-    name = this.expect("ident").value;
-    return { name, typeAnn };
+    if (eq <= 0 || this.tokens[eq - 1]!.type !== "ident") {
+      throw new PineError("Expected a variable name before '='", this.peek().line);
+    }
+    const name = this.tokens[eq - 1]!.value;
+    this.pos = eq;
+    return { name, typeAnn: null };
   }
 
   private parseFuncDecl(): Stmt {
@@ -347,6 +399,15 @@ class Parser {
   private parseForStatement(): Stmt {
     const line = this.expect("ident", "for").line;
     const varName = this.expect("ident").value;
+    // for x in collection  (arrays / iterables)
+    if (this.at("ident", "in")) {
+      this.next();
+      const iter = this.parseExpr();
+      this.consumeEos();
+      this.expect("indent");
+      const body = this.parseBlock();
+      return { kind: "forInStmt", varName, iter, body, line };
+    }
     this.expect("op", "=");
     const from = this.parseExpr();
     this.expect("ident", "to");
@@ -360,6 +421,130 @@ class Parser {
     this.expect("indent");
     const body = this.parseBlock();
     return { kind: "forStmt", varName, from, to, by, body, line };
+  }
+
+  /** Detects `Ident<T…> name =` — returns the index of the `=` or -1. */
+  private findGenericDeclEnd(): number {
+    let depth = 0;
+    for (let i = this.pos + 1; i < this.tokens.length; i++) {
+      const tk = this.tokens[i]!;
+      if (tk.type === "op" && tk.value === "<") depth++;
+      else if (tk.type === "op" && tk.value === ">") {
+        depth--;
+        if (depth === 0) {
+          // `> ident =` → a generic declaration
+          if (
+            this.tokens[i + 1]!.type === "ident" &&
+            this.tokens[i + 2]!.type === "op" &&
+            this.tokens[i + 2]!.value === "="
+          ) {
+            return i + 2;
+          }
+          return -1;
+        }
+      } else if (tk.type === "newline") return -1;
+    }
+    return -1;
+  }
+
+  /** Parses `Ident<T> name = expr` — skips the generic params, binds name. */
+  private parseGenericDecl(): Stmt {
+    const line = this.peek().line;
+    // skip through the matching '>'
+    let depth = 0;
+    while (!this.at("eof")) {
+      if (this.at("op", "<")) depth++;
+      else if (this.at("op", ">")) {
+        depth--;
+        if (depth === 0) { this.next(); break; }
+      }
+      this.next();
+    }
+    const name = this.expect("ident").value;
+    this.expect("op", "=");
+    const expr = this.parseExpr();
+    this.consumeEos();
+    return { kind: "varDecl", name, expr, isVar: false, typeAnn: null, line };
+  }
+
+  /** UDT declaration: `type Name` + indented field lines. */
+  private parseTypeDecl(): Stmt {
+    const line = this.expect("ident", "type").line;
+    const name = this.expect("ident").value;
+    this.consumeEos();
+    this.expect("indent");
+    const fields: string[] = [];
+    this.skipNewlines();
+    while (!this.at("dedent") && !this.at("eof")) {
+      // [typeAnnotation] fieldName (= default)?  — one field per line
+      const toks: Token[] = [];
+      while (!this.at("newline") && !this.at("dedent") && !this.at("eof")) {
+        toks.push(this.next());
+      }
+      const idents = toks.filter((t) => t.type === "ident").map((t) => t.value);
+      if (idents.length === 1) fields.push(idents[0]!);
+      else if (idents.length >= 2) fields.push(idents[idents.length - 1]!);
+      this.consumeEos();
+      this.skipNewlines();
+    }
+    if (this.at("dedent")) this.next();
+    this.consumeEos();
+    return { kind: "typeDecl", name, fields, line };
+  }
+
+  /** `method name(Type this, params…) => body` — a function bound to a UDT. */
+  private parseMethodDecl(): Stmt {
+    const line = this.expect("ident", "method").line;
+    const name = this.expect("ident").value;
+    this.expect("op", "(");
+    const params: string[] = [];
+    let typeName = "";
+    this.skipNewlines();
+    while (!this.at("op", ")")) {
+      // first param carries the bound type: `SessionDisplay this`
+      const ptoks: Token[] = [this.next()];
+      while (!this.at("op", ",") && !this.at("op", ")")) {
+        const t = this.next();
+        if (t.type === "ident") ptoks.push(t);
+      }
+      const pid = ptoks.filter((t) => t.type === "ident").map((t) => t.value);
+      if (params.length === 0) {
+        typeName = pid.length >= 2 ? pid[0]! : "";
+        params.push(pid[pid.length - 1]!);
+      } else {
+        params.push(pid[pid.length - 1]!);
+      }
+      if (this.at("op", ",")) this.next();
+      else break;
+    }
+    this.expect("op", ")");
+    this.expect("op", "=>");
+    if (this.at("newline")) {
+      this.next();
+      this.expect("indent");
+      const body = this.parseBlock();
+      this.consumeEos();
+      return { kind: "methodDecl", name, typeName, params: ["this", ...params.slice(1)], body, line };
+    }
+    const expr = this.parseExpr();
+    this.consumeEos();
+    return {
+      kind: "methodDecl",
+      name,
+      typeName,
+      params: ["this", ...params.slice(1)],
+      body: [{ kind: "exprStmt", expr, line }],
+      line,
+    };
+  }
+
+  private parseWhileStatement(): Stmt {
+    const line = this.expect("ident", "while").line;
+    const cond = this.parseExpr();
+    this.consumeEos();
+    this.expect("indent");
+    const body = this.parseBlock();
+    return { kind: "whileStmt", cond, body, line };
   }
 
   /** Statements until the matching DEDENT (or eof). */
@@ -553,6 +738,11 @@ class Parser {
         this.next();
         return { kind: "bool", value: t.value === "true", id: nextNodeId(), line };
       }
+      // na() with arguments = the nz-style function; bare na = the literal
+      if (t.value === "na" && this.peek(1).type === "op" && this.peek(1).value === "(") {
+        this.next();
+        return this.parseCall("na", line);
+      }
       if (t.value === "na") {
         this.next();
         return { kind: "na", id: nextNodeId(), line };
@@ -563,6 +753,31 @@ class Parser {
       while (this.at("op", ".") && this.peek(1).type === "ident") {
         this.next();
         name += "." + this.next().value;
+      }
+      // Generic type parameters: array.new<string>(…) / array<T> — skip when
+      // a matching '>' is directly followed by '(' (a call).
+      if (this.at("op", "<")) {
+        const save = this.pos;
+        this.next();
+        let depth = 1;
+        let genericCall = false;
+        while (!this.at("eof") && depth > 0) {
+          const gt = this.next();
+          if (gt.type === "op" && gt.value === "<") depth++;
+          else if (gt.type === "op" && gt.value === ">") {
+            depth--;
+            if (depth === 0) {
+              genericCall = this.at("op", "(");
+              break;
+            }
+          }
+        }
+        if (!genericCall) this.pos = save;
+        else if (this.at("op", "(")) {
+          return this.parseCall(name, line);
+        } else {
+          return { kind: "ident", name, id: nextNodeId(), line };
+        }
       }
       if (this.at("op", "(")) {
         return this.parseCall(name, line);
@@ -609,7 +824,49 @@ class Parser {
   }
 }
 
+/** One combined error listing every unsupported feature and its first line. */
+function unsupportedScanError(tokens: Token[]): PineError | null {
+  const first: Array<{ feature: string; line: number }> = [];
+  const seen = new Set<string>();
+  for (const t of tokens) {
+    if (t.type !== "ident" || !UNSUPPORTED.has(t.value)) continue;
+    if (!seen.has(t.value)) {
+      seen.add(t.value);
+      first.push({ feature: t.value, line: t.line });
+    }
+  }
+  if (first.length === 0) return null;
+  const list = first.map((f) => `"${f.feature}" (line ${f.line})`).join(", ");
+  return new PineError(
+    `This script needs Pine features this editor doesn't support: ${list}. ` +
+      `Scripts with data feeds (request.*) or strategies can't run here.`,
+    first[0]!.line
+  );
+}
+
+/** input.session used through a dotted call — detected in the token scan. */
+function inputSessionLine(tokens: Token[]): number | null {
+  for (let i = 0; i < tokens.length - 2; i++) {
+    if (
+      tokens[i]!.type === "ident" &&
+      tokens[i]!.value === "input" &&
+      tokens[i + 1]!.type === "op" &&
+      tokens[i + 1]!.value === "." &&
+      tokens[i + 2]!.type === "ident" &&
+      tokens[i + 2]!.value === "session"
+    ) {
+      return tokens[i]!.line;
+    }
+  }
+  return null;
+}
+
 export function parse(src: string): Program {
-  const parser = new Parser(tokenize(src));
+  const tokens = tokenize(src);
+  // Friendly combined error for scripts beyond the subset (list EVERY
+  // unsupported feature with its line — one-at-a-time errors are useless).
+  const scanErr = unsupportedScanError(tokens);
+  if (scanErr) throw scanErr;
+  const parser = new Parser(tokens);
   return parser.parseProgram();
 }

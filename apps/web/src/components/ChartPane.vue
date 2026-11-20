@@ -489,6 +489,11 @@ interface PineEntry {
   codeSnapshot: string;
   /** Declared inputs (for the legend's settings popup). */
   inputs: PineInputDecl[];
+  /** The script creates drawing objects (box/label/line) — they recompute
+   *  statelessly per bar close instead of incrementally per tick. */
+  usesObjects: boolean;
+  lastObjRunTime: number;
+  lastObjRunAt: number;
 }
 const pineRuntimes = new Map<string, PineEntry>();
 
@@ -530,8 +535,24 @@ function rebuildAllPanes(): void {
     if (!res.ok) continue; // broken code — the editor shows the error
     const vm = res.script.vm;
     vm.setInputValues(pine.inputValuesFor(id));
+    vm.setChartInfo({
+      timeframe: market.timeframe,
+      mintick: Math.pow(10, -instrumentPrecision(market.instrument)),
+      precisionDigits: instrumentPrecision(market.instrument),
+      ticker: market.instrument,
+    });
     vm.reset();
-    const entry: PineEntry = { vm, overlay: res.script.overlay, plotIds: [], ownPane: null, codeSnapshot: script.code, inputs: res.script.inputs };
+    const entry: PineEntry = {
+      vm,
+      overlay: res.script.overlay,
+      plotIds: [],
+      ownPane: null,
+      codeSnapshot: script.code,
+      inputs: res.script.inputs,
+      usesObjects: /\b(box|label|line|linefill)\./.test(script.code),
+      lastObjRunTime: 0,
+      lastObjRunAt: 0,
+    };
     pineRuntimes.set(id, entry);
     const ownPane = res.script.overlay ? null : nextPane++;
     entry.ownPane = ownPane;
@@ -559,14 +580,24 @@ function rebuildAllPanes(): void {
 function pushPineData(full: boolean, force = false): void {
   if (!adapter) return;
   const candles = sanitizeCandles(displayCandles.value);
+  const lastTime = candles.length ? candles[candles.length - 1]!.time : 0;
   for (const id of pine.currentAdded()) {
     const entry = pineRuntimes.get(id);
     if (!entry) continue;
     entry.vm.setInputValues(pine.inputValuesFor(id));
+    // Object scripts (box/label/line) rebuild their drawings statelessly —
+    // a full recompute per bar close, throttled so intra-bar ticks don't
+    // hammer the engine. Plot-only scripts keep the cheap incremental path.
+    if (!full && entry.usesObjects) {
+      if (entry.lastObjRunTime === lastTime && Date.now() - entry.lastObjRunAt < 400) continue;
+      entry.vm.reset();
+      entry.lastObjRunTime = lastTime;
+      entry.lastObjRunAt = Date.now();
+    }
     const ran = entry.vm.run(candles);
-    if (!ran && !force) continue;
+    if (!ran && !full && !force && !entry.usesObjects) continue;
     for (const plot of entry.vm.currentPlots()) {
-      if (full) {
+      if (full || entry.usesObjects) {
         adapter.setPineData(plot.id, plot.data);
       } else {
         const last = plot.data[plot.data.length - 1];
@@ -581,6 +612,7 @@ function pushPineData(full: boolean, force = false): void {
       }
     }
   }
+  recalcPineObjects();
 }
 
 // Structure watcher: chart membership, script edits, and the built-in RSI
@@ -2973,6 +3005,94 @@ function setPixels<T>(slot: Ref<T[]>, next: T[]): void {
  *  same-frame events (data change + range change + drag) cost a single
  *  projection pass and a single Vue overlay patch. */
 let recalcRectRaf = 0;
+/* ── Pine drawing-object overlay (boxes / labels / lines) ────────────────
+ * Projected from bar indexes + prices to pixels on every pan/zoom/data
+ * change — the same trigger loop as the session boxes. */
+interface PineBoxPx { key: string; left: number; width: number; top: number; height: number; bg: string; border: string }
+interface PineLabelPx { key: string; x: number; y: number; text: string; color: string; bg: string; align: string }
+interface PineLinePx { key: string; x1: number; y1: number; x2: number; y2: number; color: string; width: number }
+const pineBoxPx = ref<PineBoxPx[]>([]);
+const pineLabelPx = ref<PineLabelPx[]>([]);
+const pineLinePx = ref<PineLinePx[]>([]);
+let pineObjectsSig = "";
+
+const pineNum = (v: unknown): number => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : NaN;
+};
+
+function recalcPineObjects(): void {
+  const ad = adapter;
+  if (!ad) return;
+  const boxes: PineBoxPx[] = [];
+  const labels: PineLabelPx[] = [];
+  const lines: PineLinePx[] = [];
+  if (pineRuntimes.size > 0) {
+    const c = displayCandles.value;
+    const tfSec = (TIMEFRAME_SECONDS as Record<string, number>)[market.timeframe] ?? 60;
+    for (const id of pine.currentAdded()) {
+      const entry = pineRuntimes.get(id);
+      if (!entry) continue;
+      for (const obj of entry.vm.drawingObjects()) {
+        const p = obj.props ?? {};
+        const px = (v: unknown): number | null => {
+          const n = pineNum(v);
+          return Number.isFinite(n) ? n : null;
+        };
+        const xOf = (barIdx: number): number | null => {
+          const i = Math.round(barIdx);
+          if (i < 0) return null;
+          const t = i < c.length ? c[i]!.time : c[c.length - 1]!.time + (i - (c.length - 1)) * tfSec * 1000;
+          return ad.timeToX(t);
+        };
+        const yOf = (price: number): number | null => ad.getPriceY(price);
+        if (obj.__kind === "box") {
+          const x1 = px(p["left"]); const x2 = px(p["right"]);
+          const y1 = yOf(px(p["top"]) ?? NaN); const y2 = yOf(px(p["bottom"]) ?? NaN);
+          if (x1 === null || x2 === null || y1 === null || y2 === null) continue;
+          boxes.push({
+            key: `${id}-${obj.id}`,
+            left: Math.min(x1, x2),
+            width: Math.max(1, Math.abs(x2 - x1)),
+            top: Math.min(y1, y2),
+            height: Math.max(1, Math.abs(y2 - y1)),
+            bg: String(p["bgcolor"] ?? "transparent"),
+            border: String(p["border_color"] ?? "transparent"),
+          });
+        } else if (obj.__kind === "label") {
+          const x = px(p["idx"]); const y = px(p["y"]);
+          if (x === null || y === null) continue;
+          labels.push({
+            key: `${id}-${obj.id}`,
+            x, y,
+            text: String(p["text"] ?? ""),
+            color: String(p["textcolor"] ?? "var(--text)"),
+            bg: String(p["color"] ?? "transparent"),
+            align: String(p["textalign"] ?? "center"),
+          });
+        } else if (obj.__kind === "line") {
+          const x1 = px(p["x1"]); const y1 = yOf(px(p["y1"]) ?? NaN);
+          const x2 = px(p["x2"]); const y2 = yOf(px(p["y2"]) ?? NaN);
+          if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+          lines.push({
+            key: `${id}-${obj.id}`,
+            x1, y1, x2, y2,
+            color: String(p["color"] ?? "#2196F3"),
+            width: Math.max(1, pineNum(p["width"]) || 1),
+          });
+        }
+      }
+    }
+  }
+  const sig = JSON.stringify([boxes, labels, lines]);
+  if (sig !== pineObjectsSig) {
+    pineObjectsSig = sig;
+    pineBoxPx.value = boxes;
+    pineLabelPx.value = labels;
+    pineLinePx.value = lines;
+  }
+}
+
 function recalcRects(): void {
   if (recalcRectRaf) return;
   recalcRectRaf = requestAnimationFrame(() => {
@@ -2985,6 +3105,7 @@ function recalcRectsNow(): void {
   // Any explicit re-projection supersedes the drag-pan shift — drop it so
   // the freshly painted pixels aren't displaced by a stale translate.
   clearPanShift();
+  recalcPineObjects();
   if (!adapter) {
     setPixels(rectPixels, []);
     measureView.value = null;
