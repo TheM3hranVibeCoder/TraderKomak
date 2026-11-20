@@ -493,7 +493,6 @@ interface PineEntry {
    *  statelessly per bar close instead of incrementally per tick. */
   usesObjects: boolean;
   lastObjRunTime: number;
-  lastObjRunAt: number;
 }
 const pineRuntimes = new Map<string, PineEntry>();
 
@@ -551,7 +550,6 @@ function rebuildAllPanes(): void {
       inputs: res.script.inputs,
       usesObjects: /\b(box|label|line|linefill)\./.test(script.code),
       lastObjRunTime: 0,
-      lastObjRunAt: 0,
     };
     pineRuntimes.set(id, entry);
     const ownPane = res.script.overlay ? null : nextPane++;
@@ -585,14 +583,13 @@ function pushPineData(full: boolean, force = false): void {
     const entry = pineRuntimes.get(id);
     if (!entry) continue;
     entry.vm.setInputValues(pine.inputValuesFor(id));
-    // Object scripts (box/label/line) rebuild their drawings statelessly —
-    // a full recompute per bar close, throttled so intra-bar ticks don't
-    // hammer the engine. Plot-only scripts keep the cheap incremental path.
+    // Object scripts (box/label/line) recompute on BAR CLOSE only — not on
+    // intra-bar ticks. This matches Pine's execution model (drawing objects
+    // are finalized per bar) and prevents the chart from glitching.
     if (!full && entry.usesObjects) {
-      if (entry.lastObjRunTime === lastTime && Date.now() - entry.lastObjRunAt < 400) continue;
+      if (entry.lastObjRunTime === lastTime) continue;
       entry.vm.reset();
       entry.lastObjRunTime = lastTime;
-      entry.lastObjRunAt = Date.now();
     }
     const ran = entry.vm.run(candles);
     if (!ran && !full && !force && !entry.usesObjects) continue;
@@ -6415,6 +6412,34 @@ onBeforeUnmount(() => {
         <span v-if="b.showLabel" class="session-label" :style="{ color: b.color, top: b.labelTop + 'px' }">{{ b.name }}</span>
       </div>
     </div>
+    <!-- Pine Script drawing objects: boxes, labels, lines from user scripts.
+         Painted behind drawings, same layer model as session boxes. -->
+    <div
+      v-if="pineBoxPx.length || pineLabelPx.length || pineLinePx.length"
+      class="pine-objects-layer drawing-clip"
+      :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }"
+    >
+      <svg class="pine-objects-svg">
+        <line
+          v-for="l in pineLinePx"
+          :key="l.key"
+          :x1="l.x1" :y1="l.y1" :x2="l.x2" :y2="l.y2"
+          :stroke="l.color" :stroke-width="l.width"
+        />
+      </svg>
+      <div
+        v-for="b in pineBoxPx"
+        :key="b.key"
+        class="pine-box"
+        :style="{ left: b.left + 'px', width: b.width + 'px', top: b.top + 'px', height: b.height + 'px', background: b.bg, border: b.border !== 'transparent' ? '1px solid ' + b.border : 'none' }"
+      ></div>
+      <div
+        v-for="l in pineLabelPx"
+        :key="l.key"
+        class="pine-label"
+        :style="'left:' + l.x + 'px; top:' + l.y + 'px; color:' + l.color + '; background:' + (l.bg !== 'transparent' ? l.bg : 'transparent') + '; text-align:' + l.align"
+      >{{ l.text }}</div>
+    </div>
     <!-- Fixed Range Volume Profile: two-tone histogram anchored at the
          range's left edge + POC / optional Value Area lines, painted behind
          the drawings (which themselves sit behind the candles).
@@ -8595,6 +8620,36 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 /* Sessions indicator background boxes — behind the drawings layer. */
+.pine-objects-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  transform: translateZ(0);
+  will-change: transform;
+  backface-visibility: hidden;
+}
+.pine-objects-layer svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.pine-box {
+  position: absolute;
+  pointer-events: none;
+}
+.pine-label {
+  position: absolute;
+  font-size: 10px;
+  font-weight: 700;
+  pointer-events: none;
+  white-space: pre;
+  transform: translateY(-100%);
+  padding: 2px 4px;
+  border-radius: 3px;
+}
 .session-layer {
   position: absolute;
   inset: 0;
