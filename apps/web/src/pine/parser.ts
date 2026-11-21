@@ -32,11 +32,25 @@ export type Expr =
   | { kind: "un"; op: string; operand: Expr; id: number; line: number }
   | { kind: "ternary"; cond: Expr; then: Expr; else: Expr; id: number; line: number }
   | { kind: "index"; target: Expr; k: Expr; id: number; line: number }
+  | { kind: "tupleLit"; items: Expr[]; id: number; line: number }
+  | {
+      kind: "switchExpr";
+      subject: Expr | null;
+      cases: { match: Expr | null; body: Stmt[] }[];
+      id: number;
+      line: number;
+    }
   | { kind: "ifExpr"; branches: { cond: Expr; body: Stmt[] }[]; elseBody: Stmt[]; id: number; line: number };
 
 export interface Arg {
   name: string | null;
   expr: Expr;
+}
+
+/** Function parameter: `[<type>] name [= default]` — type tokens are skipped. */
+export interface FuncParam {
+  name: string;
+  def: Expr | null;
 }
 
 export type Stmt =
@@ -47,7 +61,7 @@ export type Stmt =
   | { kind: "forStmt"; varName: string; from: Expr; to: Expr; by: Expr | null; body: Stmt[]; line: number }
   | { kind: "forInStmt"; varName: string; iter: Expr; body: Stmt[]; line: number }
   | { kind: "whileStmt"; cond: Expr; body: Stmt[]; line: number }
-  | { kind: "funcDecl"; name: string; params: string[]; body: Stmt[]; line: number }
+  | { kind: "funcDecl"; name: string; params: FuncParam[]; body: Stmt[]; line: number }
   | { kind: "methodDecl"; name: string; typeName: string; params: string[]; body: Stmt[]; line: number }
   | { kind: "typeDecl"; name: string; fields: string[]; line: number }
   | { kind: "exprStmt"; expr: Expr; line: number }
@@ -194,24 +208,30 @@ export class Parser {
       const save = this.pos;
       this.next();
       const names: string[] = [];
+      let isDecl = true;
       for (;;) {
         if (this.at("ident")) names.push(this.next().value);
         else if (this.at("op", "_")) names.push(this.next().value);
-        else throw new PineError("Tuple destructuring expects names", this.peek().line);
+        else { isDecl = false; break; } // expression tuple like [x ? a : b, c]
         if (this.at("op", ",")) {
           this.next();
           continue;
         }
         break;
       }
-      this.expect("op", "]");
-      const eq = this.peek();
-      if (eq.type === "op" && eq.value === "=") {
-        this.next();
-        const line = eq.line;
-        const expr = this.parseExpr();
-        this.consumeEos();
-        return { kind: "tupleDecl", names, expr, line };
+      if (isDecl) {
+        const close = this.peek();
+        if (close.type === "op" && close.value === "]") {
+          this.next();
+          const eq = this.peek();
+          if (eq.type === "op" && eq.value === "=") {
+            this.next();
+            const line = eq.line;
+            const expr = this.parseExpr();
+            this.consumeEos();
+            return { kind: "tupleDecl", names, expr, line };
+          }
+        }
       }
       // Not a destructuring after all — rewind and parse as expression
       this.pos = save;
@@ -340,12 +360,29 @@ export class Parser {
   private parseFuncDecl(): Stmt {
     const name = this.expect("ident").value;
     this.expect("op", "(");
-    const params: string[] = [];
+    const params: FuncParam[] = [];
     this.skipNewlines();
     while (!this.at("op", ")")) {
-      params.push(this.expect("ident").value);
-      if (this.at("op", ",")) this.next();
-      else break;
+      // Collect the param's tokens up to a top-level ',' or ')'. Type
+      // annotations (`int`, `color`, `table`…) and defaults are split out
+      // afterwards — the name is the ident right before '=' (or the last
+      // ident when no default).
+      const toks: Token[] = [];
+      let depth = 0;
+      for (;;) {
+        const t = this.peek();
+        if (t.type === "op" && t.value === ")" && depth === 0) break;
+        if (t.type === "op" && t.value === "," && depth === 0) {
+          this.next();
+          break;
+        }
+        if (t.type === "op") {
+          if (t.value === "(" || t.value === "[" || t.value === "<") depth++;
+          else if (t.value === ")" || t.value === "]" || t.value === ">") depth = Math.max(0, depth - 1);
+        }
+        toks.push(this.next());
+      }
+      params.push(this.parseFuncParam(toks));
     }
     this.expect("op", ")");
     this.expect("op", "=>");
@@ -361,6 +398,39 @@ export class Parser {
     const expr = this.parseExpr();
     this.consumeEos();
     return { kind: "funcDecl", name, params, body: [{ kind: "exprStmt", expr, line }], line };
+  }
+
+  /** One parameter from its token slice: `[<type>] name [= default]`. */
+  private parseFuncParam(toks: Token[]): FuncParam {
+    if (toks.length === 0) throw new PineError("Empty function parameter", this.peek().line);
+    let eq = -1;
+    let depth = 0;
+    for (let i = 0; i < toks.length; i++) {
+      const t = toks[i]!;
+      if (t.type === "op") {
+        if (t.value === "(" || t.value === "[" || t.value === "<") depth++;
+        else if (t.value === ")" || t.value === "]" || t.value === ">") depth = Math.max(0, depth - 1);
+        else if (t.value === "=" && depth === 0) {
+          eq = i;
+          break;
+        }
+      }
+    }
+    if (eq > 0 && toks[eq - 1]!.type === "ident") {
+      const sub = new Parser(toks.slice(eq + 1));
+      let def: Expr | null = null;
+      try {
+        def = sub.parseExpr();
+      } catch {
+        def = null;
+      }
+      return { name: toks[eq - 1]!.value, def };
+    }
+    // No default — the name is the last ident in the slice (skips `int`,
+    // `series float`, `table`… type prefixes).
+    const idents = toks.filter((t) => t.type === "ident");
+    if (idents.length === 0) throw new PineError("Expected a parameter name", this.peek().line);
+    return { name: idents[idents.length - 1]!.value, def: null };
   }
 
   private parseIfStatement(): Stmt {
@@ -721,6 +791,29 @@ export class Parser {
   private parsePrimary(): Expr {
     const t = this.peek();
     const line = t.line;
+    // Tuple/array literal: [a, b, c] — Pine's tuple in expression position
+    // (multi-value returns, input options). Transient JS array at runtime.
+    if (t.type === "op" && t.value === "[") {
+      this.next();
+      const items: Expr[] = [];
+      this.skipNewlines();
+      while (!this.at("op", "]")) {
+        items.push(this.parseExpr());
+        this.skipNewlines();
+        if (this.at("op", ",")) {
+          this.next();
+          this.skipNewlines();
+          continue;
+        }
+        break;
+      }
+      this.expect("op", "]");
+      return { kind: "tupleLit", items, id: nextNodeId(), line };
+    }
+    // switch expression: switch subject \n case => result … (=> default)
+    if (t.type === "ident" && t.value === "switch") {
+      return this.parseSwitchExpr();
+    }
     if (t.type === "number") {
       this.next();
       return { kind: "num", value: Number(t.value), id: nextNodeId(), line };
@@ -791,6 +884,39 @@ export class Parser {
       return e;
     }
     throw new PineError(`Unexpected "${t.value || t.type}"`, line);
+  }
+
+  /** Pine switch: `switch subj` + indented `value => result` lines; a bare
+   *  `=>` marks the default case, and a no-subject switch is an if/else
+   *  chain (each case expression is taken as a condition). */
+  private parseSwitchExpr(): Expr {
+    const line = this.expect("ident", "switch").line;
+    let subject: Expr | null = null;
+    if (!this.at("newline")) subject = this.parseExpr();
+    this.consumeEos();
+    this.expect("indent");
+    const cases: { match: Expr | null; body: Stmt[] }[] = [];
+    this.skipNewlines();
+    while (!this.at("dedent") && !this.at("eof")) {
+      let match: Expr | null = null;
+      if (this.at("op", "=>")) {
+        this.next();
+      } else {
+        match = this.parseExpr();
+        this.expect("op", "=>");
+      }
+      if (this.at("newline")) {
+        this.next();
+        this.expect("indent");
+        cases.push({ match, body: this.parseBlock() });
+      } else {
+        const e = this.parseExpr();
+        cases.push({ match, body: [{ kind: "exprStmt", expr: e, line: e.line }] });
+      }
+      this.skipNewlines();
+    }
+    if (this.at("dedent")) this.next();
+    return { kind: "switchExpr", subject, cases, id: nextNodeId(), line };
   }
 
   private parseCall(callee: string, line: number): Expr {

@@ -18,15 +18,15 @@
  *     budget, so user code cannot touch the page.
  */
 import { PineError, PineRuntimeError } from "./errors";
-import type { Expr, Program, Stmt } from "./parser";
+import type { Expr, FuncParam, Program, Stmt } from "./parser";
 import type { Candle } from "@traderkomak/shared";
 
 // ── values ──────────────────────────────────────────────────────────────────
 
-/** A Pine object: UDT instances, drawing objects (box/label/line/linefill)
- *  and arrays. REFERENCES — mutations persist across bars (Pine semantics). */
+/** A Pine object: UDT instances, drawing objects (box/label/line/linefill/
+ *  table) and arrays. REFERENCES — mutations persist across bars. */
 export interface PineObject {
-  __kind: "udt" | "box" | "label" | "line" | "linefill" | "array";
+  __kind: "udt" | "box" | "label" | "line" | "linefill" | "table" | "array";
   /** UDT type name (kind === "udt"). */
   type?: string;
   fields?: Record<string, V>;
@@ -154,7 +154,11 @@ function styleConst(name: string): string | undefined {
   return STYLE_CONSTS[name];
 }
 
+const hexColorCache = new Map<string, PineColor>();
 function hexToColor(hex: string, transp = 0): PineColor {
+  const key = hex + "@" + transp;
+  const cached = hexColorCache.get(key);
+  if (cached) return cached;
   let h = hex.replace("#", "");
   if (h.length === 3) h = h.split("").map((c) => c + c).join("");
   if (h.length === 6) h += "FF";
@@ -163,7 +167,9 @@ function hexToColor(hex: string, transp = 0): PineColor {
   const b = Number.parseInt(h.slice(4, 6), 16);
   const a = Number.parseInt(h.slice(6, 8), 16) / 255;
   const alpha = Math.max(0, Math.min(1, a * (1 - transp / 100)));
-  return { css: `rgba(${r},${g},${b},${alpha.toFixed(3)})` };
+  const out: PineColor = { css: `rgba(${r},${g},${b},${alpha.toFixed(3)})` };
+  hexColorCache.set(key, out);
+  return out;
 }
 
 function toCss(v: V): string | null {
@@ -259,12 +265,13 @@ export class PineVM {
   private program: Program;
   private callNodes: Extract<Expr, { kind: "call" }>[] = [];
   private inputDecls: PineInputDecl[] = [];
+  private inputByNode = new Map<number, PineInputDecl>();
 
   private vars = new Map<string, SeriesState>();
   private nodeBufs = new Map<number, SeriesState>();
   private callNs = new Map<number, CallSiteNs>();
   private builtinState = new Map<string, V[]>();
-  private userFns = new Map<string, { params: string[]; body: Stmt[] }>();
+  private userFns = new Map<string, { params: FuncParam[]; body: Stmt[] }>();
   /** UDT registry: typeDecl declares fields, methodDecl binds methods. */
   private types = new Map<string, { fields: string[]; methods: Map<string, { params: string[]; body: Stmt[] }> }>();
   /** Drawing objects (box/label/line/linefill) — references mutated by the
@@ -292,23 +299,32 @@ export class PineVM {
     const plots: Extract<Expr, { kind: "call" }>[] = [];
     const hlines: Extract<Expr, { kind: "call" }>[] = [];
     collectNodes(program.body, this.callNodes, plots, hlines, this.inputDecls);
+    for (const d of this.inputDecls) this.inputByNode.set(d.nodeId, d);
     this.plots = plots.map((node) => {
       const titleArg = node.args.find((a) => a.name === "title");
       const colorArg = node.args.find((a) => a.name === "color");
       const styleArg = node.args.find((a) => a.name === "style");
       const lwArg = node.args.find((a) => a.name === "linewidth");
+      // Positional form: plot(series, title, color, linewidth, style, …)
+      const pos = node.args.filter((a) => a.name === null);
+      const posTitle = pos[1]?.expr;
+      const posColor = pos[2]?.expr;
+      const posLw = pos[3]?.expr;
+      const posStyle = pos[4]?.expr;
+      const styleExpr = styleArg?.expr ?? (posStyle?.kind === "ident" ? posStyle : undefined);
+      const colorExpr = colorArg?.expr ?? posColor;
       return {
         nodeId: node.id,
-        title: titleArg && titleArg.expr.kind === "str" ? titleArg.expr.value : "Plot",
-        style: (styleArg && styleArg.expr.kind === "ident" ? styleConst(styleArg.expr.name) : undefined) as PlotChannel["style"] | undefined ?? "line",
-        color: colorArg
-          ? colorArg.expr.kind === "colorLit"
-            ? hexToColor(colorArg.expr.value).css
-            : colorArg.expr.kind === "ident" && paletteColor(colorArg.expr.name)
-              ? paletteColor(colorArg.expr.name)!.css
-              : "#2196F3"
+        title: (titleArg?.expr.kind === "str" ? titleArg.expr.value : undefined) ?? (posTitle?.kind === "str" ? posTitle.value : undefined) ?? "Plot",
+        style: (styleExpr && styleExpr.kind === "ident" ? styleConst(styleExpr.name) : undefined) as PlotChannel["style"] | undefined ?? "line",
+        color: colorExpr
+          ? colorExpr.kind === "colorLit"
+            ? hexToColor(colorExpr.value).css
+            : colorExpr.kind === "ident" && paletteColor(colorExpr.name)
+              ? paletteColor(colorExpr.name)!.css
+              : "#2196F3" // dynamic color — runPlot evaluates it per bar
           : "#2196F3",
-        lineWidth: lwArg && lwArg.expr.kind === "num" ? Math.max(1, Math.min(6, lwArg.expr.value)) : 2,
+        lineWidth: lwArg && lwArg.expr.kind === "num" ? Math.max(1, Math.min(6, lwArg.expr.value)) : posLw && posLw.kind === "num" ? Math.max(1, Math.min(6, posLw.value)) : 2,
         display: true,
         data: [],
       };
@@ -477,6 +493,15 @@ export class PineVM {
       st.cur = undefined;
     }
     for (const ns of this.callNs.values()) {
+      // Function-local vars commit per bar too — this is what makes
+      // `var length = 0` inside a user function persist across bars AND
+      // survive live-tick rollbacks (hist carries the value, cur is reset).
+      for (const st of ns.vars.values()) {
+        const carry = st.cur !== undefined ? st.cur : st.hist.length > 0 ? st.hist[st.hist.length - 1]! : NA;
+        st.hist.push(carry);
+        if (st.hist.length > MAX_HISTORY) st.hist.splice(0, st.hist.length - MAX_HISTORY);
+        st.cur = undefined;
+      }
       for (const st of ns.bufs.values()) {
         st.hist.push(st.cur !== undefined ? st.cur : NA);
         if (st.hist.length > MAX_HISTORY) st.hist.splice(0, st.hist.length - MAX_HISTORY);
@@ -658,6 +683,17 @@ export class PineVM {
       }
       case "call":
         return this.evalCall(expr, scope, nsId);
+      case "tupleLit":
+        return expr.items.map((it) => this.eval(it, scope, nsId)) as unknown as V;
+      case "switchExpr": {
+        const subj = expr.subject ? this.eval(expr.subject, scope, nsId) : null;
+        for (const c of expr.cases) {
+          if (!c.match) return this.evalBlockValue(c.body, scope, nsId);
+          const mv = this.eval(c.match, scope, nsId);
+          if (expr.subject ? eqVal(subj, mv) : truthy(mv)) return this.evalBlockValue(c.body, scope, nsId);
+        }
+        return NA;
+      }
       case "ifExpr": {
         for (const b of expr.branches) {
           if (truthy(this.eval(b.cond, scope, nsId))) {
@@ -696,6 +732,25 @@ export class PineVM {
     return st.cur !== undefined ? st.cur : st.hist.length > 0 ? st.hist[st.hist.length - 1]! : NA;
   }
 
+  /** readVar without creating a state — used on dotted-callee roots where a
+   *  miss is normal (input.bool → looks up "input" and must not pollute
+   *  this.vars with a permanent series). */
+  private peekVar(scope: Map<string, SeriesState> | null, name: string): V {
+    const st = (scope ?? this.vars).get(name);
+    if (st) {
+      if (st.cur !== undefined) return st.cur;
+      if (st.hist.length > 0) return st.hist[st.hist.length - 1]!;
+    }
+    if (scope) {
+      const global = this.vars.get(name);
+      if (global) {
+        if (global.cur !== undefined) return global.cur;
+        if (global.hist.length > 0) return global.hist[global.hist.length - 1]!;
+      }
+    }
+    return NA;
+  }
+
   private builtinSeries(name: string): V | undefined {
     switch (name) {
       case "open":
@@ -715,9 +770,18 @@ export class PineVM {
       case "syminfo.mintick":
         return this.chartInfo.mintick;
       case "syminfo.ticker":
+      case "syminfo.tickerid":
         return this.chartInfo.ticker;
+      case "syminfo.description":
+        return this.chartInfo.ticker;
+      case "syminfo.timezone":
+        return "Exchange"; // resolved to UTC by the time() builtin
       case "timeframe.period":
         return this.chartInfo.timeframe;
+      case "timeframe.multiplier": {
+        const s = tfSecondsOf(this.chartInfo.timeframe);
+        return s >= 60 ? s / 60 : s;
+      }
       case "timeframe.isdwm":
         return tfSecondsOf(this.chartInfo.timeframe) >= 86400;
       case "timeframe.isintraday":
@@ -729,6 +793,87 @@ export class PineVM {
       case "barstate.isnew":
       case "barstate.isconfirmed":
         return true;
+      case "barstate.isrealtime":
+        return false;
+      case "barstate.ishistory":
+        return true;
+      case "dayofweek": {
+        const t = num(this.candleAt(this.curBar, "time"));
+        return t > 0 ? new Date(t).getUTCDay() + 1 : NA;
+      }
+      case "dayofweek.sunday":
+        return 1;
+      case "dayofweek.monday":
+        return 2;
+      case "dayofweek.tuesday":
+        return 3;
+      case "dayofweek.wednesday":
+        return 4;
+      case "dayofweek.thursday":
+        return 5;
+      case "dayofweek.friday":
+        return 6;
+      case "dayofweek.saturday":
+        return 7;
+      // display.* are bit flags — `display.all - display.status_line` etc.
+      case "display.none":
+        return "none";
+      case "display.all":
+        return 15;
+      case "display.pane":
+        return 1;
+      case "display.price_scale":
+        return 2;
+      case "display.status_line":
+        return 4;
+      case "display.data_window":
+        return 8;
+      case "xloc.bar_index":
+        return "bar_index";
+      case "xloc.bar_time":
+        return "bar_time";
+      case "extend.none":
+        return "none";
+      case "extend.left":
+        return "left";
+      case "extend.right":
+        return "right";
+      case "extend.both":
+        return "both";
+      case "position.top_left":
+        return "top_left";
+      case "position.top_center":
+        return "top_center";
+      case "position.top_right":
+        return "top_right";
+      case "position.middle_left":
+        return "middle_left";
+      case "position.middle_center":
+        return "middle_center";
+      case "position.middle_right":
+        return "middle_right";
+      case "position.bottom_left":
+        return "bottom_left";
+      case "position.bottom_center":
+        return "bottom_center";
+      case "position.bottom_right":
+        return "bottom_right";
+      case "location.absolute":
+        return "absolute";
+      case "location.abovebar":
+        return "abovebar";
+      case "location.belowbar":
+        return "belowbar";
+      case "location.top":
+        return "top";
+      case "location.bottom":
+        return "bottom";
+      case "size.auto":
+        return "normal";
+      case "size.large":
+        return "large";
+      case "size.huge":
+        return "huge";
       case "na":
         return NA;
       default:
@@ -750,7 +895,11 @@ export class PineVM {
     // Dotted callees: obj.method(…) — UDT constructors, UDT methods,
     // array methods, and drawing-object methods.
     if (node.callee.includes(".")) {
-      const segs = node.callee.split(".");
+      let segs = this.calleeSegs.get(node.callee);
+      if (!segs) {
+        segs = node.callee.split(".");
+        this.calleeSegs.set(node.callee, segs);
+      }
       const last = segs[segs.length - 1]!;
 
       // UDT constructor: TypeName.new(…)
@@ -760,7 +909,7 @@ export class PineVM {
         return obj;
       }
 
-      const root = this.readVar(scope ?? null, segs[0]!);
+      const root = this.peekVar(scope ?? null, segs[0]!);
       if (isObjectV(root)) {
         // Array methods: infos.push(…) → array.push(arr, …)
         if (root.__kind === "array") {
@@ -964,7 +1113,7 @@ export class PineVM {
   }
 
   /** Creates a drawing object and registers it for the overlay renderer. */
-  newDrawing(kind: "box" | "label" | "line" | "linefill", props: Record<string, V>): PineObject {
+  newDrawing(kind: "box" | "label" | "line" | "linefill" | "table", props: Record<string, V>): PineObject {
     const id = ++this.nextDrawId;
     const obj: PineObject = { __kind: kind, id, props, deleted: false };
     this.drawings.set(id, obj);
@@ -985,27 +1134,47 @@ export class PineVM {
     return { __kind: "udt", type: typeName, fields, deleted: false };
   }
 
+  /** Builtin ctx cache — a call node always executes with the same scope
+   *  identity (global or its own function's ns), so one ctx per node. */
+  private ctxCache = new Map<number, BuiltinCtx>();
+  private calleeSegs = new Map<string, string[]>();
+
   private makeCtx(node: Extract<Expr, { kind: "call" }>, scope: Map<string, SeriesState> | null, nsId: number | null): BuiltinCtx {
+    // Cache ONLY top-level calls: the same node inside a user function runs
+    // under a different scope per call site, so caching by node id would leak
+    // one site's locals into another.
+    if (nsId !== null) return this.buildCtx(node, scope, nsId);
+    const cached = this.ctxCache.get(node.id);
+    if (cached) return cached;
+    const ctx = this.buildCtx(node, scope, nsId);
+    this.ctxCache.set(node.id, ctx);
+    return ctx;
+  }
+
+  private buildCtx(node: Extract<Expr, { kind: "call" }>, scope: Map<string, SeriesState> | null, nsId: number | null): BuiltinCtx {
     // eslint-disable-next-line @typescript-eslint/no-this-alias -- the ctx object hands builtins the VM itself
     const vm = this;
+    // positional args indexed once — hot path for high-frequency builtins
+    const positional = node.args.filter((a) => a.name === null);
+    const at = (i: number): Expr | null => positional[i]?.expr ?? null;
     return {
       vm,
       node,
       scope,
       nsId,
-      pos: (i) => node.args.filter((a) => a.name === null)[i]?.expr ?? null,
+      pos: at,
       named: (name) => node.args.find((a) => a.name === name)?.expr ?? null,
       numArg: (i, fallback) => {
-        const e = node.args.filter((a) => a.name === null)[i]?.expr;
+        const e = at(i);
         if (!e) return fallback;
         return num(vm.evalPublic(e, scope));
       },
       arg: (i) => {
-        const e = node.args.filter((a) => a.name === null)[i]?.expr;
+        const e = at(i);
         return e ? vm.evalPublic(e, scope) : NA;
       },
       arr: (i) => {
-        const e = node.args.filter((a) => a.name === null)[i]?.expr;
+        const e = at(i);
         const v = e ? vm.eval(e, scope, nsId) : NA;
         if (!isArrV(v)) throw new PineRuntimeError("Expected an array argument", node.line);
         return v;
@@ -1026,16 +1195,22 @@ export class PineVM {
 
   // ── user functions ───────────────────────────────────────────────────────
 
-  private callUserFn(node: Extract<Expr, { kind: "call" }>, fn: { params: string[]; body: Stmt[] }, outerNsId: number | null): V {
+  private callUserFn(node: Extract<Expr, { kind: "call" }>, fn: { params: FuncParam[]; body: Stmt[] }, outerNsId: number | null): V {
     let ns = this.callNs.get(node.id);
     if (!ns) {
       ns = { id: node.id, vars: new Map(), bufs: new Map() };
       this.callNs.set(node.id, ns);
     }
+    // Argument expressions live in the CALLER's scope (nested user-fn calls
+    // pass their own params along); defaults evaluate in the callee scope.
+    const callerScope = outerNsId !== null ? this.callNs.get(outerNsId)?.vars ?? null : null;
     const positional = node.args.filter((a) => a.name === null);
     fn.params.forEach((p, i) => {
-      const v = positional[i] ? this.eval(positional[i]!.expr, null, outerNsId) : NA;
-      this.varState(ns!.vars, p).cur = v;
+      const namedE = node.args.find((a) => a.name === p.name)?.expr ?? null;
+      const posE = positional[i]?.expr ?? null;
+      const src = posE ?? namedE ?? p.def;
+      const v = src ? this.eval(src, posE || namedE ? callerScope : ns.vars, posE || namedE ? outerNsId : node.id) : NA;
+      this.varState(ns!.vars, p.name).cur = v;
     });
     try {
       return this.evalBlockValue(fn.body, ns.vars, node.id);
@@ -1234,7 +1409,9 @@ export class PineVM {
       }
     }
     void styleConst;
-    const lwArg = this.namedArg(node, "linewidth");
+    // Positional fallbacks: plot(series, title, color, linewidth, style, …)
+    const pos = node.args.filter((a) => a.name === null);
+    const lwArg = this.namedArg(node, "linewidth") ?? (pos[3]?.expr.kind === "num" ? pos[3]!.expr : null);
     if (lwArg) ch.lineWidth = Math.max(1, Math.min(6, Math.round(num(this.eval(lwArg, scope)))));
     const displayArg = this.namedArg(node, "display");
     if (displayArg) {
@@ -1246,7 +1423,7 @@ export class PineVM {
       const tv = this.eval(titleArg, scope);
       if (typeof tv === "string" && tv) ch.title = tv;
     }
-    const colorArg = this.namedArg(node, "color");
+    const colorArg = this.namedArg(node, "color") ?? pos[2]?.expr ?? null;
     const css = colorArg ? toCss(this.eval(colorArg, scope)) : null;
     if (css) ch.color = css;
     const candle = this.candles[this.curBar];
@@ -1279,7 +1456,7 @@ export class PineVM {
   }
 
   inputDeclFor(nodeId: number): PineInputDecl | undefined {
-    return this.inputDecls.find((d) => d.nodeId === nodeId);
+    return this.inputByNode.get(nodeId);
   }
 
   get inputValuesPublic(): Record<string, number | boolean | string> {
@@ -1389,7 +1566,19 @@ function collectNodes(
         if (s.by) walkExpr(s.by);
         for (const st of s.body) walkStmt(st);
         return;
+      case "forInStmt":
+        walkExpr(s.iter);
+        for (const st of s.body) walkStmt(st);
+        return;
+      case "whileStmt":
+        walkExpr(s.cond);
+        for (const st of s.body) walkStmt(st);
+        return;
       case "funcDecl":
+        for (const p of s.params) if (p.def) walkExpr(p.def);
+        for (const st of s.body) walkStmt(st);
+        return;
+      case "methodDecl":
         for (const st of s.body) walkStmt(st);
         return;
       case "exprStmt":
@@ -1471,6 +1660,10 @@ function inputOptions(e: Extract<Expr, { kind: "call" }>): string[] | undefined 
   if (named.expr.kind === "call" && named.expr.callee === "array.from") {
     return named.expr.args.map((a) => (a.expr.kind === "str" ? a.expr.value : String((a.expr as { value?: unknown }).value ?? "")));
   }
+  // Tuple literal form: options = ["A", "B", "C"]
+  if (named.expr.kind === "tupleLit") {
+    return named.expr.items.map((it) => (it.kind === "str" ? it.value : it.kind === "ident" ? it.name : String((it as { value?: unknown }).value ?? "")));
+  }
   return undefined;
 }
 
@@ -1486,6 +1679,10 @@ function exprChildren(e: Expr): Expr[] {
       return [e.target, e.k];
     case "call":
       return e.args.map((a) => a.expr);
+    case "tupleLit":
+      return [...e.items];
+    case "switchExpr":
+      return [...(e.subject ? [e.subject] : []), ...e.cases.flatMap((c) => (c.match ? [c.match, ...stmtExprs(c.body)] : stmtExprs(c.body)))];
     case "ifExpr":
       return [...e.branches.flatMap((b) => [b.cond, ...stmtExprs(b.body)]), ...stmtExprs(e.elseBody)];
     default:
@@ -1516,7 +1713,19 @@ function stmtExprs(body: Stmt[]): Expr[] {
         if (s.by) out.push(s.by);
         for (const st of s.body) visit(st);
         return;
+      case "forInStmt":
+        out.push(s.iter);
+        for (const st of s.body) visit(st);
+        return;
+      case "whileStmt":
+        out.push(s.cond);
+        for (const st of s.body) visit(st);
+        return;
       case "funcDecl":
+        for (const p of s.params) if (p.def) out.push(p.def);
+        for (const st of s.body) visit(st);
+        return;
+      case "methodDecl":
         for (const st of s.body) visit(st);
         return;
       case "exprStmt":
@@ -1642,9 +1851,36 @@ function inputImpl(ctx: BuiltinCtx): V {
   return NA;
 }
 
-/** Local minutes-of-day in `tz` for a UTC epoch-ms instant (DST-aware). */
+/** Fixed UTC offset (minutes) for UTC/GMT±N style zones — null when the zone
+ *  needs Intl (real IANA zones with DST). Etc/GMT-3 == UTC+3 (inverted sign). */
+const tzOffsetCache = new Map<string, number | null>();
+function fixedOffsetMinutes(tz: string): number | null {
+  const cached = tzOffsetCache.get(tz);
+  if (cached !== undefined) return cached;
+  let out: number | null = null;
+  const t = tz.trim();
+  if (/^(UTC|GMT)$/i.test(t)) out = 0;
+  else {
+    const m = t.match(/^(?:UTC|GMT)([+-])(\d{1,2})(?::(\d{2}))?$/i);
+    if (m) out = (m[1] === "+" ? 1 : -1) * (Number(m[2]) * 60 + Number(m[3] ?? 0));
+    else {
+      const e = t.match(/^Etc\/GMT([+-])(\d{1,2})$/i);
+      if (e) out = (e[1] === "+" ? -1 : 1) * (Number(e[2]) * 60);
+    }
+  }
+  tzOffsetCache.set(tz, out);
+  return out;
+}
+
+/** Local minutes-of-day in `tz` for a UTC epoch-ms instant (DST-aware when
+ *  the zone is a real IANA name; arithmetic for fixed UTC±N offsets). */
 const tzFmtCache = new Map<string, Intl.DateTimeFormat>();
 function tzMinutesUTC(tz: string, timeMs: number): number {
+  const fixed = fixedOffsetMinutes(tz);
+  if (fixed !== null) {
+    const d = new Date(timeMs);
+    return (((d.getUTCHours() * 60 + d.getUTCMinutes() + fixed) % 1440) + 1440) % 1440;
+  }
   let fmt = tzFmtCache.get(tz);
   if (!fmt) {
     fmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "numeric", hourCycle: "h23" });
@@ -1654,6 +1890,47 @@ function tzMinutesUTC(tz: string, timeMs: number): number {
   const h = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
   const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
   return h * 60 + m;
+}
+
+/** Weekday (Pine numbering: Sun=1…Sat=7) in `tz`. */
+const tzWeekCache = new Map<string, Intl.DateTimeFormat>();
+const TZ_DOW: Record<string, number> = { Sun: 1, Mon: 2, Tue: 3, Wed: 4, Thu: 5, Fri: 6, Sat: 7 };
+function tzDayOfWeek(tz: string, timeMs: number): number {
+  const fixed = fixedOffsetMinutes(tz);
+  if (fixed !== null) return new Date(timeMs + fixed * 60000).getUTCDay() + 1;
+  let fmt = tzWeekCache.get(tz);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" });
+    tzWeekCache.set(tz, fmt);
+  }
+  return TZ_DOW[fmt.formatToParts(new Date(timeMs)).find((p) => p.type === "weekday")?.value ?? "Sun"] ?? 1;
+}
+
+/** Pine offsets ("UTC+2", "GMT-5", "UTC+0") → IANA zone names for Intl.
+ *  Etc/GMT uses an INVERTED sign: Etc/GMT-3 == UTC+3. */
+function normalizeTz(tz: string): string {
+  const t = tz.trim();
+  if (/^(UTC|GMT)$/i.test(t) || /^(UTC|GMT)\+?0$/i.test(t)) return "UTC";
+  const m = t.match(/^(?:UTC|GMT)([+-])(\d{1,2})$/i);
+  if (m) {
+    const sign = m[1] === "+" ? "-" : "+";
+    return `Etc/GMT${sign}${Number(m[2])}`;
+  }
+  return t;
+}
+
+/** 1234567 → "1.23M" (format.volume). */
+function formatVolume(n: number): string {
+  if (!Number.isFinite(n)) return "na";
+  const abs = Math.abs(n);
+  if (abs >= 1e9) return trimZeros((n / 1e9).toFixed(2)) + "B";
+  if (abs >= 1e6) return trimZeros((n / 1e6).toFixed(2)) + "M";
+  if (abs >= 1e3) return trimZeros((n / 1e3).toFixed(2)) + "K";
+  return String(Math.round(n));
+}
+
+function trimZeros(s: string): string {
+  return s.includes(".") ? s.replace(/\.?0+$/, "") : s;
 }
 
 /** Methods on drawing objects — mutate/read their props in place. */
@@ -1667,6 +1944,10 @@ const DRAWING_METHODS: Record<string, Record<string, (ctx: BuiltinCtx) => V | vo
     "set_top": (c) => void (c.obj!.props!["top"] = num(c.vm.evalPublic(c.pos(0)!, c.scope))),
     "set_right": (c) => void (c.obj!.props!["right"] = num(c.vm.evalPublic(c.pos(0)!, c.scope))),
     "set_bottom": (c) => void (c.obj!.props!["bottom"] = num(c.vm.evalPublic(c.pos(0)!, c.scope))),
+    "set_rightbottom": (c) => {
+      c.obj!.props!["right"] = num(c.vm.evalPublic(c.pos(0)!, c.scope));
+      void (c.obj!.props!["bottom"] = num(c.vm.evalPublic(c.pos(1)!, c.scope)));
+    },
     "set_bgcolor": (c) => void (c.obj!.props!["bgcolor"] = toCss(c.vm.evalPublic(c.pos(0)!, c.scope)) ?? "transparent"),
     "set_border_color": (c) => void (c.obj!.props!["border_color"] = toCss(c.vm.evalPublic(c.pos(0)!, c.scope)) ?? "transparent"),
     "delete": (c) => void (c.obj!.deleted = true),
@@ -1677,10 +1958,16 @@ const DRAWING_METHODS: Record<string, Record<string, (ctx: BuiltinCtx) => V | vo
     "get_text": (c) => ((c.obj!.props!["text"] as V) ?? ""),
     "set_x": (c) => void (c.obj!.props!["idx"] = num(c.vm.evalPublic(c.pos(0)!, c.scope))),
     "set_y": (c) => void (c.obj!.props!["y"] = num(c.vm.evalPublic(c.pos(0)!, c.scope))),
+    "set_xy": (c) => {
+      c.obj!.props!["idx"] = num(c.vm.evalPublic(c.pos(0)!, c.scope));
+      void (c.obj!.props!["y"] = num(c.vm.evalPublic(c.pos(1)!, c.scope)));
+    },
     "set_text": (c) => void (c.obj!.props!["text"] = String(c.vm.evalPublic(c.pos(0)!, c.scope) ?? "") as V),
     "set_textcolor": (c) => void (c.obj!.props!["textcolor"] = toCss(c.vm.evalPublic(c.pos(0)!, c.scope)) ?? "transparent"),
     "set_color": (c) => void (c.obj!.props!["color"] = toCss(c.vm.evalPublic(c.pos(0)!, c.scope)) ?? "transparent"),
     "set_style": (c) => void (c.obj!.props!["style"] = String(c.vm.evalPublic(c.pos(0)!, c.scope) ?? "") as V),
+    "set_size": (c) => void (c.obj!.props!["size"] = String(c.vm.evalPublic(c.pos(0)!, c.scope) ?? "") as V),
+    "set_xloc": (c) => void (c.obj!.props!["xloc"] = String(c.vm.evalPublic(c.pos(0)!, c.scope) ?? "") as V),
     "delete": (c) => void (c.obj!.deleted = true),
   },
   line: {
@@ -1692,13 +1979,50 @@ const DRAWING_METHODS: Record<string, Record<string, (ctx: BuiltinCtx) => V | vo
     "set_y1": (c) => void (c.obj!.props!["y1"] = num(c.vm.evalPublic(c.pos(0)!, c.scope))),
     "set_x2": (c) => void (c.obj!.props!["x2"] = num(c.vm.evalPublic(c.pos(0)!, c.scope))),
     "set_y2": (c) => void (c.obj!.props!["y2"] = num(c.vm.evalPublic(c.pos(0)!, c.scope))),
+    "set_xy1": (c) => {
+      c.obj!.props!["x1"] = num(c.vm.evalPublic(c.pos(0)!, c.scope));
+      void (c.obj!.props!["y1"] = num(c.vm.evalPublic(c.pos(1)!, c.scope)));
+    },
+    "set_xy2": (c) => {
+      c.obj!.props!["x2"] = num(c.vm.evalPublic(c.pos(0)!, c.scope));
+      void (c.obj!.props!["y2"] = num(c.vm.evalPublic(c.pos(1)!, c.scope)));
+    },
     "set_color": (c) => void (c.obj!.props!["color"] = toCss(c.vm.evalPublic(c.pos(0)!, c.scope)) ?? "transparent"),
     "set_width": (c) => void (c.obj!.props!["width"] = num(c.vm.evalPublic(c.pos(0)!, c.scope))),
+    "set_extend": (c) => void (c.obj!.props!["extend"] = String(c.vm.evalPublic(c.pos(0)!, c.scope) ?? "") as V),
+    "set_style": (c) => void (c.obj!.props!["style"] = String(c.vm.evalPublic(c.pos(0)!, c.scope) ?? "") as V),
     "delete": (c) => void (c.obj!.deleted = true),
   },
   linefill: {
     "get_color": (c) => ((c.obj!.props!["color"] as V) ?? null),
     "set_color": (c) => void (c.obj!.props!["color"] = toCss(c.vm.evalPublic(c.pos(0)!, c.scope)) ?? "transparent"),
+    "delete": (c) => void (c.obj!.deleted = true),
+  },
+  table: {
+    // table.cell(tableId, column, row, text, text_color=…, text_size=…,
+    // text_halign=…, bgcolor=…) — cells keyed "row:col" for the renderer.
+    "cell": (c) => {
+      const col = Math.round(c.numArg(0, 0));
+      const row = Math.round(c.numArg(1, 0));
+      const text = c.pos(2) ? String(c.vm.evalPublic(c.pos(2)!, c.scope) ?? "") : "";
+      const tc = c.named("text_color");
+      const bg = c.named("bgcolor");
+      const cells = (c.obj!.props!["cells"] as unknown as Record<string, { text: string; color: string; bg: string; align: string; size: string }>) ?? {};
+      cells[`${row}:${col}`] = {
+        text,
+        color: tc ? toCss(c.vm.evalPublic(tc, c.scope)) ?? "#e8eaf2" : "#e8eaf2",
+        bg: bg ? toCss(c.vm.evalPublic(bg, c.scope)) ?? "transparent" : "transparent",
+        align: c.named("text_halign") ? String(c.vm.evalPublic(c.named("text_halign")!, c.scope) ?? "") || "center" : "center",
+        size: c.named("text_size") ? String(c.vm.evalPublic(c.named("text_size")!, c.scope) ?? "") || "normal" : "normal",
+      };
+      c.obj!.props!["cells"] = cells as unknown as V;
+      return NA;
+    },
+    "merge_cells": () => NA,
+    "clear": (c) => {
+      c.obj!.props!["cells"] = {} as V;
+      return NA;
+    },
     "delete": (c) => void (c.obj!.deleted = true),
   },
 };
@@ -2315,6 +2639,8 @@ const BUILTINS: Record<string, (ctx: BuiltinCtx) => V> = {
       bottom: ctx.numArg(3, 0),
       bgcolor: toCss(ctx.named("bgcolor") ? ctx.vm.evalPublic(ctx.named("bgcolor")!, ctx.scope) : null) ?? "rgba(0,0,0,0)",
       border_color: toCss(ctx.named("border_color") ? ctx.vm.evalPublic(ctx.named("border_color")!, ctx.scope) : null) ?? "transparent",
+      border_style: ctx.named("border_style") ? String(ctx.vm.evalPublic(ctx.named("border_style")!, ctx.scope) ?? "") : "solid",
+      border_width: ctx.named("border_width") ? num(ctx.vm.evalPublic(ctx.named("border_width")!, ctx.scope)) : 1,
     };
     return ctx.vm.newDrawing("box", props);
   },
@@ -2327,6 +2653,8 @@ const BUILTINS: Record<string, (ctx: BuiltinCtx) => V> = {
       textcolor: toCss(ctx.named("textcolor") ? ctx.vm.evalPublic(ctx.named("textcolor")!, ctx.scope) : null) ?? "#e8eaf2",
       color: toCss(ctx.named("color") ? ctx.vm.evalPublic(ctx.named("color")!, ctx.scope) : null) ?? "transparent",
       textalign: ctx.named("textalign") ? String(ctx.vm.evalPublic(ctx.named("textalign")!, ctx.scope) ?? "") : "center",
+      xloc: ctx.named("xloc") ? String(ctx.vm.evalPublic(ctx.named("xloc")!, ctx.scope) ?? "") : "bar_index",
+      size: ctx.named("size") ? String(ctx.vm.evalPublic(ctx.named("size")!, ctx.scope) ?? "") : "normal",
     };
     return ctx.vm.newDrawing("label", props);
   },
@@ -2339,8 +2667,24 @@ const BUILTINS: Record<string, (ctx: BuiltinCtx) => V> = {
       color: toCss(ctx.named("color") ? ctx.vm.evalPublic(ctx.named("color")!, ctx.scope) : null) ?? "#2196F3",
       style: ctx.named("style") ? String(ctx.vm.evalPublic(ctx.named("style")!, ctx.scope) ?? "") : "solid",
       width: ctx.named("width") ? num(ctx.vm.evalPublic(ctx.named("width")!, ctx.scope)) : 1,
+      extend: ctx.named("extend") ? String(ctx.vm.evalPublic(ctx.named("extend")!, ctx.scope) ?? "") : "none",
+      xloc: ctx.named("xloc") ? String(ctx.vm.evalPublic(ctx.named("xloc")!, ctx.scope) ?? "") : "bar_index",
     };
     return ctx.vm.newDrawing("line", props);
+  },
+  // Dashboard tables: cells are stored on the object; the chart overlay
+  // renders the final grid in the requested corner.
+  "table.new": (ctx) => {
+    const posV = ctx.pos(0) ? ctx.vm.evalPublic(ctx.pos(0)!, ctx.scope) : "top_right";
+    const props: Record<string, V> = {
+      position: typeof posV === "string" ? posV : "top_right",
+      columns: ctx.numArg(1, 2),
+      rows: ctx.numArg(2, 2),
+      bgcolor: toCss(ctx.named("bgcolor") ? ctx.vm.evalPublic(ctx.named("bgcolor")!, ctx.scope) : null) ?? "transparent",
+      frame_color: toCss(ctx.named("frame_color") ? ctx.vm.evalPublic(ctx.named("frame_color")!, ctx.scope) : null) ?? "transparent",
+      cells: {} as V,
+    };
+    return ctx.vm.newDrawing("table", props);
   },
   "linefill.new": (ctx) => {
     const a = ctx.vm.evalPublic(ctx.pos(0)!, ctx.scope);
@@ -2362,11 +2706,9 @@ const BUILTINS: Record<string, (ctx: BuiltinCtx) => V> = {
     const days = m[3] ? m[3]!.split("").map(Number) : [1, 2, 3, 4, 5, 6, 7];
     const tz = ctx.pos(2) ? String(ctx.vm.evalPublic(ctx.pos(2)!, ctx.scope) ?? "Exchange") : "Exchange";
     const timeMs = num(ctx.vm.candleAt(ctx.vm.currentBar, "time"));
-    const tzReal = tz === "Exchange" ? "UTC" : tz;
+    const tzReal = tz === "Exchange" ? "UTC" : normalizeTz(tz);
     const localMin = tzMinutesUTC(tzReal, timeMs);
-    const fmtW = new Intl.DateTimeFormat("en-US", { timeZone: tzReal, weekday: "short" });
-    const dowMap: Record<string, number> = { Sun: 1, Mon: 2, Tue: 3, Wed: 4, Thu: 5, Fri: 6, Sat: 7 };
-    const dow = dowMap[fmtW.formatToParts(new Date(timeMs)).find((p) => p.type === "weekday")?.value ?? "Sun"] ?? 1;
+    const dow = tzDayOfWeek(tzReal, timeMs);
     if (!days.includes(dow)) return NA;
     const inS = start <= end ? localMin >= start && localMin < end : localMin >= start || localMin < end;
     return inS ? timeMs : NA;
@@ -2394,11 +2736,41 @@ const BUILTINS: Record<string, (ctx: BuiltinCtx) => V> = {
     const fmtE = ctx.pos(1);
     const fmt = fmtE ? String(ctx.vm.evalPublic(fmtE, ctx.scope) ?? "") : "";
     if (fmt === "mintick") return (num(v) as number).toFixed(ctx.vm.chartInfoPrecision);
+    if (fmt === "volume") return formatVolume(num(v));
+    const hash = fmt.match(/^#*(\.#+)?$/);
+    if (hash) {
+      const n = num(v);
+      if (Number.isNaN(n)) return isNa(v) ? "na" : String(v);
+      const dec = fmt.split(".")[1]?.length ?? 0;
+      return dec > 0 ? trimZeros(n.toFixed(dec)) : String(Math.round(n));
+    }
     if (isNa(v)) return "na";
     if (typeof v === "boolean") return v ? "true" : "false";
     return String(v);
   },
   "str.tonumber": (ctx) => num(ctx.vm.evalPublic(ctx.pos(0)!, ctx.scope)),
+  "str.format": (ctx) => {
+    const fmtE = ctx.pos(0);
+    if (!fmtE) return "";
+    const fmt = String(ctx.vm.evalPublic(fmtE, ctx.scope) ?? "");
+    return fmt.replace(/\{(\d+)(?::[^}]*)?\}/g, (_m, idx: string) => {
+      const e = ctx.pos(Number(idx) + 1);
+      if (!e) return "";
+      const v = ctx.vm.evalPublic(e, ctx.scope);
+      if (isNa(v)) return "na";
+      if (typeof v === "boolean") return v ? "true" : "false";
+      if (typeof v === "number") {
+        if (Number.isInteger(v)) return String(v);
+        return String(Number(v.toFixed(8)));
+      }
+      if (v && typeof v === "object" && "css" in v) return (v as PineColor).css;
+      return String(v);
+    });
+  },
+  // type casts
+  "int": (ctx) => Math.trunc(num(ctx.vm.evalPublic(ctx.pos(0)!, ctx.scope))),
+  "float": (ctx) => num(ctx.vm.evalPublic(ctx.pos(0)!, ctx.scope)),
+  "bool": (ctx) => truthy(ctx.vm.evalPublic(ctx.pos(0)!, ctx.scope)),
   "runtime.error": (ctx) => {
     const msg = ctx.vm.evalPublic(ctx.pos(0)!, ctx.scope);
     throw new PineRuntimeError(String(msg ?? "runtime.error"), ctx.node.line);

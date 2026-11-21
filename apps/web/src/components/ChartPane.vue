@@ -548,7 +548,7 @@ function rebuildAllPanes(): void {
       ownPane: null,
       codeSnapshot: script.code,
       inputs: res.script.inputs,
-      usesObjects: /\b(box|label|line|linefill)\./.test(script.code),
+      usesObjects: /\b(box|label|line|linefill|table)\./.test(script.code),
       lastObjRunTime: 0,
     };
     pineRuntimes.set(id, entry);
@@ -3002,15 +3002,18 @@ function setPixels<T>(slot: Ref<T[]>, next: T[]): void {
  *  same-frame events (data change + range change + drag) cost a single
  *  projection pass and a single Vue overlay patch. */
 let recalcRectRaf = 0;
-/* ── Pine drawing-object overlay (boxes / labels / lines) ────────────────
+/* ── Pine drawing-object overlay (boxes / labels / lines / tables) ────────
  * Projected from bar indexes + prices to pixels on every pan/zoom/data
  * change — the same trigger loop as the session boxes. */
-interface PineBoxPx { key: string; left: number; width: number; top: number; height: number; bg: string; border: string }
-interface PineLabelPx { key: string; x: number; y: number; text: string; color: string; bg: string; align: string }
-interface PineLinePx { key: string; x1: number; y1: number; x2: number; y2: number; color: string; width: number }
+interface PineBoxPx { key: string; left: number; width: number; top: number; height: number; bg: string; border: string; borderStyle: string }
+interface PineLabelPx { key: string; x: number; y: number; text: string; color: string; bg: string; align: string; style: string }
+interface PineLinePx { key: string; x1: number; y1: number; x2: number; y2: number; color: string; width: number; dash: string }
+interface PineTableCellPx { text: string; color: string; bg: string; align: string }
+interface PineTablePx { key: string; pos: string; rows: PineTableCellPx[][] }
 const pineBoxPx = ref<PineBoxPx[]>([]);
 const pineLabelPx = ref<PineLabelPx[]>([]);
 const pineLinePx = ref<PineLinePx[]>([]);
+const pineTablePx = ref<PineTablePx[]>([]);
 let pineObjectsSig = "";
 
 const pineNum = (v: unknown): number => {
@@ -3024,6 +3027,7 @@ function recalcPineObjects(): void {
   const boxes: PineBoxPx[] = [];
   const labels: PineLabelPx[] = [];
   const lines: PineLinePx[] = [];
+  const tables: PineTablePx[] = [];
   if (pineRuntimes.size > 0) {
     const c = displayCandles.value;
     const tfSec = (TIMEFRAME_SECONDS as Record<string, number>)[market.timeframe] ?? 60;
@@ -3036,15 +3040,19 @@ function recalcPineObjects(): void {
           const n = pineNum(v);
           return Number.isFinite(n) ? n : null;
         };
-        const xOf = (barIdx: number): number | null => {
-          const i = Math.round(barIdx);
+        // bar-index → time → x; xloc.bar_time objects carry epoch-ms instead
+        const xOf = (v: number | null, xloc: string): number | null => {
+          if (v === null) return null;
+          if (xloc === "bar_time") return ad.timeToX(v / 1000);
+          const i = Math.round(v);
           if (i < 0) return null;
           const t = i < c.length ? c[i]!.time : c[c.length - 1]!.time + (i - (c.length - 1)) * tfSec * 1000;
           return ad.timeToX(t);
         };
         const yOf = (price: number): number | null => ad.getPriceY(price);
         if (obj.__kind === "box") {
-          const x1 = px(p["left"]); const x2 = px(p["right"]);
+          const xloc = String(p["xloc"] ?? "bar_index");
+          const x1 = xOf(px(p["left"]), xloc); const x2 = xOf(px(p["right"]), xloc);
           const y1 = yOf(px(p["top"]) ?? NaN); const y2 = yOf(px(p["bottom"]) ?? NaN);
           if (x1 === null || x2 === null || y1 === null || y2 === null) continue;
           boxes.push({
@@ -3055,9 +3063,11 @@ function recalcPineObjects(): void {
             height: Math.max(1, Math.abs(y2 - y1)),
             bg: String(p["bgcolor"] ?? "transparent"),
             border: String(p["border_color"] ?? "transparent"),
+            borderStyle: String(p["border_style"] ?? "solid"),
           });
         } else if (obj.__kind === "label") {
-          const x = px(p["idx"]); const y = px(p["y"]);
+          const xloc = String(p["xloc"] ?? "bar_index");
+          const x = xOf(px(p["idx"]), xloc); const y = yOf(px(p["y"]) ?? NaN);
           if (x === null || y === null) continue;
           labels.push({
             key: `${id}-${obj.id}`,
@@ -3066,27 +3076,67 @@ function recalcPineObjects(): void {
             color: String(p["textcolor"] ?? "var(--text)"),
             bg: String(p["color"] ?? "transparent"),
             align: String(p["textalign"] ?? "center"),
+            style: String(p["style"] ?? "label_down"),
           });
         } else if (obj.__kind === "line") {
-          const x1 = px(p["x1"]); const y1 = yOf(px(p["y1"]) ?? NaN);
-          const x2 = px(p["x2"]); const y2 = yOf(px(p["y2"]) ?? NaN);
+          const xloc = String(p["xloc"] ?? "bar_index");
+          const extend = String(p["extend"] ?? "none");
+          const x1 = xOf(px(p["x1"]), xloc); const x2 = xOf(px(p["x2"]), xloc);
+          const y1 = yOf(px(p["y1"]) ?? NaN); const y2 = yOf(px(p["y2"]) ?? NaN);
           if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+          // extend.both/left/right: stretch the segment beyond its endpoints
+          // (the SVG layer clips it at the pane edges).
+          let lx1 = x1; let ly1 = y1; let lx2 = x2; let ly2 = y2;
+          if (extend !== "none") {
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const len = Math.max(1, Math.hypot(dx, dy));
+            const t = 20000 / len;
+            if (extend === "both") { lx1 = x1 - dx * t; ly1 = y1 - dy * t; lx2 = x2 + dx * t; ly2 = y2 + dy * t; }
+            else if (extend === "left") { lx1 = x1 - dx * t; ly1 = y1 - dy * t; }
+            else if (extend === "right") { lx2 = x2 + dx * t; ly2 = y2 + dy * t; }
+          }
+          const style = String(p["style"] ?? "solid");
           lines.push({
             key: `${id}-${obj.id}`,
-            x1, y1, x2, y2,
+            x1: lx1, y1: ly1, x2: lx2, y2: ly2,
             color: String(p["color"] ?? "#2196F3"),
             width: Math.max(1, pineNum(p["width"]) || 1),
+            dash: style === "dashed" ? "6 4" : style === "dotted" ? "2 3" : "",
           });
+        } else if (obj.__kind === "table") {
+          const cells = (p["cells"] ?? {}) as Record<string, { text: string; color: string; bg: string; align: string }>;
+          const keys = Object.keys(cells);
+          if (keys.length === 0) continue;
+          let maxRow = 0; let maxCol = 0;
+          for (const k of keys) {
+            const parts = k.split(":");
+            const r = Number(parts[0]);
+            const col = Number(parts[1]);
+            if (Number.isFinite(r) && r > maxRow) maxRow = r;
+            if (Number.isFinite(col) && col > maxCol) maxCol = col;
+          }
+          const rows: PineTableCellPx[][] = [];
+          for (let r = 0; r <= maxRow; r++) {
+            const row: PineTableCellPx[] = [];
+            for (let col = 0; col <= maxCol; col++) {
+              const cell = cells[`${r}:${col}`];
+              row.push(cell ? { text: cell.text, color: cell.color, bg: cell.bg, align: cell.align || "center" } : { text: "", color: "inherit", bg: "transparent", align: "center" });
+            }
+            rows.push(row);
+          }
+          tables.push({ key: `${id}-${obj.id}`, pos: String(p["position"] ?? "top_right"), rows });
         }
       }
     }
   }
-  const sig = JSON.stringify([boxes, labels, lines]);
+  const sig = JSON.stringify([boxes, labels, lines, tables]);
   if (sig !== pineObjectsSig) {
     pineObjectsSig = sig;
     pineBoxPx.value = boxes;
     pineLabelPx.value = labels;
     pineLinePx.value = lines;
+    pineTablePx.value = tables;
   }
 }
 
@@ -6412,10 +6462,10 @@ onBeforeUnmount(() => {
         <span v-if="b.showLabel" class="session-label" :style="{ color: b.color, top: b.labelTop + 'px' }">{{ b.name }}</span>
       </div>
     </div>
-    <!-- Pine Script drawing objects: boxes, labels, lines from user scripts.
-         Painted behind drawings, same layer model as session boxes. -->
+    <!-- Pine Script drawing objects: boxes, labels, lines, tables from user
+         scripts. Painted behind drawings, same layer model as session boxes. -->
     <div
-      v-if="pineBoxPx.length || pineLabelPx.length || pineLinePx.length"
+      v-if="pineBoxPx.length || pineLabelPx.length || pineLinePx.length || pineTablePx.length"
       class="pine-objects-layer drawing-clip"
       :style="{ right: axisRightW + 'px', bottom: overlayBottom + 'px' }"
     >
@@ -6424,21 +6474,38 @@ onBeforeUnmount(() => {
           v-for="l in pineLinePx"
           :key="l.key"
           :x1="l.x1" :y1="l.y1" :x2="l.x2" :y2="l.y2"
-          :stroke="l.color" :stroke-width="l.width"
+          :stroke="l.color" :stroke-width="l.width" :stroke-dasharray="l.dash || undefined"
         />
       </svg>
       <div
         v-for="b in pineBoxPx"
         :key="b.key"
         class="pine-box"
-        :style="{ left: b.left + 'px', width: b.width + 'px', top: b.top + 'px', height: b.height + 'px', background: b.bg, border: b.border !== 'transparent' ? '1px solid ' + b.border : 'none' }"
+        :style="{ left: b.left + 'px', width: b.width + 'px', top: b.top + 'px', height: b.height + 'px', background: b.bg, border: b.border !== 'transparent' ? '1px ' + (b.borderStyle === 'dashed' ? 'dashed' : b.borderStyle === 'dotted' ? 'dotted' : 'solid') + ' ' + b.border : 'none' }"
       ></div>
       <div
         v-for="l in pineLabelPx"
         :key="l.key"
         class="pine-label"
+        :class="'pine-label-' + (l.style || 'label_down')"
         :style="'left:' + l.x + 'px; top:' + l.y + 'px; color:' + l.color + '; background:' + (l.bg !== 'transparent' ? l.bg : 'transparent') + '; text-align:' + l.align"
       >{{ l.text }}</div>
+      <div
+        v-for="t in pineTablePx"
+        :key="t.key"
+        class="pine-table"
+        :class="'pine-table-' + t.pos"
+      >
+        <table>
+          <tr v-for="(row, ri) in t.rows" :key="ri">
+            <td
+              v-for="(cell, ci) in row"
+              :key="ci"
+              :style="'color:' + cell.color + '; background:' + cell.bg + '; text-align:' + cell.align"
+            >{{ cell.text }}</td>
+          </tr>
+        </table>
+      </div>
     </div>
     <!-- Fixed Range Volume Profile: two-tone histogram anchored at the
          range's left edge + POC / optional Value Area lines, painted behind
@@ -8650,6 +8717,41 @@ onBeforeUnmount(() => {
   padding: 2px 4px;
   border-radius: 3px;
 }
+.pine-label-label_up {
+  transform: translateY(0);
+}
+.pine-label-label_left {
+  transform: translate(-100%, -50%);
+}
+.pine-label-label_right {
+  transform: translate(0, -50%);
+}
+/* Dashboard tables rendered by user scripts (table.new / table.cell). */
+.pine-table {
+  position: absolute;
+  pointer-events: none;
+  font-size: 11px;
+  line-height: 1.5;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.pine-table table {
+  border-collapse: collapse;
+}
+.pine-table td {
+  padding: 2px 8px;
+  white-space: pre;
+  font-weight: 600;
+}
+.pine-table-top_right { top: 8px; right: 12px; }
+.pine-table-top_left { top: 8px; left: 12px; }
+.pine-table-top_center { top: 8px; left: 50%; transform: translateX(-50%); }
+.pine-table-middle_right { top: 50%; right: 12px; transform: translateY(-50%); }
+.pine-table-middle_left { top: 50%; left: 12px; transform: translateY(-50%); }
+.pine-table-middle_center { top: 50%; left: 50%; transform: translate(-50%, -50%); }
+.pine-table-bottom_right { bottom: 8px; right: 12px; }
+.pine-table-bottom_left { bottom: 8px; left: 12px; }
+.pine-table-bottom_center { bottom: 8px; left: 50%; transform: translateX(-50%); }
 .session-layer {
   position: absolute;
   inset: 0;
