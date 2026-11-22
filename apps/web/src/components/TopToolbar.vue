@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, onUnmounted } from "vue";
+import { ref, computed, nextTick, onUnmounted } from "vue";
 import TimeframeSelector from "./TimeframeSelector.vue";
 import { useReplayStore } from "@/stores/replay";
 import { useDemoStore } from "@/stores/demo";
@@ -31,6 +31,10 @@ const pine = usePineStore();
 const auth = useAuthStore();
 const chat = useChatStore();
 const adminOpen = ref(false);
+
+/** How many SMA/EMA lines are on the current symbol's chart (menu badge). */
+const smaCount = computed(() => indicators.maCurrentList().filter((m) => m.kind === "sma").length);
+const emaCount = computed(() => indicators.maCurrentList().filter((m) => m.kind === "ema").length);
 
 // Profile chip dropdown (username + sign out)
 const profileOpen = ref(false);
@@ -231,24 +235,26 @@ function toggleReplay(): void {
           type="button"
           role="menuitemcheckbox"
           :aria-checked="indicators.smaAdded"
-          @click="indicators.smaAdded = !indicators.smaAdded"
+          title="Add a Simple Moving Average line — select again for another one"
+          @click="indicators.addMaInstance('sma')"
         >
           <span class="ind-check" :class="{ on: indicators.smaAdded }">
             <svg v-if="indicators.smaAdded" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12l5 5L20 7" /></svg>
           </span>
-          <span class="ind-item-name">Simple Moving Average</span>
+          <span class="ind-item-name">Simple Moving Average<template v-if="smaCount"> · {{ smaCount }}</template></span>
         </button>
         <button
           class="ind-item"
           type="button"
           role="menuitemcheckbox"
           :aria-checked="indicators.emaAdded"
-          @click="indicators.emaAdded = !indicators.emaAdded"
+          title="Add an Exponential Moving Average line — select again for another one"
+          @click="indicators.addMaInstance('ema')"
         >
           <span class="ind-check" :class="{ on: indicators.emaAdded }">
             <svg v-if="indicators.emaAdded" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12l5 5L20 7" /></svg>
           </span>
-          <span class="ind-item-name">Exponential Moving Average</span>
+          <span class="ind-item-name">Exponential Moving Average<template v-if="emaCount"> · {{ emaCount }}</template></span>
         </button>
         <button
           class="ind-item"

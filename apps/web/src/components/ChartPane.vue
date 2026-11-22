@@ -50,8 +50,8 @@ interface SessionBoxPx {
 }
 const sessionPixels = ref<SessionBoxPx[]>([]);
 const indSettingsOpen = ref(false);
-const smaSettingsOpen = ref(false);
-const emaSettingsOpen = ref(false);
+/** Which SMA/EMA instance's settings popup is open in the legend. */
+const maSettingsId = ref<number | null>(null);
 /** Which Pine script's inputs popup is open in the legend (declared here
  *  so the shared outside-close watcher above can reference it). */
 const pineSettingsId = ref<string | null>(null);
@@ -65,13 +65,12 @@ function indSettingsOutside(e: PointerEvent): void {
   if (pop && pop.contains(e.target as Node)) return;
   const legend = document.querySelector(".indicator-legend");
   if (legend && legend.contains(e.target as Node)) return;
-  smaSettingsOpen.value = false;
-  emaSettingsOpen.value = false;
+  maSettingsId.value = null;
   indSettingsOpen.value = false;
   vpSettingsOpen.value = false;
   pineSettingsId.value = null;
 }
-watch([indSettingsOpen, smaSettingsOpen, emaSettingsOpen, vpSettingsOpen, pineSettingsId], (states) => {
+watch([indSettingsOpen, maSettingsId, vpSettingsOpen, pineSettingsId], (states) => {
   if (states.some(Boolean)) document.addEventListener("pointerdown", indSettingsOutside, true);
   else document.removeEventListener("pointerdown", indSettingsOutside, true);
 });
@@ -385,46 +384,44 @@ function pushMaData(): void {
     }
     return pts;
   };
-  if (indicators.smaAdded) commitWhenStable(() => adapter?.setMaData("sma", toPoints(computeSma(closes, indicators.smaLength))));
-  if (indicators.emaAdded) commitWhenStable(() => adapter?.setMaData("ema", toPoints(computeEma(closes, indicators.emaLength))));
+  for (const m of indicators.maCurrentList()) {
+    const id = `ma-${m.id}`;
+    adapter.setMaStyle(id, m.color);
+    adapter.setMaVisible(id, m.visible);
+    const pts = toPoints(m.kind === "sma" ? computeSma(closes, m.length) : computeEma(closes, m.length));
+    commitWhenStable(() => adapter?.setMaData(id, pts));
+  }
 }
 
-function syncMa(kind: "sma" | "ema"): void {
+/** The one source of truth for MA series on the chart: creates, restyles,
+ *  feeds and prunes a series per instance of the CURRENT symbol. */
+function syncAllMas(): void {
   if (!adapter) return;
-  const added = kind === "sma" ? indicators.smaAdded : indicators.emaAdded;
-  if (added) {
-    const color = kind === "sma" ? indicators.smaColor : indicators.emaColor;
-    adapter.setMaStyle(kind, color);
-    const candles = displayCandles.value;
-    const closes = candles.map((c) => c.close);
-    const vals = kind === "sma" ? computeSma(closes, indicators.smaLength) : computeEma(closes, indicators.emaLength);
+  const insts = indicators.maCurrentList();
+  const keep: string[] = [];
+  const candles = displayCandles.value;
+  const closes = candles.map((c) => c.close);
+  for (const m of insts) {
+    const id = `ma-${m.id}`;
+    keep.push(id);
+    adapter.setMaStyle(id, m.color); // ensures the series exists
+    adapter.setMaVisible(id, m.visible);
+    const vals = m.kind === "sma" ? computeSma(closes, m.length) : computeEma(closes, m.length);
     const pts: { time: number; value: number }[] = [];
     for (let i = 0; i < candles.length; i++) {
       const v = vals[i];
       if (v == null || !Number.isFinite(v)) continue;
       pts.push({ time: candles[i]!.time, value: v });
     }
-    adapter.setMaData(kind, pts);
-  } else {
-    adapter.removeMa(kind);
+    adapter.setMaData(id, pts);
   }
+  adapter.pruneMas(keep);
 }
 
 watch(
-  () => [indicators.smaAdded, indicators.smaLength, indicators.smaColor, indicators.smaVisible],
-  () => {
-    if (!adapter) return;
-    adapter.setMaVisible("sma", indicators.smaVisible);
-    syncMa("sma");
-  }
-);
-watch(
-  () => [indicators.emaAdded, indicators.emaLength, indicators.emaColor, indicators.emaVisible],
-  () => {
-    if (!adapter) return;
-    adapter.setMaVisible("ema", indicators.emaVisible);
-    syncMa("ema");
-  }
+  () => [indicators.maInstances, market.instrument],
+  () => syncAllMas(),
+  { deep: true }
 );
 
 function pushRsiData(): void {
@@ -1657,13 +1654,11 @@ function rebuildChart(): void {
   // after those overlays re-enter the chart (same re-anchor risk as a
   // refresh / timeframe switch).
   commitChartData(displayCandles.value, true);
-  if (indicators.smaAdded) {
-    adapter.setMaStyle("sma", indicators.smaColor);
-    adapter.setMaVisible("sma", indicators.smaVisible);
-  }
-  if (indicators.emaAdded) {
-    adapter.setMaStyle("ema", indicators.emaColor);
-    adapter.setMaVisible("ema", indicators.emaVisible);
+  // MA series are keyed by instance id — recreate every instance of the
+  // current symbol (fresh chart mount dropped the old series).
+  for (const m of indicators.maCurrentList()) {
+    adapter.setMaStyle(`ma-${m.id}`, m.color);
+    adapter.setMaVisible(`ma-${m.id}`, m.visible);
   }
   if (indicators.rsiAdded) {
     adapter.setRsiStyle(indicators.rsiColor);
@@ -1933,8 +1928,12 @@ function maRsiPointsFor(candles: Candle[]) {
     return pts;
   };
   return {
-    sma: toPoints(computeSma(closes, indicators.smaLength)),
-    ema: toPoints(computeEma(closes, indicators.emaLength)),
+    mas: indicators.maCurrentList().map((m) => ({
+      id: `ma-${m.id}`,
+      color: m.color,
+      visible: m.visible,
+      points: toPoints(m.kind === "sma" ? computeSma(closes, m.length) : computeEma(closes, m.length)),
+    })),
     rsi: toPoints(computeRsi(closes, indicators.rsiLength)),
   };
 }
@@ -1954,8 +1953,7 @@ function commitChartDataInner(candles: Candle[], freshMount = false): void {
     // timeframe's viewport position survives and the new data loads off
     // the live edge (blank space at the right).
     adapter.setData([]);
-    if (indicators.smaAdded) adapter.setMaData("sma", []);
-    if (indicators.emaAdded) adapter.setMaData("ema", []);
+    for (const m of indicators.maCurrentList()) adapter.setMaData(`ma-${m.id}`, []);
     if (indicators.rsiAdded) adapter.setRsiData([]);
     for (const id of pine.currentAdded()) {
       const entry = pineRuntimes.get(id);
@@ -1967,8 +1965,11 @@ function commitChartDataInner(candles: Candle[], freshMount = false): void {
   }
   const pts = maRsiPointsFor(safe);
   adapter.setData(safe);
-  if (indicators.smaAdded) adapter.setMaData("sma", pts.sma);
-  if (indicators.emaAdded) adapter.setMaData("ema", pts.ema);
+  for (const m of pts.mas) {
+    adapter.setMaStyle(m.id, m.color);
+    adapter.setMaVisible(m.id, m.visible);
+    adapter.setMaData(m.id, m.points);
+  }
   if (indicators.rsiAdded) adapter.setRsiData(pts.rsi);
   // Pine scripts ride the same atomic commit (incremental VMs recompute
   // only what the new history actually changed).
@@ -2007,8 +2008,9 @@ function commitChartTailInner(lastCandle: Candle): void {
     return;
   }
   const pts = maRsiPointsFor(displayCandles.value);
-  if (indicators.smaAdded && pts.sma.length) adapter.updateMaLast("sma", pts.sma[pts.sma.length - 1]!);
-  if (indicators.emaAdded && pts.ema.length) adapter.updateMaLast("ema", pts.ema[pts.ema.length - 1]!);
+  for (const m of pts.mas) {
+    if (m.points.length) adapter.updateMaLast(m.id, m.points[m.points.length - 1]!);
+  }
   if (indicators.rsiAdded && pts.rsi.length) adapter.updateRsiLast(pts.rsi[pts.rsi.length - 1]!);
   // Pine tail: the incremental VM re-runs just the last bar per tick.
   pushPineData(false);
@@ -5498,8 +5500,7 @@ onMounted(async () => {
   const onChartMouseDown = (e: MouseEvent) => {
     // Any click on the chart closes the indicator settings popup
     indSettingsOpen.value = false;
-    smaSettingsOpen.value = false;
-    emaSettingsOpen.value = false;
+    maSettingsId.value = null;
     pineSettingsId.value = null;
     // Demo limit placement: a click sets the draft entry price
     if (demo.active && draft.value) {
@@ -6151,46 +6152,26 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- Indicator legend (TradingView-style): one row per indicator,
-         stacked UNDER the symbol label — never overlapping. -->
+         stacked UNDER the symbol label — never overlapping. SMA/EMA carry
+         one row PER instance (multi-add with own length/color). -->
     <div v-if="instrument" class="indicator-legend">
-      <div v-if="indicators.smaAdded" class="legend-row">
-        <span class="ind-legend-name" :style="{ color: indicators.smaColor }" :class="{ off: !indicators.smaVisible }">SMA {{ indicators.smaLength }}</span>
-        <button class="ind-legend-btn" type="button" :title="indicators.smaVisible ? 'Hide' : 'Show'" @click="indicators.smaVisible = !indicators.smaVisible">
-          <svg v-if="indicators.smaVisible" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" /><circle cx="12" cy="12" r="2.6" /></svg>
+      <div v-for="m in indicators.maCurrentList()" :key="m.id" class="legend-row">
+        <span class="ind-legend-name" :style="{ color: m.color }" :class="{ off: !m.visible }">{{ m.kind === "sma" ? "SMA" : "EMA" }} {{ m.length }}</span>
+        <button class="ind-legend-btn" type="button" :title="m.visible ? 'Hide' : 'Show'" @click="indicators.patchMaInstance(m.id, { visible: !m.visible })">
+          <svg v-if="m.visible" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" /><circle cx="12" cy="12" r="2.6" /></svg>
           <svg v-else viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5c2 0 3.7.6 5.1 1.5M22 12s-3.5 6.5-10 6.5c-2 0-3.7-.6-5.1-1.5" /><path d="M4 20L20 4" /></svg>
         </button>
-        <button class="ind-legend-btn" type="button" title="Settings" @click="smaSettingsOpen = !smaSettingsOpen">
+        <button class="ind-legend-btn" type="button" title="Settings" @click="maSettingsId = maSettingsId === m.id ? null : m.id">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l-.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z" /></svg>
         </button>
-        <button class="ind-legend-btn" type="button" title="Remove" @click="indicators.smaAdded = false">
+        <button class="ind-legend-btn" type="button" title="Remove" @click="indicators.removeMaInstance(m.id)">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
         </button>
-        <div v-if="smaSettingsOpen" class="ind-settings ma-settings" @click.stop>
-          <div class="ind-settings-title">SMA — settings</div>
+        <div v-if="maSettingsId === m.id" class="ind-settings ma-settings" @click.stop>
+          <div class="ind-settings-title">{{ m.kind === "sma" ? "SMA" : "EMA" }} {{ m.length }} — settings</div>
           <div class="ind-set-row">
-            <input class="ind-set-color" type="color" v-model="indicators.smaColor" aria-label="SMA color" />
-            <input class="rsi-num" type="number" min="2" max="500" v-model.number="indicators.smaLength" aria-label="SMA length" />
-            <span class="ma-len-hint">period</span>
-          </div>
-        </div>
-      </div>
-      <div v-if="indicators.emaAdded" class="legend-row">
-        <span class="ind-legend-name" :style="{ color: indicators.emaColor }" :class="{ off: !indicators.emaVisible }">EMA {{ indicators.emaLength }}</span>
-        <button class="ind-legend-btn" type="button" :title="indicators.emaVisible ? 'Hide' : 'Show'" @click="indicators.emaVisible = !indicators.emaVisible">
-          <svg v-if="indicators.emaVisible" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z" /><circle cx="12" cy="12" r="2.6" /></svg>
-          <svg v-else viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-6.5 10-6.5c2 0 3.7.6 5.1 1.5M22 12s-3.5 6.5-10 6.5c-2 0-3.7-.6-5.1-1.5" /><path d="M4 20L20 4" /></svg>
-        </button>
-        <button class="ind-legend-btn" type="button" title="Settings" @click="emaSettingsOpen = !emaSettingsOpen">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h0a1.7 1.7 0 0 0 1.87-.34l-.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z" /></svg>
-        </button>
-        <button class="ind-legend-btn" type="button" title="Remove" @click="indicators.emaAdded = false">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
-        </button>
-        <div v-if="emaSettingsOpen" class="ind-settings ma-settings" @click.stop>
-          <div class="ind-settings-title">EMA — settings</div>
-          <div class="ind-set-row">
-            <input class="ind-set-color" type="color" v-model="indicators.emaColor" aria-label="EMA color" />
-            <input class="rsi-num" type="number" min="2" max="500" v-model.number="indicators.emaLength" aria-label="EMA length" />
+            <input class="ind-set-color" type="color" :value="m.color" @input="indicators.patchMaInstance(m.id, { color: ($event.target as HTMLInputElement).value })" :aria-label="m.kind.toUpperCase() + ' color'" />
+            <input class="rsi-num" type="number" min="2" max="500" :value="m.length" @change="indicators.patchMaInstance(m.id, { length: Number(($event.target as HTMLInputElement).value) })" :aria-label="m.kind.toUpperCase() + ' length'" />
             <span class="ma-len-hint">period</span>
           </div>
         </div>
@@ -8343,6 +8324,8 @@ onBeforeUnmount(() => {
   left: 0;
   z-index: 8;
   min-width: 205px;
+  max-height: min(420px, 62vh);
+  overflow-y: auto;
   padding: 8px 10px;
   border-radius: 10px;
   border: 1px solid var(--glass-border);

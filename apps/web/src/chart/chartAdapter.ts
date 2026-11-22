@@ -58,12 +58,14 @@ export interface ChartAdapter {
   setInstrument(instrument: string): void;
   /** Restyle the candles (chart-settings panel). Pass theme defaults to reset. */
   setCandleColors(o: { up: string; down: string; borderUp: string; borderDown: string; wickUp: string; wickDown: string }): void;
-  /** RSI sub-pane (LWC v5 panes). */
-  setMaData(kind: "sma" | "ema", points: { time: number; value: number }[]): void;
-  updateMaLast(kind: "sma" | "ema", point: { time: number; value: number }): void;
-  setMaStyle(kind: "sma" | "ema", color: string): void;
-  setMaVisible(kind: "sma" | "ema", visible: boolean): void;
-  removeMa(kind: "sma" | "ema"): void;
+  /** Moving-average overlays — one series per instance id ("ma-<n>"). */
+  setMaData(id: string, points: { time: number; value: number }[]): void;
+  updateMaLast(id: string, point: { time: number; value: number }): void;
+  setMaStyle(id: string, color: string): void;
+  setMaVisible(id: string, visible: boolean): void;
+  removeMa(id: string): void;
+  /** Removes every MA series not in `keep` (symbol switch / deletes). */
+  pruneMas(keep: string[]): void;
   setRsiData(points: { time: number; value: number }[]): void;
   updateRsiLast(point: { time: number; value: number }): void;
   setRsiStyle(color: string): void;
@@ -403,15 +405,18 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
 
   let lastData: Candle[] = [];
 
-  /* ── Moving-average overlays (pane 0 — glued to the price chart) ────── */
-  const maSeries: Record<"sma" | "ema", ISeriesApi<"Line"> | null> = { sma: null, ema: null };
+  /* ── Moving-average overlays (pane 0 — glued to the price chart) ──────
+   * Multiple instances: the registry is keyed by instance id ("ma-<n>"),
+   * so a chart can carry several SMA/EMA lines at once. */
+  const maSeries = new Map<string, ISeriesApi<"Line">>();
 
-  function ensureMa(kind: "sma" | "ema"): ISeriesApi<"Line"> {
-    if (!maSeries[kind]) {
-      maSeries[kind] = chart.addSeries(
+  function ensureMa(id: string, color: string): ISeriesApi<"Line"> {
+    let series = maSeries.get(id);
+    if (!series) {
+      series = chart.addSeries(
         LineSeries,
         {
-          color: kind === "sma" ? "#f59e0b" : "#38bdf8",
+          color,
           lineWidth: 2,
           priceLineVisible: false,
           lastValueVisible: false,
@@ -423,12 +428,25 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
         },
         0 // overlay on the main chart — pans/zoom with the candles
       );
+      maSeries.set(id, series);
     }
-    return maSeries[kind]!;
+    return series;
   }
 
-  function setMaData(kind: "sma" | "ema", points: { time: number; value: number }[]): void {
-    const series = ensureMa(kind);
+  /** Removes every MA series NOT in `keep` (symbol switch / instance delete). */
+  function pruneMas(keep: string[]): void {
+    const keepSet = new Set(keep);
+    for (const [id, series] of [...maSeries]) {
+      if (!keepSet.has(id)) {
+        chart.removeSeries(series);
+        maSeries.delete(id);
+      }
+    }
+  }
+
+  function setMaData(id: string, points: { time: number; value: number }[]): void {
+    const series = maSeries.get(id);
+    if (!series) return;
     // setData on a fresh series refits the price scale and resets the
     // visible range — the chart visibly "jumps down". Snapshot the user's
     // viewport and put it back exactly as it was.
@@ -437,22 +455,25 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     if (range) chart.timeScale().setVisibleLogicalRange(range);
   }
 
-  function updateMaLast(kind: "sma" | "ema", point: { time: number; value: number }): void {
-    ensureMa(kind).update(point as never);
+  function updateMaLast(id: string, point: { time: number; value: number }): void {
+    const series = maSeries.get(id);
+    if (series) series.update(point as never);
   }
 
-  function setMaStyle(kind: "sma" | "ema", color: string): void {
-    ensureMa(kind).applyOptions({ color });
+  function setMaStyle(id: string, color: string): void {
+    ensureMa(id, color).applyOptions({ color });
   }
 
-  function setMaVisible(kind: "sma" | "ema", visible: boolean): void {
-    ensureMa(kind).applyOptions({ visible });
+  function setMaVisible(id: string, visible: boolean): void {
+    const series = maSeries.get(id);
+    if (series) series.applyOptions({ visible });
   }
 
-  function removeMa(kind: "sma" | "ema"): void {
-    if (maSeries[kind]) {
-      chart.removeSeries(maSeries[kind]!);
-      maSeries[kind] = null;
+  function removeMa(id: string): void {
+    const series = maSeries.get(id);
+    if (series) {
+      chart.removeSeries(series);
+      maSeries.delete(id);
     }
   }
 
@@ -782,6 +803,7 @@ export function createChartAdapter(container: HTMLElement): ChartAdapter {
     setMaStyle,
     setMaVisible,
     removeMa,
+    pruneMas,
     setRsiData,
     updateRsiLast,
     setRsiStyle,

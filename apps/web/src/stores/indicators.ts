@@ -4,6 +4,16 @@ import { ref, computed, watch } from "vue";
 
 const KEY = "tk-indicators-v1";
 
+/** One SMA/EMA line on the chart — a chart can carry several, each with
+ *  its own length/color. Per symbol (like every other added indicator). */
+export interface MaInstance {
+  id: number;
+  kind: "sma" | "ema";
+  length: number;
+  color: string;
+  visible: boolean;
+}
+
 /** Built-in sessions form a CHAIN anchored to each market's real opening
  *  bell in its HOME clock (DST-aware): Sydney 08:00 → Tokyo 09:00 →
  *  Tokyo 09:00 → London 08:00 → NY 08:00 → NY 10:00 (overlap end) →
@@ -211,21 +221,189 @@ export const useIndicatorsStore = defineStore("indicators", () => {
   const rsiUpper = ref(70);
   const rsiLower = ref(30);
 
-  /* ── Moving averages (SMA / EMA overlays on the main pane) ──────────── */
+  /* ── Moving averages (SMA / EMA overlays on the main pane) ────────────
+   * MULTIPLE instances per symbol: every selection in the menu adds one
+   * more line (own length + color), removed via the legend ×. Instances
+   * are per-symbol, like the added flags. The legacy single-SMA/EMA
+   * settings remain for cloud-payload compatibility. */
+  const SMA_LENGTHS = [20, 50, 100, 200];
+  const EMA_LENGTHS = [50, 20, 100, 200];
+  const SMA_COLORS = ["#f59e0b", "#38bdf8", "#a78bfa", "#f472b6", "#34d399"];
+  const EMA_COLORS = ["#38bdf8", "#f59e0b", "#f472b6", "#34d399", "#a78bfa"];
+
+  const maSeq = ref(1);
+  const maInstances = ref<Record<string, MaInstance[]>>({});
+
+  function maListFor(sym: string): MaInstance[] {
+    return maInstances.value[sym] ?? [];
+  }
+  function maCurrentList(): MaInstance[] {
+    return maListFor(useMarketStore().instrument);
+  }
+
+  /** Next default length for a kind: the first cycle value not already on
+   *  the chart, so a second SMA comes out 50, then 100, then 200. */
+  function nextMaLength(kind: "sma" | "ema", existing: MaInstance[]): number {
+    const cycle = kind === "sma" ? SMA_LENGTHS : EMA_LENGTHS;
+    const used = new Set(existing.filter((m) => m.kind === kind).map((m) => m.length));
+    for (const l of cycle) if (!used.has(l)) return l;
+    return cycle[existing.filter((m) => m.kind === kind).length % cycle.length]!;
+  }
+  /** Palette color not already used by the same kind (falls back to cycle). */
+  function nextMaColor(kind: "sma" | "ema", existing: MaInstance[]): string {
+    const palette = kind === "sma" ? SMA_COLORS : EMA_COLORS;
+    const used = new Set(existing.filter((m) => m.kind === kind).map((m) => m.color));
+    for (const c of palette) if (!used.has(c)) return c;
+    return palette[existing.filter((m) => m.kind === kind).length % palette.length]!;
+  }
+
+  /** Adds one instance to the CURRENT symbol and syncs the legacy single
+   *  SMA/EMA settings from the first instance (cloud-payload compat). */
+  function addMaInstance(kind: "sma" | "ema"): MaInstance {
+    const sym = useMarketStore().instrument;
+    const existing = maListFor(sym);
+    const inst: MaInstance = {
+      id: maSeq.value++,
+      kind,
+      length: nextMaLength(kind, existing),
+      color: nextMaColor(kind, existing),
+      visible: true,
+    };
+    maInstances.value = { ...maInstances.value, [sym]: [...existing, inst] };
+    const first = maListFor(sym).find((m) => m.kind === kind);
+    if (first) {
+      if (kind === "sma") { smaLength.value = first.length; smaColor.value = first.color; smaVisible.value = first.visible; }
+      else { emaLength.value = first.length; emaColor.value = first.color; emaVisible.value = first.visible; }
+    }
+    return inst;
+  }
+
+  /** Removes ONE instance (legend ×) from the CURRENT symbol. */
+  function removeMaInstance(id: number): void {
+    const sym = useMarketStore().instrument;
+    const rest = maListFor(sym).filter((m) => m.id !== id);
+    const next = { ...maInstances.value };
+    if (rest.length > 0) next[sym] = rest;
+    else delete next[sym];
+    maInstances.value = next;
+    syncMaAddedFlags(sym);
+  }
+
+  /** Length/color/visibility edit on one instance (gear popup). */
+  function patchMaInstance(id: number, patch: { length?: number; color?: string; visible?: boolean }): void {
+    const sym = useMarketStore().instrument;
+    const list = maListFor(sym);
+    const idx = list.findIndex((m) => m.id === id);
+    if (idx < 0) return;
+    const cur = list[idx]!;
+    const nextInst: MaInstance = {
+      ...cur,
+      length: patch.length !== undefined ? Math.min(500, Math.max(2, Math.round(patch.length))) : cur.length,
+      color: patch.color !== undefined && /^#[0-9a-fA-F]{6}$/.test(patch.color) ? patch.color : cur.color,
+      visible: patch.visible !== undefined ? patch.visible : cur.visible,
+    };
+    const next = [...list];
+    next[idx] = nextInst;
+    maInstances.value = { ...maInstances.value, [sym]: next };
+    if (nextInst.id === list.find((m) => m.kind === cur.kind)?.id) {
+      if (cur.kind === "sma") { smaLength.value = nextInst.length; smaColor.value = nextInst.color; smaVisible.value = nextInst.visible; }
+      else { emaLength.value = nextInst.length; emaColor.value = nextInst.color; emaVisible.value = nextInst.visible; }
+    }
+  }
+
+  /** Keeps the per-symbol added flags in step with the instance lists, so
+   *  the menu checkbox and cloud sync reflect reality. */
+  function syncMaAddedFlags(sym: string): void {
+    const flags: AddedFlags = {};
+    for (const m of maListFor(sym)) flags[m.kind] = true;
+    const existing = addedMap.value[sym] ?? {};
+    const merged = { ...existing, ...flags };
+    for (const k of ["sma", "ema"] as const) {
+      if (!flags[k]) delete merged[k];
+    }
+    const next = { ...addedMap.value };
+    if (Object.keys(merged).length > 0) next[sym] = merged;
+    else delete next[sym];
+    addedMap.value = next;
+  }
+
+  /** Menu toggles: selecting SMA/EMA ALWAYS adds one more instance
+   *  (removal happens via the legend ×), so the checkbox simply reflects
+   *  whether any instance of the kind exists. */
   const smaAdded = computed({
-    get: () => addedFor("sma"),
-    set: (v: boolean) => setAdded("sma", v),
+    get: () => maCurrentList().some((m) => m.kind === "sma"),
+    set: (v: boolean) => {
+      if (v) addMaInstance("sma");
+      else {
+        const sym = useMarketStore().instrument;
+        const rest = maListFor(sym).filter((m) => m.kind !== "sma");
+        const next = { ...maInstances.value };
+        if (rest.length > 0) next[sym] = rest;
+        else delete next[sym];
+        maInstances.value = next;
+        syncMaAddedFlags(sym);
+      }
+    },
+  });
+  const emaAdded = computed({
+    get: () => maCurrentList().some((m) => m.kind === "ema"),
+    set: (v: boolean) => {
+      if (v) addMaInstance("ema");
+      else {
+        const sym = useMarketStore().instrument;
+        const rest = maListFor(sym).filter((m) => m.kind !== "ema");
+        const next = { ...maInstances.value };
+        if (rest.length > 0) next[sym] = rest;
+        else delete next[sym];
+        maInstances.value = next;
+        syncMaAddedFlags(sym);
+      }
+    },
   });
   const smaVisible = ref(true);
   const smaLength = ref(20);
   const smaColor = ref("#f59e0b");
-  const emaAdded = computed({
-    get: () => addedFor("ema"),
-    set: (v: boolean) => setAdded("ema", v),
-  });
   const emaVisible = ref(true);
   const emaLength = ref(50);
   const emaColor = ref("#38bdf8");
+
+  /** Legacy migration: symbols flagged sma/ema-added before instances
+   *  existed get one instance each with the stored global settings. */
+  function migrateLegacyMas(): void {
+    for (const [sym, flags] of Object.entries(addedMap.value)) {
+      if (!flags.sma && !flags.ema) continue;
+      const existing = maListFor(sym);
+      if (existing.some((m) => m.kind === "sma" || m.kind === "ema")) continue;
+      const seeded: MaInstance[] = [...existing];
+      if (flags.sma) seeded.push({ id: maSeq.value++, kind: "sma", length: smaLength.value, color: smaColor.value, visible: smaVisible.value });
+      if (flags.ema) seeded.push({ id: maSeq.value++, kind: "ema", length: emaLength.value, color: emaColor.value, visible: emaVisible.value });
+      maInstances.value = { ...maInstances.value, [sym]: seeded };
+    }
+  }
+
+  /** Sanitizer for cloud/local payloads of the instance map. */
+  function applyMaInstances(raw: unknown): void {
+    if (!raw || typeof raw !== "object") return;
+    let maxId = 0;
+    const clean: Record<string, MaInstance[]> = {};
+    for (const [sym, list] of Object.entries(raw as Record<string, unknown>)) {
+      if (!Array.isArray(list)) continue;
+      const insts: MaInstance[] = [];
+      for (const m of list as Array<Record<string, unknown>>) {
+        const kind = m?.kind === "ema" ? "ema" : m?.kind === "sma" ? "sma" : null;
+        if (!kind) continue;
+        const id = typeof m.id === "number" && Number.isFinite(m.id) ? Math.round(m.id) : 0;
+        const length = typeof m.length === "number" && m.length >= 2 && m.length <= 500 ? Math.round(m.length) : kind === "sma" ? 20 : 50;
+        const color = typeof m.color === "string" && /^#[0-9a-fA-F]{6}$/.test(m.color) ? m.color : "#38bdf8";
+        insts.push({ id, kind, length, color, visible: m.visible !== false });
+        if (id > maxId) maxId = id;
+      }
+      if (insts.length > 0) clean[sym] = insts.slice(0, 12);
+    }
+    maInstances.value = clean;
+    if (maxId >= maSeq.value) maSeq.value = maxId + 1;
+    for (const sym of Object.keys(clean)) syncMaAddedFlags(sym);
+  }
 
   /* ── Fixed Range Volume Profile (TradingView-style) ────────────────────
    * Two draggable time anchors define the profile window; the histogram,
@@ -303,6 +481,7 @@ export const useIndicatorsStore = defineStore("indicators", () => {
       emaVisible: emaVisible.value,
       emaLength: emaLength.value,
       emaColor: emaColor.value,
+      maInstances: JSON.parse(JSON.stringify(maInstances.value)),
       vpVisible: vpVisible.value,
       vpRows: vpRows.value,
       vpVaPercent: vpVaPercent.value,
@@ -364,6 +543,13 @@ export const useIndicatorsStore = defineStore("indicators", () => {
     if (typeof p.emaVisible === "boolean") emaVisible.value = p.emaVisible;
     if (typeof p.emaLength === "number" && p.emaLength >= 2 && p.emaLength <= 500) emaLength.value = Math.round(p.emaLength);
     if (typeof p.emaColor === "string" && /^#[0-9a-fA-F]{6}$/.test(p.emaColor)) emaColor.value = p.emaColor;
+    if (p.maInstances && typeof p.maInstances === "object") {
+      applyMaInstances(p.maInstances);
+    } else {
+      // Cloud payload from an older client: seed instances from the legacy
+      // flags the payload carries via addedMap (applied before settings).
+      migrateLegacyMas();
+    }
     if (typeof p.vpVisible === "boolean") vpVisible.value = p.vpVisible;
     if (typeof p.vpRows === "number") vpRows.value = Math.min(200, Math.max(1, Math.round(p.vpRows)));
     if (typeof p.vpVaPercent === "number") vpVaPercent.value = Math.min(100, Math.max(0, p.vpVaPercent));
@@ -428,6 +614,7 @@ export const useIndicatorsStore = defineStore("indicators", () => {
         vpShowVaLines?: boolean;
         vpRanges?: Record<string, { start: number; end: number }>;
         addedMap?: Record<string, AddedFlags>;
+        maInstances?: Record<string, unknown>;
       };
       if (typeof p.added === "boolean") sessionsAdded.value = p.added;
       if (typeof p.visible === "boolean") sessionsVisible.value = p.visible;
@@ -496,6 +683,12 @@ export const useIndicatorsStore = defineStore("indicators", () => {
           addedMap.value = { [useMarketStore().instrument]: seed };
         }
       }
+      if (p.maInstances && typeof p.maInstances === "object") {
+        applyMaInstances(p.maInstances);
+      } else {
+        // Legacy single SMA/EMA → seed one instance per flagged symbol.
+        migrateLegacyMas();
+      }
       if (Array.isArray(p.customs)) {
         for (const c of p.customs) {
           if (c && typeof c.id === "string" && typeof c.name === "string" &&
@@ -516,7 +709,7 @@ export const useIndicatorsStore = defineStore("indicators", () => {
 
   watch(
     [sessionsAdded, sessionsVisible, sessionsLabels, sessionsEnabled, defs, customs, rsiAdded, rsiVisible, rsiLength, rsiColor, rsiLevelColor, rsiUpper, rsiLower,
-     smaAdded, smaVisible, smaLength, smaColor, emaAdded, emaVisible, emaLength, emaColor, addedMap,
+     smaAdded, smaVisible, smaLength, smaColor, emaAdded, emaVisible, emaLength, emaColor, addedMap, maInstances,
      vpAdded, vpVisible, vpRows, vpVaPercent, vpWidthPercent, vpUpColor, vpDownColor, vpPocColor, vpVaColor, vpShowPocLabel, vpShowVaLines, vpRanges],
     () => {
       try {
@@ -544,6 +737,7 @@ export const useIndicatorsStore = defineStore("indicators", () => {
           emaVisible: emaVisible.value,
           emaLength: emaLength.value,
           emaColor: emaColor.value,
+          maInstances: maInstances.value,
           vpVisible: vpVisible.value,
           vpRows: vpRows.value,
           vpVaPercent: vpVaPercent.value,
@@ -628,6 +822,12 @@ export const useIndicatorsStore = defineStore("indicators", () => {
     emaVisible,
     emaLength,
     emaColor,
+    maInstances,
+    maListFor,
+    maCurrentList,
+    addMaInstance,
+    removeMaInstance,
+    patchMaInstance,
     vpAdded,
     vpVisible,
     vpRows,

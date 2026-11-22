@@ -1134,21 +1134,34 @@ export class PineVM {
     return { __kind: "udt", type: typeName, fields, deleted: false };
   }
 
-  /** Builtin ctx cache — a call node always executes with the same scope
-   *  identity (global or its own function's ns), so one ctx per node. */
-  private ctxCache = new Map<number, BuiltinCtx>();
   private calleeSegs = new Map<string, string[]>();
 
+  /** Builtin ctx cache — keyed by (scope identity, node id): the same call
+   *  node can execute under several user-function call sites, and caching by
+   *  node id alone leaked one site's params into another (Sydney's box drawn
+   *  in New York's color). Scope maps are long-lived, so a WeakMap id is a
+   *  stable, cheap discriminator. */
+  private ctxCache = new Map<string, BuiltinCtx>();
+  private scopeIds = new WeakMap<Map<string, SeriesState>, number>();
+  private scopeIdSeq = 0;
+
   private makeCtx(node: Extract<Expr, { kind: "call" }>, scope: Map<string, SeriesState> | null, nsId: number | null): BuiltinCtx {
-    // Cache ONLY top-level calls: the same node inside a user function runs
-    // under a different scope per call site, so caching by node id would leak
-    // one site's locals into another.
-    if (nsId !== null) return this.buildCtx(node, scope, nsId);
-    const cached = this.ctxCache.get(node.id);
+    const key = this.ctxKey(scope, node.id);
+    const cached = this.ctxCache.get(key);
     if (cached) return cached;
     const ctx = this.buildCtx(node, scope, nsId);
-    this.ctxCache.set(node.id, ctx);
+    this.ctxCache.set(key, ctx);
     return ctx;
+  }
+
+  private ctxKey(scope: Map<string, SeriesState> | null, nodeId: number): string {
+    if (scope === null) return String(nodeId);
+    let id = this.scopeIds.get(scope);
+    if (id === undefined) {
+      id = ++this.scopeIdSeq;
+      this.scopeIds.set(scope, id);
+    }
+    return id + ":" + nodeId;
   }
 
   private buildCtx(node: Extract<Expr, { kind: "call" }>, scope: Map<string, SeriesState> | null, nsId: number | null): BuiltinCtx {
