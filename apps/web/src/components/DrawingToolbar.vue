@@ -17,6 +17,8 @@ const ICONS: Record<string, string> = {
   measure: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 16.2L16.2 3.5l4.3 4.3L7.8 20.5a1.6 1.6 0 0 1-2.3 0l-2-2a1.6 1.6 0 0 1 0-2.3z"/><path d="M7.1 12.6l1.6 1.6M10.4 9.3l1.6 1.6M13.7 6l1.6 1.6" stroke-width="1.4"/></svg>`,
   magnet: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h4v8a2 2 0 0 0 4 0V3h4v8a6 6 0 0 1-12 0V3z"/><path d="M6 3h4v4.5H6z" fill="currentColor" stroke="none"/><path d="M14 3h4v4.5h-4z" fill="currentColor" stroke="none"/><path d="M9.5 20.5l2.5-2 2.5 2" stroke-width="1.4"/></svg>`,
   trash: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6.5h16"/><path d="M9.5 6.5V4.8c0-.7.6-1.3 1.3-1.3h2.4c.7 0 1.3.6 1.3 1.3v1.7"/><path d="M6.3 6.5l.8 13c.05.85.75 1.5 1.6 1.5h6.6c.85 0 1.55-.65 1.6-1.5l.8-13"/><path d="M10 10.5v6M14 10.5v6"/></svg>`,
+  undo: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7v6a6 6 0 0 0 6 6h6"/><path d="M21 7v-6a6 6 0 0 0-6-6h-6"/><path d="M9 13l-3-3 3-3"/></svg>`,
+  redo: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 7v6a6 6 0 0 1-6 6h-6"/><path d="M3 7v-6a6 6 0 0 1 6-6h6"/><path d="M15 13l3-3-3-3"/></svg>`,
 };
 
 const tools: Array<{ id: string; title: string }> = [
@@ -109,6 +111,22 @@ function toggleClear(e: MouseEvent): void {
 function removeAllDrawings(): void {
   drawings.requestClearAll();
   closeClear(true);
+}
+
+/* ── Undo / Redo (TradingView-style) ──
+ * Placed above the Remove button; disabled when there's nothing to undo/redo. */
+const canUndo = computed(() => drawings.canUndo(drawings.activeSymbol));
+const canRedo = computed(() => drawings.canRedo(drawings.activeSymbol));
+
+function doUndo(): void {
+  const sym = drawings.activeSymbol;
+  if (!sym || !drawings.canUndo(sym)) return;
+  drawings.undo(sym);
+}
+function doRedo(): void {
+  const sym = drawings.activeSymbol;
+  if (!sym || !drawings.canRedo(sym)) return;
+  drawings.redo(sym);
 }
 function onDocClick(e: MouseEvent): void {
   const t = e.target as HTMLElement;
@@ -231,6 +249,27 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </Teleport>
+    <!-- Undo / Redo (TradingView-style) — side by side above Remove all -->
+    <div class="toolbar-undo-redo">
+      <button
+        class="tool-btn tool-undo"
+        :disabled="!canUndo"
+        :title="!canUndo ? 'Nothing to undo' : 'Undo (Ctrl+Z)'"
+        aria-label="Undo"
+        @click="doUndo"
+      >
+        <span class="tool-ic" v-html="ICONS.undo"></span>
+      </button>
+      <button
+        class="tool-btn tool-redo"
+        :disabled="!canRedo"
+        :title="!canRedo ? 'Nothing to redo' : 'Redo (Ctrl+Y)'"
+        aria-label="Redo"
+        @click="doRedo"
+      >
+        <span class="tool-ic" v-html="ICONS.redo"></span>
+      </button>
+    </div>
     <!-- Remove all drawings (TradingView-style trash at the rail's foot):
          asks for confirmation before wiping the current chart. -->
     <div class="toolbar-bottom">
@@ -353,6 +392,27 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
+}
+/* Undo / Redo row: undo on the left, redo on the right — split from the
+   middle like TradingView's toolbar. Disabled states are handled by
+   :disabled on the buttons themselves. */
+.toolbar-undo-redo {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+  justify-content: center;
+  margin: 4px 0;
+  flex-shrink: 0;
+}
+.toolbar-undo-redo .tool-btn {
+  width: 30px;
+  height: 30px;
+  font-size: 15px;
+}
+.toolbar-undo-redo .tool-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  transform: none;
 }
 .tool-btn:disabled {
   opacity: 0.4;

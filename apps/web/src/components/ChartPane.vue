@@ -991,7 +991,10 @@ watch(() => [market.instrument, market.timeframe], () => {
   recalcRects();
 });
 // The drawing rail's clear button asks this pane what "this chart" means.
-watch(() => market.instrument, (sym) => drawingsStore.setActiveSymbol(sym), { immediate: true });
+watch(() => market.instrument, (sym) => {
+  drawingsStore.setActiveSymbol(sym);
+  drawingsStore.clearHistory(sym);
+}, { immediate: true });
 // A new bucket (candle close / lazy-load batch / replay step) may carry
 // volume the sidecar is missing — re-check, then re-project. (props.candles
 // rather than displayCandles: the computed is declared further down, and
@@ -2169,6 +2172,7 @@ let magnetKeyCb: ((e: KeyboardEvent) => void) | null = null;
 let magnetBlurCb: (() => void) | null = null;
 let shiftKeyCb: ((e: KeyboardEvent) => void) | null = null;
 let shiftBlurCb: (() => void) | null = null;
+let undoKeyCb: ((e: KeyboardEvent) => void) | null = null;
 let magnetAnyMoveCb: ((e: PointerEvent) => void) | null = null;
 let xhairMoveEl: HTMLElement | null = null;
 let xhairMoveCb: ((e: MouseEvent) => void) | null = null;
@@ -5910,6 +5914,27 @@ onMounted(async () => {
   shiftKeyCb = onShiftKey;
   shiftBlurCb = onShiftBlur;
 
+  // Undo (Ctrl+Z) / Redo (Ctrl+Y) — TradingView-style. Only acts when the
+  // current chart actually has a drawing history (i.e. the user has drawn or
+  // edited something on this symbol); opening a fresh chart does nothing.
+  const onUndoKey = (e: KeyboardEvent) => {
+    if (!e.ctrlKey || e.metaKey) return;
+    const sym = market.instrument;
+    if (!sym) return;
+    // Don't steal the shortcut while typing in an input/textarea.
+    const t = e.target as HTMLElement;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    if (e.key === "z" && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      if (drawingsStore.canUndo(sym)) drawingsStore.undo(sym);
+    } else if (e.key === "y" && e.key.toLowerCase() === "y") {
+      e.preventDefault();
+      if (drawingsStore.canRedo(sym)) drawingsStore.redo(sym);
+    }
+  };
+  window.addEventListener("keydown", onUndoKey);
+  undoKeyCb = onUndoKey;
+
   // Track the cursor globally (not just over the chart) so the magnet
   // toggle replay always uses the CURRENT pointer position, even when it
   // last passed over the edit panel or a toolbar.
@@ -6118,6 +6143,9 @@ onBeforeUnmount(() => {
   }
   if (shiftBlurCb) {
     window.removeEventListener("blur", shiftBlurCb);
+  }
+  if (undoKeyCb) {
+    window.removeEventListener("keydown", undoKeyCb);
   }
   window.removeEventListener("resize", updatePaneRect);
   if (magnetAnyMoveCb) {

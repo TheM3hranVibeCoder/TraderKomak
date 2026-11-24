@@ -88,6 +88,15 @@ export interface DrawingVLine {
 }
 export type SingleDrawing = DrawingHLine | DrawingHRay | DrawingVLine;
 
+/** Full per-symbol drawing state captured as one undo/redo step. */
+export interface DrawingSnapshot {
+  drawings: DrawingRect[];
+  lines: DrawingTrend[];
+  polys: DrawingPoly[];
+  positions: DrawingPosition[];
+  singles: Record<SingleKind, SingleDrawing[]>;
+}
+
 const STORAGE_KEY = "tk-drawings";
 const STORAGE_KEY_LAST_RECT_STYLE = "tk-drawings-last-rect-style";
 const STORAGE_KEY_LAST_LINE_STYLE = "tk-drawings-last-line-style";
@@ -412,6 +421,120 @@ export const useDrawingsStore = defineStore("drawings", () => {
    *  the actual clear because it also has to drop its local edit panels. */
   const clearRequest = ref(0);
 
+  /* ── Undo / Redo history (TradingView-style) ────────────────────────── */
+  const MAX_HISTORY = 50;
+  const PUSH_THROTTLE_MS = 200;
+  /** Undo stack per symbol: oldest → newest. */
+  const undoStacks = ref<Record<string, DrawingSnapshot[]>>({});
+  /** Redo stack per symbol: oldest → newest. */
+  const redoStacks = ref<Record<string, DrawingSnapshot[]>>({});
+  /** Last push timestamp per symbol — throttles rapid-fire changes (drags). */
+  const lastPushAt = ref<Record<string, number>>({});
+
+  /** Deep-clone the current drawing state for one symbol. */
+  function snapshot(symbol: string): DrawingSnapshot {
+    return {
+      drawings: JSON.parse(JSON.stringify(drawings.value[symbol] ?? [])),
+      lines: JSON.parse(JSON.stringify(lines.value[symbol] ?? [])),
+      polys: JSON.parse(JSON.stringify(polys.value[symbol] ?? [])),
+      positions: JSON.parse(JSON.stringify(positions.value[symbol] ?? [])),
+      singles: {
+        hline: JSON.parse(JSON.stringify(singles.value.hline[symbol] ?? [])),
+        hray: JSON.parse(JSON.stringify(singles.value.hray[symbol] ?? [])),
+        vline: JSON.parse(JSON.stringify(singles.value.vline[symbol] ?? [])),
+      },
+    };
+  }
+
+  /** Restore a snapshot into the store for one symbol. */
+  function restoreSnapshot(symbol: string, snap: DrawingSnapshot): void {
+    drawings.value[symbol] = snap.drawings;
+    lines.value[symbol] = snap.lines;
+    polys.value[symbol] = snap.polys;
+    positions.value[symbol] = snap.positions;
+    for (const kind of ["hline", "hray", "vline"] as SingleKind[]) {
+      singles.value[kind][symbol] = snap.singles[kind];
+    }
+    persist();
+    persistLines();
+    persistPolys();
+    persistPositions();
+    persistSingles();
+  }
+
+  /** Capture current state as an undo point (throttled per symbol so rapid
+   *  drag events coalesce into a single step). Call before a mutation. */
+  function pushUndo(symbol: string): void {
+    if (!symbol) return;
+    const now = Date.now();
+    const last = lastPushAt.value[symbol] ?? 0;
+    if (now - last < PUSH_THROTTLE_MS) return;
+    lastPushAt.value[symbol] = now;
+
+    const stacks = undoStacks.value;
+    if (!stacks[symbol]) stacks[symbol] = [];
+    stacks[symbol].push(snapshot(symbol));
+    if (stacks[symbol].length > MAX_HISTORY) stacks[symbol].shift();
+
+    // A new action invalidates the redo stack.
+    const r = redoStacks.value;
+    r[symbol] = [];
+  }
+
+  /** Undo one step for a symbol. Returns true if something was undone. */
+  function undo(symbol: string): boolean {
+    if (!symbol) return false;
+    const stack = undoStacks.value[symbol];
+    if (!stack || stack.length === 0) return false;
+
+    const r = redoStacks.value;
+    if (!r[symbol]) r[symbol] = [];
+    r[symbol].push(snapshot(symbol));
+    if (r[symbol].length > MAX_HISTORY) r[symbol].shift();
+
+    const prev = stack.pop()!;
+    restoreSnapshot(symbol, prev);
+    return true;
+  }
+
+  /** Redo one step for a symbol. Returns true if something was redone. */
+  function redo(symbol: string): boolean {
+    if (!symbol) return false;
+    const stack = redoStacks.value[symbol];
+    if (!stack || stack.length === 0) return false;
+
+    const u = undoStacks.value;
+    if (!u[symbol]) u[symbol] = [];
+    u[symbol].push(snapshot(symbol));
+    if (u[symbol].length > MAX_HISTORY) u[symbol].shift();
+
+    const next = stack.pop()!;
+    restoreSnapshot(symbol, next);
+    return true;
+  }
+
+  /** Whether an undo step is available for a symbol. */
+  function canUndo(symbol: string): boolean {
+    if (!symbol) return false;
+    const stack = undoStacks.value[symbol];
+    return !!stack && stack.length > 0;
+  }
+
+  /** Whether a redo step is available for a symbol. */
+  function canRedo(symbol: string): boolean {
+    if (!symbol) return false;
+    const stack = redoStacks.value[symbol];
+    return !!stack && stack.length > 0;
+  }
+
+  /** Clear both stacks for a symbol (called on clear-all / symbol switch). */
+  function clearHistory(symbol: string): void {
+    if (!symbol) return;
+    undoStacks.value[symbol] = [];
+    redoStacks.value[symbol] = [];
+    lastPushAt.value[symbol] = 0;
+  }
+
   function persist() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(drawings.value));
@@ -483,6 +606,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
   }
 
   function add(symbol: string, rect: Omit<DrawingRect, "id" | "color" | "opacity" | "filled">): DrawingRect {
+    pushUndo(symbol);
     const full: DrawingRect = {
       ...rect,
       id: `dr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -499,6 +623,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
   }
 
   function remove(symbol: string, id: string) {
+    pushUndo(symbol);
     const list = drawings.value[symbol];
     if (list) {
       drawings.value[symbol] = list.filter((d) => d.id !== id);
@@ -508,6 +633,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
   }
 
   function updateColor(symbol: string, id: string, color: string) {
+    pushUndo(symbol);
     const item = drawings.value[symbol]?.find((d) => d.id === id);
     if (item) {
       item.color = color;
@@ -520,6 +646,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
     id: string,
     rect: Partial<Pick<DrawingRect, "time1" | "price1" | "time2" | "price2">>
   ) {
+    pushUndo(symbol);
     const item = drawings.value[symbol]?.find((d) => d.id === id);
     if (item) {
       if (rect.time1 !== undefined) item.time1 = rect.time1;
@@ -542,6 +669,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
     id: string,
     patch: Partial<Pick<DrawingRect, "color" | "opacity" | "filled">>
   ) {
+    pushUndo(symbol);
     const item = drawings.value[symbol]?.find((d) => d.id === id);
     if (!item) return;
     if (patch.color !== undefined) {
@@ -582,6 +710,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
   }
 
   function clearAll(symbol: string) {
+    pushUndo(symbol);
     drawings.value[symbol] = [];
     lines.value[symbol] = [];
     polys.value[symbol] = [];
@@ -608,6 +737,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
   }
 
   function addSingle(kind: SingleKind, symbol: string, item: Record<string, unknown>): SingleDrawing {
+    pushUndo(symbol);
     // Reuse the style of the last edited line of the same tool (defaults
     // until the user styles one).
     const st = lastSingleStyle.value[kind];
@@ -625,6 +755,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
   }
 
   function removeSingle(kind: SingleKind, symbol: string, id: string) {
+    pushUndo(symbol);
     const list = singles.value[kind][symbol];
     if (list) {
       singles.value[kind][symbol] = list.filter((i) => i.id !== id);
@@ -636,6 +767,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
   }
 
   function updateSingle(kind: SingleKind, symbol: string, id: string, patch: Record<string, unknown>) {
+    pushUndo(symbol);
     const item = singles.value[kind][symbol]?.find((i) => i.id === id);
     if (!item) return;
     for (const [k, v] of Object.entries(patch)) {
@@ -655,6 +787,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
   /* ── Long / Short positions ─────────────────────────────────────────── */
 
   function addPosition(symbol: string, pos: Omit<DrawingPosition, "id" | "showLevels">): DrawingPosition {
+    pushUndo(symbol);
     const full: DrawingPosition = {
       ...pos,
       id: `pos-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -667,6 +800,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
   }
 
   function removePosition(symbol: string, id: string) {
+    pushUndo(symbol);
     const list = positions.value[symbol];
     if (list) {
       positions.value[symbol] = list.filter((p) => p.id !== id);
@@ -680,6 +814,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
     id: string,
     patch: Partial<Pick<DrawingPosition, "time1" | "time2" | "entry" | "sl" | "tp">>
   ) {
+    pushUndo(symbol);
     const item = positions.value[symbol]?.find((p) => p.id === id);
     if (item) {
       if (patch.time1 !== undefined) item.time1 = patch.time1;
@@ -696,6 +831,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
     id: string,
     patch: Partial<Pick<DrawingPosition, "showLevels">>
   ) {
+    pushUndo(symbol);
     const item = positions.value[symbol]?.find((p) => p.id === id);
     if (!item) return;
     if (patch.showLevels !== undefined) item.showLevels = patch.showLevels;
@@ -708,6 +844,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
     symbol: string,
     trend: Omit<DrawingTrend, "id" | "color" | "width" | "dash">
   ): DrawingTrend {
+    pushUndo(symbol);
     const full: DrawingTrend = {
       ...trend,
       id: `tl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -724,6 +861,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
   }
 
   function removeLine(symbol: string, id: string) {
+    pushUndo(symbol);
     const list = lines.value[symbol];
     if (list) {
       lines.value[symbol] = list.filter((l) => l.id !== id);
@@ -737,6 +875,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
     id: string,
     patch: Partial<Pick<DrawingTrend, "time1" | "price1" | "time2" | "price2">>
   ) {
+    pushUndo(symbol);
     const item = lines.value[symbol]?.find((l) => l.id === id);
     if (item) {
       if (patch.time1 !== undefined) item.time1 = patch.time1;
@@ -752,6 +891,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
     id: string,
     patch: Partial<Pick<DrawingTrend, "color" | "dash" | "width">>
   ) {
+    pushUndo(symbol);
     const item = lines.value[symbol]?.find((l) => l.id === id);
     if (!item) return;
     if (patch.color !== undefined) {
@@ -776,6 +916,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
     symbol: string,
     poly: Omit<DrawingPoly, "id" | "color" | "width" | "dash" | "arrow">
   ): DrawingPoly {
+    pushUndo(symbol);
     const full: DrawingPoly = {
       ...poly,
       id: `pl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -793,6 +934,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
   }
 
   function removePoly(symbol: string, id: string) {
+    pushUndo(symbol);
     const list = polys.value[symbol];
     if (list) {
       polys.value[symbol] = list.filter((p) => p.id !== id);
@@ -802,6 +944,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
   }
 
   function updatePolyPoints(symbol: string, id: string, points: DrawingPolyPoint[]) {
+    pushUndo(symbol);
     const item = polys.value[symbol]?.find((p) => p.id === id);
     if (item && points.length >= 2) {
       item.points = points.map((pt) => ({ time: pt.time, price: pt.price }));
@@ -814,6 +957,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
     id: string,
     patch: Partial<Pick<DrawingPoly, "color" | "dash" | "width" | "arrow">>
   ) {
+    pushUndo(symbol);
     const item = polys.value[symbol]?.find((p) => p.id === id);
     if (!item) return;
     if (patch.color !== undefined) {
@@ -861,6 +1005,12 @@ export const useDrawingsStore = defineStore("drawings", () => {
     activeSymbol,
     clearRequest,
     countFor,
+    canUndo,
+    canRedo,
+    undo,
+    redo,
+    pushUndo,
+    clearHistory,
     setActiveSymbol,
     requestClearAll,
     PRESET_COLORS,
