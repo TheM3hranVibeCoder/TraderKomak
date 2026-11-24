@@ -990,6 +990,8 @@ watch(() => [market.instrument, market.timeframe], () => {
   void ensureVpVolumes();
   recalcRects();
 });
+// The drawing rail's clear button asks this pane what "this chart" means.
+watch(() => market.instrument, (sym) => drawingsStore.setActiveSymbol(sym), { immediate: true });
 // A new bucket (candle close / lazy-load batch / replay step) may carry
 // volume the sidecar is missing — re-check, then re-project. (props.candles
 // rather than displayCandles: the computed is declared further down, and
@@ -5316,6 +5318,33 @@ function clearSingleSelection(): void {
   singlePanelPos.value = null;
   recalcRects();
 }
+
+/* ── Toolbar "Remove all drawings" ──────────────────────────────────────
+ * The confirm lives in DrawingToolbar; this pane performs the wipe because
+ * it also holds the edit panels / in-progress drawing state. */
+watch(
+  () => drawingsStore.clearRequest,
+  () => {
+    drawingsStore.clearAll(market.instrument);
+    drawingState.value = null;
+    polyState.value = null;
+    posState.value = null;
+    lineResize.value = null;
+    selectedRect.value = null;
+    editPanelPos.value = null;
+    rectMenu.value = null;
+    selectedLine.value = null;
+    linePanelPos.value = null;
+    linePaletteOpen.value = false;
+    selectedPoly.value = null;
+    polyPanelPos.value = null;
+    polyPaletteOpen.value = false;
+    selectedPos.value = null;
+    posPanelPos.value = null;
+    singlePanelPos.value = null;
+    recalcRects();
+  }
+);
 
 function setSingleColor(color: string): void {
   const sel = drawingsStore.selectedSingle;

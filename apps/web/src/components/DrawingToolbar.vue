@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from "vue";
 import { useDrawingsStore } from "@/stores/drawings";
 
 const drawings = useDrawingsStore();
@@ -16,6 +16,7 @@ const ICONS: Record<string, string> = {
   rectangle: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="6.5" width="18" height="11" rx="2"/></svg>`,
   measure: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 16.2L16.2 3.5l4.3 4.3L7.8 20.5a1.6 1.6 0 0 1-2.3 0l-2-2a1.6 1.6 0 0 1 0-2.3z"/><path d="M7.1 12.6l1.6 1.6M10.4 9.3l1.6 1.6M13.7 6l1.6 1.6" stroke-width="1.4"/></svg>`,
   magnet: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h4v8a2 2 0 0 0 4 0V3h4v8a6 6 0 0 1-12 0V3z"/><path d="M6 3h4v4.5H6z" fill="currentColor" stroke="none"/><path d="M14 3h4v4.5h-4z" fill="currentColor" stroke="none"/><path d="M9.5 20.5l2.5-2 2.5 2" stroke-width="1.4"/></svg>`,
+  trash: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6.5h16"/><path d="M9.5 6.5V4.8c0-.7.6-1.3 1.3-1.3h2.4c.7 0 1.3.6 1.3 1.3v1.7"/><path d="M6.3 6.5l.8 13c.05.85.75 1.5 1.6 1.5h6.6c.85 0 1.55-.65 1.6-1.5l.8-13"/><path d="M10 10.5v6M14 10.5v6"/></svg>`,
 };
 
 const tools: Array<{ id: string; title: string }> = [
@@ -74,6 +75,41 @@ function pickLineTool(id: string): void {
   drawings.activeTool = id as never;
   flyoutOpen.value = false;
 }
+
+/* ── Remove all drawings (TradingView-style trash at the rail's foot) ──
+ * Confirms first; the actual wipe is requested from the store and performed
+ * by ChartPane, which owns the edit panels and the active symbol. */
+const drawingCount = computed(() => drawings.countFor(drawings.activeSymbol));
+const clearOpen = ref(false);
+const clearTop = ref(0);
+const clearLeft = ref(0);
+const clearEl = ref<HTMLElement | null>(null);
+const clearBtnEl = ref<HTMLElement | null>(null);
+const clearConfirmEl = ref<HTMLElement | null>(null);
+
+function closeClear(restoreFocus = false): void {
+  if (!clearOpen.value) return;
+  clearOpen.value = false;
+  if (restoreFocus) clearBtnEl.value?.focus();
+}
+
+function toggleClear(e: MouseEvent): void {
+  if (!drawingCount.value) return;
+  if (clearOpen.value) {
+    closeClear(true);
+    return;
+  }
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  clearLeft.value = Math.min(r.right + 10, window.innerWidth - 240);
+  clearTop.value = Math.max(8, Math.min(r.top - 6, window.innerHeight - 130));
+  clearOpen.value = true;
+  nextTick(() => clearConfirmEl.value?.focus());
+}
+
+function removeAllDrawings(): void {
+  drawings.requestClearAll();
+  closeClear(true);
+}
 function onDocClick(e: MouseEvent): void {
   const t = e.target as HTMLElement;
   // clicks on the split button itself are handled by openFlyout's toggle
@@ -81,17 +117,33 @@ function onDocClick(e: MouseEvent): void {
   if (flyoutOpen.value && flyoutEl.value && !flyoutEl.value.contains(t)) {
     flyoutOpen.value = false;
   }
+  // the trigger toggles itself; clicks inside the confirm popover keep it open
+  if (
+    clearOpen.value &&
+    !t.closest?.(".tool-clear") &&
+    !(clearEl.value && clearEl.value.contains(t))
+  ) {
+    closeClear();
+  }
 }
 function onDocKeydown(e: KeyboardEvent): void {
-  if (e.key === "Escape") flyoutOpen.value = false;
+  if (e.key !== "Escape") return;
+  if (clearOpen.value) {
+    closeClear(true);
+    return;
+  }
+  flyoutOpen.value = false;
 }
+const closeClearOnResize = () => closeClear();
 onMounted(() => {
   document.addEventListener("mousedown", onDocClick);
   document.addEventListener("keydown", onDocKeydown);
+  window.addEventListener("resize", closeClearOnResize);
 });
 onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onDocClick);
   document.removeEventListener("keydown", onDocKeydown);
+  window.removeEventListener("resize", closeClearOnResize);
 });
 </script>
 
@@ -179,7 +231,49 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </Teleport>
-    <div class="toolbar-divider" />
+    <!-- Remove all drawings (TradingView-style trash at the rail's foot):
+         asks for confirmation before wiping the current chart. -->
+    <div class="toolbar-bottom">
+      <div class="toolbar-divider" />
+      <button
+        ref="clearBtnEl"
+        class="tool-btn danger tool-clear"
+        :disabled="drawingCount === 0"
+        :title="drawingCount === 0 ? 'No drawings to remove on this chart' : 'Remove all drawings from this chart'"
+        aria-label="Remove all drawings from this chart"
+        aria-haspopup="dialog"
+        :aria-expanded="clearOpen"
+        @click="toggleClear"
+      >
+        <span class="tool-ic" v-html="ICONS.trash"></span>
+      </button>
+    </div>
+
+    <!-- Confirm popover, teleported for the same reason as the line flyout -->
+    <Teleport to="body">
+      <div
+        v-if="clearOpen"
+        ref="clearEl"
+        class="clear-confirm"
+        role="dialog"
+        aria-labelledby="tk-clear-drawings-title"
+        :style="{ top: clearTop + 'px', left: clearLeft + 'px' }"
+        @mousedown.stop
+      >
+        <p id="tk-clear-drawings-title" class="clear-title">Remove all drawings?</p>
+        <p class="clear-sub">
+          This removes every drawing on
+          <b>{{ drawings.activeSymbol || "this chart" }}</b
+          >.
+        </p>
+        <div class="clear-actions">
+          <button ref="clearConfirmEl" class="clear-btn remove" @click="removeAllDrawings">
+            Remove all
+          </button>
+          <button class="clear-btn cancel" @click="closeClear(true)">Cancel</button>
+        </div>
+      </div>
+    </Teleport>
   </aside>
 </template>
 
@@ -243,16 +337,107 @@ onBeforeUnmount(() => {
   border-color: transparent;
   box-shadow: 0 4px 14px rgba(59, 130, 246, 0.45), 0 1px 0 rgba(255, 255, 255, 0.25) inset;
 }
-.tool-btn.danger:hover {
-  background: rgba(239, 83, 80, 0.12);
-  color: #ef5350;
-}
 .toolbar-divider {
   width: 24px;
   height: 1px;
   background: var(--border);
   margin: 4px 0;
   flex-shrink: 0;
+}
+/* Foot of the rail: the trash stays pinned to the bottom edge when the
+   column is taller than the visual viewport (it scrolls with the rest). */
+.toolbar-bottom {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.tool-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  transform: none;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+}
+.tool-btn.danger:not(:disabled):hover {
+  background: rgba(239, 83, 80, 0.12);
+  color: #ef5350;
+}
+.tool-btn.danger:not(:disabled):focus-visible {
+  outline: 2px solid #ef5350;
+  outline-offset: 1px;
+}
+/* "Remove all drawings?" confirm popover (teleported to <body>) */
+.clear-confirm {
+  position: fixed;
+  width: 228px;
+  padding: 12px 12px 10px;
+  background: var(--bg-panel);
+  backdrop-filter: blur(22px) saturate(1.3);
+  -webkit-backdrop-filter: blur(22px) saturate(1.3);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--glass-shadow);
+  z-index: 70;
+}
+.clear-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.clear-sub {
+  margin: 0 0 10px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.clear-sub b {
+  color: var(--text);
+  font-weight: 600;
+}
+.clear-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.clear-btn {
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--glass-border);
+  background: var(--btn-bg);
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 150ms, border-color 150ms, color 150ms;
+}
+.clear-btn:hover {
+  border-color: var(--border-strong);
+}
+.clear-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.clear-btn.remove {
+  background: rgba(239, 83, 80, 0.14);
+  border-color: rgba(239, 83, 80, 0.45);
+  color: #ef5350;
+}
+.clear-btn.remove:hover {
+  background: rgba(239, 83, 80, 0.22);
+  border-color: rgba(239, 83, 80, 0.6);
+}
+.clear-btn.cancel {
+  color: var(--text-muted);
+}
+.clear-btn.cancel:hover {
+  color: var(--text);
 }
 /* Split button: main icon + flyout arrow */
 .tool-split {

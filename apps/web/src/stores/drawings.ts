@@ -405,6 +405,12 @@ export const useDrawingsStore = defineStore("drawings", () => {
   const selectedPolyId = ref<string | null>(null);
   const selectedPositionId = ref<string | null>(null);
   const selectedSingle = ref<{ kind: SingleKind; id: string } | null>(null);
+  /** Symbol shown on the (single) chart — the toolbar's clear button uses it
+   *  to know what it would remove. Kept in sync by ChartPane. */
+  const activeSymbol = ref("");
+  /** Bumped by the toolbar's "Remove all drawings" confirm; ChartPane owns
+   *  the actual clear because it also has to drop its local edit panels. */
+  const clearRequest = ref(0);
 
   function persist() {
     try {
@@ -552,6 +558,27 @@ export const useDrawingsStore = defineStore("drawings", () => {
     }
     persistLastRectStyle();
     persist();
+  }
+
+  function countFor(symbol: string): number {
+    if (!symbol) return 0;
+    return (
+      (drawings.value[symbol]?.length ?? 0) +
+      (lines.value[symbol]?.length ?? 0) +
+      (polys.value[symbol]?.length ?? 0) +
+      (positions.value[symbol]?.length ?? 0) +
+      (singles.value.hline[symbol]?.length ?? 0) +
+      (singles.value.hray[symbol]?.length ?? 0) +
+      (singles.value.vline[symbol]?.length ?? 0)
+    );
+  }
+
+  function setActiveSymbol(symbol: string) {
+    activeSymbol.value = symbol;
+  }
+
+  function requestClearAll() {
+    clearRequest.value += 1;
   }
 
   function clearAll(symbol: string) {
@@ -831,6 +858,11 @@ export const useDrawingsStore = defineStore("drawings", () => {
     selectedPolyId,
     selectedPositionId,
     selectedSingle,
+    activeSymbol,
+    clearRequest,
+    countFor,
+    setActiveSymbol,
+    requestClearAll,
     PRESET_COLORS,
     PANEL_COLORS,
     getFor,
