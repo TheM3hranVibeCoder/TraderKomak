@@ -18,11 +18,13 @@ export function symbolParts(instrument: string): string[] {
   return displayInstrument(instrument).split("/");
 }
 
-/** Stock-index CFDs → TradingView-style round number badges (500 / 100). */
+/** Stock-index CFDs → TradingView-style round number badges (500 / 100 / 30).
+ *  US30 is blue (user request) — a deeper blue than NAS100's so the two stay
+ *  distinguishable at 16px. */
 const INDEX_LOGOS: Record<string, { label: string; bg: string }> = {
   SPX500: { label: "500", bg: "#1E3A8A" }, // navy — S&P 500
   NAS100: { label: "100", bg: "#2563EB" }, // blue — Nasdaq 100
-  US30: { label: "30", bg: "#334155" }, // slate — Dow 30
+  US30: { label: "30", bg: "#1D4ED8" }, // blue — Dow 30
 };
 
 /** True for the round number badges — callers render them larger than
@@ -32,17 +34,18 @@ export function isIndexLogo(currency: string): boolean {
 }
 
 export function currencyFlagUrl(currency: string): string | null {
-  // Stock indices → round number logo (TradingView-style): digits fill the
-  // badge (extra-bold, tight baseline) so they read clearly at 16px.
+  // Stock indices → round number logo (TradingView-style): digits centered
+  // optically in the disc. `dominant-baseline="central"` centers the cap
+  // height on the circle's center (a fixed baseline + textLength squeezed the
+  // glyphs and left "30" sitting left of middle). Font size shrinks with the
+  // digit count so 500 / 100 / 30 all span the same visual width.
   const idx = INDEX_LOGOS[currency];
   if (idx) {
-    // Digits fill the badge but stay INSIDE the circle: textLength pins the
-    // exact width (2 vs 3 digits), the baseline centers the cap height.
-    const len = idx.label.length === 3 ? 25 : 17;
+    const size = idx.label.length === 3 ? 12.5 : 15.5;
     return svgDataUri(
       `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>` +
         `<circle cx='16' cy='16' r='16' fill='${idx.bg}'/>` +
-        `<text x='16' y='21.7' font-family='Arial,Helvetica,sans-serif' font-size='16' font-weight='800' fill='#ffffff' text-anchor='middle' textLength='${len}' lengthAdjust='spacingAndGlyphs'>${idx.label}</text>` +
+        `<text x='16' y='15.5' font-family='Arial,Helvetica,sans-serif' font-size='${size}' font-weight='800' fill='#ffffff' text-anchor='middle' dominant-baseline='central' letter-spacing='-0.4'>${idx.label}</text>` +
         `</svg>`
     );
   }

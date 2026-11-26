@@ -18,7 +18,7 @@ const ALLOWED_INSTRUMENTS = new Set([
   // OANDA
   "EUR_USD", "GBP_USD", "USD_JPY", "USD_CHF", "AUD_USD", "USD_CAD",
   "NZD_USD", "EUR_GBP", "XAU_USD", "XAG_USD", "GBP_JPY", "EUR_JPY",
-  "AUD_JPY", "BCO_USD", "SPX500_USD", "NAS100_USD", "BTC_USD", "ETH_USD",
+  "AUD_JPY", "BCO_USD", "SPX500_USD", "NAS100_USD", "US30_USD", "BTC_USD", "ETH_USD",
   // Binance (canonical = concatenated)
   "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT",
 ]);

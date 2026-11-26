@@ -9,6 +9,7 @@ const DEFAULT_WATCH = [
   "XAG_USD",
   "SPX500_USD",
   "NAS100_USD",
+  "US30_USD",
   "BTCUSDT",
   "ETHUSDT",
   "EUR_USD",
@@ -16,17 +17,17 @@ const DEFAULT_WATCH = [
 ];
 
 /** Stock-index rows added to EVERY existing watchlist (once, per user
- *  request): OANDA's SPX500/NAS100 plus cTrader's US30 — appended without
- *  touching the symbols the user already picked. A localStorage flag marks
- *  the migration done so a symbol the user deliberately removes afterwards
- *  never comes back on the next boot. */
-const INDEX_DEFAULTS = ["SPX500_USD", "NAS100_USD"];
+ *  request): OANDA's SPX500/NAS100/US30 — appended without touching the
+ *  symbols the user already picked. A localStorage flag marks the migration
+ *  done so a symbol the user deliberately removes afterwards never comes
+ *  back on the next boot. */
+const INDEX_DEFAULTS = ["SPX500_USD", "NAS100_USD", "US30_USD"];
 /** Guests use the bare key; signed-in users get a PER-ACCOUNT key — a cloud
  *  row that predates the index defaults must get them appended exactly once
  *  per account (the old single shared key was consumed by the local load
  *  before the cloud row replaced the list, so signed-in users never saw the
  *  new rows — the "SPX500/NAS100 missing from my watchlist" report). */
-const MIGRATION_VERSION = "v2";
+const MIGRATION_VERSION = "v3";
 const WATCH_CAP = 25;
 
 function migrationFlagKey(owner: string | null): string {

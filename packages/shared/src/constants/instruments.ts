@@ -26,6 +26,7 @@ export const SUPPORTED_INSTRUMENTS = [
   "BCO_USD",
   "SPX500_USD",
   "NAS100_USD",
+  "US30_USD",
   "BTC_USD",
   "ETH_USD",
   // Added user-requested symbols for watchlist search
@@ -118,10 +119,11 @@ export const SUPPORTED_DUKASCOPY = [
   "D_BTC_USD",
 ] as const;
 
-/** cTrader Open API symbols — only indices OANDA does not carry (US30 /
- *  Dow Jones; S&P and Nasdaq are already served by OANDA's SPX500_USD and
- *  NAS100_USD). cTrader has no anonymous browser access (binary protobuf
- *  over TCP + OAuth), so these are served by the market server. */
+/** cTrader Open API symbols — index CFDs served by the market server
+ *  (binary protobuf over TCP + OAuth, so no anonymous browser access).
+ *  US30 (Dow Jones) is ALSO available from OANDA as US30_USD, which is the
+ *  canonical row the app adds; this cTrader form stays for brokers/accounts
+ *  where the OANDA index feed is unavailable. */
 export const SUPPORTED_CTRADER = [
   "US30",
 ] as const;
@@ -165,7 +167,7 @@ const JPY_QUOTE = new Set(["USD_JPY", "EUR_JPY", "GBP_JPY", "AUD_JPY"]);
 const METAL = new Set(["XAU_USD", "XAG_USD"]);
 /** Stock-index CFDs display 2 decimals everywhere (watchlist rows, chart
  *  price axis, OHLC readout) — 7000.25 / 27500.20, per user request. */
-const INDEX = new Set(["SPX500_USD", "NAS100_USD", "US30"]);
+const INDEX = new Set(["SPX500_USD", "NAS100_USD", "US30_USD", "US30"]);
 const CRYPTO_MAJOR = new Set(["BTCUSDT", "ETHUSDT", "BNBUSDT"]);
 const CRYPTO_MINOR: ReadonlySet<string> = new Set(SUPPORTED_BINANCE.filter((s) => !CRYPTO_MAJOR.has(s)));
 /** Sub-cent coins — 4 decimals renders 0.0000; these need 8. */
@@ -178,8 +180,9 @@ const OANDA_CRYPTO_PRECISION: Record<string, number> = {
 };
 
 /** Stock indices display under their bare name — SPX500_USD → "SPX500",
- *  NAS100_USD → "NAS100" (no quote-currency suffix; TradingView-style). */
-const BARE_NAME_DISPLAY = new Set(["SPX500_USD", "NAS100_USD"]);
+ *  NAS100_USD → "NAS100", US30_USD → "US30" (no quote-currency suffix;
+ *  TradingView-style). */
+const BARE_NAME_DISPLAY = new Set(["SPX500_USD", "NAS100_USD", "US30_USD"]);
 
 /** Human-friendly display: EUR_USD → "EUR/USD", BTCUSDT → "BTC/USDT". */
 export function displayInstrument(instrument: string): string {

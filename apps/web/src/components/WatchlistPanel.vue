@@ -36,7 +36,12 @@ function onSearchEnter() {
   const q = search.value.trim();
   if (!q) return;
   const norm = normalizeInstrument(q);
-  const exact = SEARCHABLE_INSTRUMENTS.find((s) => normalizeInstrument(s) === norm);
+  // "US30" names BOTH cTrader's bare symbol and OANDA's US30_USD — prefer the
+  // quote-suffixed OANDA row, which always has a live data path (same for
+  // "XAU" → XAU_USD, "EUR" → EUR_USD).
+  const exact =
+    SEARCHABLE_INSTRUMENTS.find((s) => normalizeInstrument(s) === `${norm}_USD`) ??
+    SEARCHABLE_INSTRUMENTS.find((s) => normalizeInstrument(s) === norm);
   if (exact && watchlist.add(exact)) {
     search.value = "";
     return;
@@ -346,6 +351,9 @@ onMounted(() => {
     () => watchlist.instruments.join(","),
     (joined) => {
       const arr = joined ? joined.split(",") : [];
+      // Forget seeds of removed rows so a re-added symbol seeds again instead
+      // of sitting at "—" until the next live tick.
+      for (const s of [...seeded]) if (!arr.includes(s)) seeded.delete(s);
       watchWs?.setInstruments(serverWatchList());
       syncCtraderWatch();
       // Seed only the newly added symbol(s) — instant % for new rows
