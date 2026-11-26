@@ -60,6 +60,10 @@ export const usePineStore = defineStore("pine", () => {
   const addedMap = ref<Record<string, string[]>>({});
   /** Eye toggle per symbol+script (default visible when absent). */
   const visibleMap = ref<Record<string, Record<string, boolean>>>({});
+  /** scriptId → last execution failure (line + message). Written by the chart
+   *  when a VM throws, read by the legend and the editor. Diagnostics only —
+   *  never persisted, and cleared by the next successful run. */
+  const runtimeErrors = ref<Record<string, { line: number; message: string }>>({});
   /** Editor dock. */
   const editorOpen = ref(false);
   /** null = new script; otherwise the id being edited. */
@@ -294,11 +298,31 @@ export const usePineStore = defineStore("pine", () => {
     const inputs = { ...inputValues.value };
     delete inputs[id];
     inputValues.value = inputs;
+    if (runtimeErrors.value[id]) {
+      const errs = { ...runtimeErrors.value };
+      delete errs[id];
+      runtimeErrors.value = errs;
+    }
     if (editingId.value === id) editingId.value = null;
   }
 
   function setInputValues(id: string, values: Record<string, number | boolean | string>): void {
     inputValues.value = { ...inputValues.value, [id]: values };
+  }
+
+  /** null clears the error (a successful run); no-op when unchanged so a bad
+   *  script ticking every second doesn't churn the legend. */
+  function setRuntimeError(id: string, err: { line: number; message: string } | null): void {
+    const cur = runtimeErrors.value[id];
+    if (err === null) {
+      if (!cur) return;
+      const next = { ...runtimeErrors.value };
+      delete next[id];
+      runtimeErrors.value = next;
+      return;
+    }
+    if (cur && cur.line === err.line && cur.message === err.message) return;
+    runtimeErrors.value = { ...runtimeErrors.value, [id]: err };
   }
 
   function inputValuesFor(id: string): Record<string, number | boolean | string> {
@@ -333,6 +357,8 @@ export const usePineStore = defineStore("pine", () => {
     createScript,
     updateScript,
     removeScript,
+    runtimeErrors,
+    setRuntimeError,
     setInputValues,
     inputValuesFor,
     applyCloud,

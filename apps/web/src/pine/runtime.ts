@@ -253,7 +253,14 @@ interface PlotChannel {
 interface Snapshot {
   states: Map<SeriesState, number>;
   plotLens: Array<{ ch: PlotChannel; len: number }>;
+  /** Lengths of the stateful-builtin buffers (ta.ema/ta.atr/…) so a live
+   *  tick rolls them back too instead of appending a second entry. */
+  builtinLens: Array<{ arr: V[]; len: number }>;
 }
+
+/** Debug logging must not touch Node's `process` — this runtime also runs
+ *  in the browser, where a bare `process` reference throws. */
+const PINE_DEBUG = typeof globalThis !== "undefined" && !!(globalThis as { TK_PINE_DEBUG?: unknown }).TK_PINE_DEBUG;
 
 const MAX_OPS = 40_000_000;
 const MAX_LOOP_ITER = 20_000;
@@ -299,6 +306,10 @@ export class PineVM {
     const plots: Extract<Expr, { kind: "call" }>[] = [];
     const hlines: Extract<Expr, { kind: "call" }>[] = [];
     collectNodes(program.body, this.callNodes, plots, hlines, this.inputDecls);
+    // Fail at COMPILE time on anything the runtime cannot resolve, so the
+    // editor shows "line N: unknown function" instead of the chart silently
+    // drawing nothing after "Add to chart".
+    validateProgramCalls(program);
     for (const d of this.inputDecls) this.inputByNode.set(d.nodeId, d);
     this.plots = plots.map((node) => {
       const titleArg = node.args.find((a) => a.name === "title");
@@ -522,7 +533,8 @@ export class PineVM {
     const states = new Map<SeriesState, number>();
     for (const st of this.allVarStates()) states.set(st, st.hist.length);
     const plotLens = this.plots.map((ch) => ({ ch, len: ch.data.length }));
-    return { states, plotLens };
+    const builtinLens = [...this.builtinState.values()].map((arr) => ({ arr, len: arr.length }));
+    return { states, plotLens, builtinLens };
   }
 
   private rollback(snap: Snapshot): void {
@@ -532,6 +544,12 @@ export class PineVM {
     }
     const keep = new Set(snap.plotLens.map((p) => p.ch));
     for (const { ch, len } of snap.plotLens) ch.data.length = Math.min(len, ch.data.length);
+    // Stateful builtins (ta.ema/ta.rsi/ta.supertrend/…) push one entry per
+    // bar; a live tick re-runs the last bar, so their buffers must be cut
+    // back to the snapshot or every tick would leak an extra sample.
+    for (const { arr, len } of snap.builtinLens) {
+      if (arr.length > len) arr.length = len;
+    }
     // Channels created during the rolled-back bar are discarded.
     this.plots = this.plots.filter((ch) => keep.has(ch));
   }
@@ -987,7 +1005,7 @@ export class PineVM {
     const buf = this.bufFor(nsId, node.id);
 
     if (target.__kind === "udt") {
-      if (process.env.TK_DEBUG) console.log(`[dispatch] udt method: ${target.type}.${method}()`);
+      if (PINE_DEBUG) console.log(`[dispatch] udt method: ${target.type}.${method}()`);
       const typeReg = this.types.get(target.type ?? "");
       const m = typeReg?.methods.get(method);
       if (!m) throw new PineRuntimeError(`Unknown method "${method}()" for type "${target.type}"`, node.line);
@@ -1016,7 +1034,7 @@ export class PineVM {
 
     // Array methods: sessionInfos.push(…) → array.push(arr, …)
     if (target.__kind === "array") {
-      if (process.env.TK_DEBUG) console.log(`[dispatch] array method: array.${method}()`);
+      if (PINE_DEBUG) console.log(`[dispatch] array method: array.${method}()`);
       const fullCallee = "array." + method;
       const fn = BUILTINS[fullCallee];
       if (!fn) throw new PineRuntimeError(`Unknown method "${method}()" for array`, node.line);
@@ -1627,6 +1645,7 @@ function inputType(e: Extract<Expr, { kind: "call" }>): PineInputDecl["type"] {
       return "source";
     case "input.string":
     case "input.session":
+    case "input.timeframe":
       return "string";
     default: {
       const first = e.args.find((a) => a.name === null);
@@ -1668,6 +1687,9 @@ function inputDefault(e: Extract<Expr, { kind: "call" }>): number | boolean | st
 }
 
 function inputOptions(e: Extract<Expr, { kind: "call" }>): string[] | undefined {
+  // input.timeframe ships the standard timeframe choices so the editor can
+  // offer a dropdown instead of free text.
+  if (e.callee === "input.timeframe") return ["1", "3", "5", "15", "30", "60", "120", "240", "D", "W", "M"];
   const named = e.args.find((a) => a.name === "options");
   if (!named) return undefined;
   if (named.expr.kind === "call" && named.expr.callee === "array.from") {
@@ -2345,8 +2367,24 @@ const BUILTINS: Record<string, (ctx: BuiltinCtx) => V> = {
   },
   "ta.supertrend": (ctx) => {
     const factor = ctx.numArg(0, 3);
-    const atr = num(BUILTINS["ta.atr"]!(ctx)); // consumes the ATR-length arg
+    const atrLen = Math.max(1, Math.round(ctx.numArg(1, 10)));
+    // Own ATR stream: delegating to ta.atr would read THIS call's first
+    // positional arg (the factor) as the ATR length.
+    const tr = num(BUILTINS["ta.tr"]!(ctx));
+    const atrArr = ctx.state("st_atr") as unknown as number[];
+    const alpha = 1 / atrLen;
+    let atr: number;
+    if (atrArr.length < atrLen) {
+      const prev = atrArr.length ? atrArr[atrArr.length - 1]! : 0;
+      atr = (prev * atrArr.length + tr) / (atrArr.length + 1);
+      atrArr.push(atr);
+      if (atrArr.length < atrLen) atr = NaN; // warm-up, same rule as ta.atr
+    } else {
+      atr = alpha * tr + (1 - alpha) * atrArr[atrArr.length - 1]!;
+      atrArr.push(atr);
+    }
     const src = num(ctx.vm.candleAt(ctx.vm.currentBar, "hlc3"));
+    const close = num(ctx.vm.candleAt(ctx.vm.currentBar, "close"));
     const upArr = ctx.state("st_upper") as unknown as number[];
     const lowArr = ctx.state("st_lower") as unknown as number[];
     const dirArr = ctx.state("st_dir") as unknown as number[];
@@ -2355,20 +2393,21 @@ const BUILTINS: Record<string, (ctx: BuiltinCtx) => V> = {
     const basicLower = src - factor * atr;
     let upper = basicUpper;
     let lower = basicLower;
-    if (upArr.length) {
-      const prevUpper = upArr[upArr.length - 1]!;
-      const prevLower = lowArr[lowArr.length - 1]!;
-      const prevClose = num(ctx.vm.candleAt(ctx.vm.currentBar - 1, "close"));
-      upper = basicUpper < prevUpper || prevClose > prevUpper ? basicUpper : prevUpper;
-      lower = basicLower > prevLower || prevClose < prevLower ? basicLower : prevLower;
-    }
-    let dir = dirArr.length ? dirArr[dirArr.length - 1]! : 1;
-    if (supArr.length) {
-      const prevSup = supArr[supArr.length - 1]!;
-      if (prevSup === upper) dir = -1;
-      else if (prevSup === lower) dir = 1;
-    } else {
-      dir = 1;
+    const idx = upArr.length - 1;
+    const prevUpper = idx >= 0 ? upArr[idx]! : NaN;
+    const prevLower = idx >= 0 ? lowArr[idx]! : NaN;
+    const prevClose = num(ctx.vm.candleAt(ctx.vm.currentBar - 1, "close"));
+    // Finite guards: the ATR warm-up yields na bands, and letting that na
+    // into the running state made every later bar na as well (the band used
+    // to plot nothing at all while the direction was fine).
+    if (Number.isFinite(prevUpper)) upper = basicUpper < prevUpper || prevClose > prevUpper ? basicUpper : prevUpper;
+    if (Number.isFinite(prevLower)) lower = basicLower > prevLower || prevClose < prevLower ? basicLower : prevLower;
+    const prevSup = supArr.length ? supArr[supArr.length - 1]! : NaN;
+    const prevDir = dirArr.length ? dirArr[dirArr.length - 1]! : 1;
+    let dir = prevDir;
+    if (Number.isFinite(atr) && Number.isFinite(prevSup)) {
+      if (Number.isFinite(prevUpper) && prevSup === prevUpper) dir = close > upper ? -1 : 1;
+      else if (Number.isFinite(prevLower) && prevSup === prevLower) dir = close < lower ? 1 : -1;
     }
     const sup = dir === 1 ? lower : upper;
     upArr.push(upper);
@@ -2616,6 +2655,7 @@ const BUILTINS: Record<string, (ctx: BuiltinCtx) => V> = {
   "input.source": inputImpl,
   "input.string": inputImpl,
   "input.session": inputImpl,
+  "input.timeframe": inputImpl,
 
   // ── arrays ──
   "array.new": (ctx) => {
@@ -2789,13 +2829,281 @@ const BUILTINS: Record<string, (ctx: BuiltinCtx) => V> = {
     throw new PineRuntimeError(String(msg ?? "runtime.error"), ctx.node.line);
   },
 
+  // ── pivots / offsets / conditional history ──
+  "ta.pivothigh": (ctx) => pivotImpl(ctx, "high"),
+  "ta.pivotlow": (ctx) => pivotImpl(ctx, "low"),
+  "ta.highestbars": (ctx) => barsOffsetImpl(ctx, "high"),
+  "ta.lowestbars": (ctx) => barsOffsetImpl(ctx, "low"),
+  "ta.valuewhen": (ctx) => {
+    const condE = ctx.pos(0);
+    const srcE = ctx.pos(1);
+    if (!condE || !srcE) return NA;
+    const occ = Math.max(0, Math.round(ctx.numArg(2, 0)));
+    const vals = ctx.state("vw_vals") as unknown as number[];
+    const bars = ctx.state("vw_bars") as unknown as number[];
+    const bar = ctx.vm.currentBar;
+    const src = num(ctx.vm.evalPublic(srcE, ctx.scope));
+    if (truthy(ctx.vm.evalPublic(condE, ctx.scope)) && Number.isFinite(src)) {
+      // Same bar twice (live tick) must REPLACE its sample, not add one.
+      if (bars.length && bars[bars.length - 1] === bar) vals[vals.length - 1] = src;
+      else {
+        bars.push(bar);
+        vals.push(src);
+      }
+    }
+    const at = vals.length - 1 - occ;
+    return at >= 0 ? vals[at]! : NA;
+  },
+  // v3/v4 alias, still all over published scripts.
+  "iff": (ctx) => {
+    const condE = ctx.pos(0);
+    if (!condE) return NA;
+    return truthy(ctx.vm.evalPublic(condE, ctx.scope)) ? ctx.arg(1) : ctx.arg(2);
+  },
+
   // ── graceful no-ops (no visual in this subset) ──
   "alertcondition": () => NA,
   "plotshape": () => NA,
   "plotchar": () => NA,
   "plotarrow": () => NA,
-  "plotcandle": () => NA,
+  // Candles are a series type this chart doesn't have: fail loudly instead
+  // of drawing nothing and letting the script look broken.
+  "plotcandle": (ctx) => {
+    throw new PineRuntimeError("plotcandle() isn't supported yet — use plot() or plotshape() for the same values", ctx.node.line);
+  },
   "barcolor": () => NA,
   "bgcolor": () => NA,
   "fill": () => NA,
 };
+
+// ── shared helpers for the builtins above ──────────────────────────────────
+
+/** ta.pivothigh/ta.pivotlow: the pivot value, confirmed `right` bars later.
+ *  Two-arg form pivots the raw high/low, three-arg form pivots a source. */
+function pivotImpl(ctx: BuiltinCtx, kind: "high" | "low"): V {
+  const args = ctx.node.args.filter((a) => a.name === null).map((a) => a.expr);
+  const twoArg = args.length <= 2;
+  const srcE = twoArg ? null : (args[0] ?? null);
+  const leftE = args[twoArg ? 0 : 1];
+  const rightE = args[twoArg ? 1 : 2];
+  if (!leftE || !rightE) return NA;
+  const left = Math.max(1, Math.round(num(ctx.vm.evalPublic(leftE, ctx.scope))));
+  const right = Math.max(1, Math.round(num(ctx.vm.evalPublic(rightE, ctx.scope))));
+  const cur = ctx.vm.currentBar;
+  const pivotIdx = cur - right;
+  if (pivotIdx - left < 0) return NA;
+  const hist = srcE ? ctx.hist(srcE) : null;
+  const valueAt = (idx: number): number => (hist ? num(hist.at(cur - idx)) : num(ctx.vm.candleAt(idx, kind)));
+  const mid = valueAt(pivotIdx);
+  if (!Number.isFinite(mid)) return NA;
+  for (let k = 1; k <= left; k++) {
+    const v = valueAt(pivotIdx - k);
+    if (!Number.isFinite(v) || (kind === "high" ? v > mid : v < mid)) return NA;
+  }
+  for (let k = 1; k <= right; k++) {
+    const v = valueAt(pivotIdx + k);
+    if (!Number.isFinite(v) || (kind === "high" ? v >= mid : v <= mid)) return NA;
+  }
+  return mid;
+}
+
+/** ta.highestbars/ta.lowestbars: offset to the extreme (0 = this bar, ≤ 0). */
+function barsOffsetImpl(ctx: BuiltinCtx, mode: "high" | "low"): V {
+  const srcE = ctx.pos(0);
+  if (!srcE) return NA;
+  const len = Math.max(1, Math.round(ctx.numArg(1, 20)));
+  const h = ctx.hist(srcE);
+  if (h.len < len) return NA;
+  let best = NaN;
+  let off = 0;
+  for (let k = 0; k < len; k++) {
+    const v = num(h.at(k));
+    if (!Number.isFinite(v)) continue;
+    if (!Number.isFinite(best) || (mode === "high" ? v > best : v < best)) {
+      best = v;
+      off = k;
+    }
+  }
+  return Number.isFinite(best) ? -off : NA;
+}
+
+/** Re-index a builtin ctx for the GLOBAL drawing-method form, where the
+ *  object is positional arg 0 (`label.set_text(lbl, "x")`). */
+function shiftCtx(ctx: BuiltinCtx, obj: PineObject): BuiltinCtx {
+  const pos = (i: number): Expr | null => ctx.node.args.filter((a) => a.name === null)[i + 1]?.expr ?? null;
+  return {
+    vm: ctx.vm,
+    node: ctx.node,
+    scope: ctx.scope,
+    nsId: ctx.nsId,
+    obj,
+    pos,
+    named: (name) => ctx.named(name),
+    numArg: (i, fallback) => {
+      const e = pos(i);
+      return e ? num(ctx.vm.evalPublic(e, ctx.scope)) : fallback;
+    },
+    arg: (i) => {
+      const e = pos(i);
+      return e ? ctx.vm.evalPublic(e, ctx.scope) : NA;
+    },
+    arr: (i) => {
+      const e = pos(i);
+      const v = e ? ctx.vm.evalPublic(e, ctx.scope) : NA;
+      if (!isArrV(v)) throw new PineRuntimeError("Expected an array argument", ctx.node.line);
+      return v;
+    },
+    hist: (e) => ctx.hist(e),
+    state: (key) => ctx.state(key),
+  };
+}
+
+// Global form of every drawing-object method: `label.set_text(lbl, …)` and
+// `table.cell(t, …)` are what published scripts use, while the engine only
+// knew the method form (`lbl.set_text(…)`, `t.cell(…)`).
+for (const [kind, methods] of Object.entries(DRAWING_METHODS)) {
+  for (const [method, fn] of Object.entries(methods)) {
+    const key = `${kind}.${method}`;
+    if (BUILTINS[key]) continue;
+    BUILTINS[key] = (ctx) => {
+      const recv = ctx.arg(0);
+      if (!isObjectV(recv)) return NA;
+      const out = fn(shiftCtx(ctx, recv));
+      return out === undefined ? NA : out;
+    };
+  }
+}
+
+// Typed array constructors — array.new_float() & friends are the standard way
+// to create arrays in Pine, so their absence broke most array-based scripts.
+const TYPED_ARRAY_DEFAULTS: Record<string, V> = {
+  float: 0,
+  int: 0,
+  bool: false,
+  string: "",
+  color: "#2196F3",
+  line: null,
+  label: null,
+  box: null,
+  table: null,
+  linefill: null,
+};
+for (const [type, fallback] of Object.entries(TYPED_ARRAY_DEFAULTS)) {
+  const key = `array.new_${type}`;
+  if (BUILTINS[key]) continue;
+  BUILTINS[key] = (ctx) => {
+    const sizeE = ctx.pos(0);
+    const initE = ctx.pos(1);
+    const size = sizeE ? Math.max(0, Math.round(num(ctx.vm.evalPublic(sizeE, ctx.scope)))) : 0;
+    const fill = initE ? ctx.vm.evalPublic(initE, ctx.scope) : fallback;
+    const items: V[] = [];
+    for (let i = 0; i < size; i++) items.push(fill);
+    return { __kind: "array", items } as V;
+  };
+}
+
+// ── compile-time call validation ────────────────────────────────────────────
+
+interface DeclaredNames {
+  fns: Set<string>;
+  types: Set<string>;
+  vars: Set<string>;
+}
+
+function collectDeclaredNames(body: Stmt[], out: DeclaredNames): void {
+  const visitExpr = (e: Expr): void => {
+    for (const c of exprChildren(e)) visitExpr(c);
+  };
+  const visit = (s: Stmt): void => {
+    switch (s.kind) {
+      case "funcDecl":
+        out.fns.add(s.name);
+        for (const p of s.params) {
+          out.vars.add(p.name);
+          if (p.def) visitExpr(p.def);
+        }
+        for (const st of s.body) visit(st);
+        return;
+      case "methodDecl":
+        for (const p of s.params) out.vars.add(p);
+        for (const st of s.body) visit(st);
+        return;
+      case "typeDecl":
+        out.types.add(s.name);
+        return;
+      case "varDecl":
+      case "assign":
+        out.vars.add(s.name);
+        visitExpr(s.expr);
+        return;
+      case "tupleDecl":
+        for (const n of s.names) out.vars.add(n);
+        visitExpr(s.expr);
+        return;
+      case "ifStmt":
+        for (const b of s.branches) {
+          visitExpr(b.cond);
+          for (const st of b.body) visit(st);
+        }
+        for (const st of s.elseBody) visit(st);
+        return;
+      case "forStmt":
+        out.vars.add(s.varName);
+        visitExpr(s.from);
+        visitExpr(s.to);
+        if (s.by) visitExpr(s.by);
+        for (const st of s.body) visit(st);
+        return;
+      case "forInStmt":
+        out.vars.add(s.varName);
+        visitExpr(s.iter);
+        for (const st of s.body) visit(st);
+        return;
+      case "whileStmt":
+        visitExpr(s.cond);
+        for (const st of s.body) visit(st);
+        return;
+      case "exprStmt":
+        visitExpr(s.expr);
+        return;
+      default:
+        return;
+    }
+  };
+  for (const s of body) visit(s);
+}
+
+/** Every call expression in the program, nested blocks included. */
+function forEachCall(body: Stmt[], cb: (call: Extract<Expr, { kind: "call" }>) => void): void {
+  const walk = (e: Expr): void => {
+    if (e.kind === "call") cb(e);
+    for (const c of exprChildren(e)) walk(c);
+  };
+  for (const e of stmtExprs(body)) walk(e);
+}
+
+/**
+ * Rejects calls the VM could never resolve BEFORE the script is added to the
+ * chart. Unknown builtins used to compile fine and then throw inside the
+ * chart's commit path, which showed nothing at all to the user.
+ */
+function validateProgramCalls(program: Program): void {
+  const decl: DeclaredNames = { fns: new Set(), types: new Set(), vars: new Set() };
+  collectDeclaredNames(program.body, decl);
+  const known = (callee: string): boolean => {
+    // Output calls are intercepted by evalCall before the builtin table.
+    if (callee === "plot" || callee === "hline" || callee === "alertcondition") return true;
+    if (BUILTINS[callee]) return true;
+    if (!callee.includes(".")) return decl.fns.has(callee);
+    const segs = callee.split(".");
+    if (segs.length === 2 && segs[1] === "new" && decl.types.has(segs[0]!)) return true;
+    // x.method(…): x may be a UDT/array/drawing object in a variable or
+    // parameter — only the runtime knows which, so accept a known receiver.
+    return decl.vars.has(segs[0]!) || decl.types.has(segs[0]!);
+  };
+  forEachCall(program.body, (call) => {
+    if (!known(call.callee)) {
+      throw new PineError(`Unknown function "${call.callee}()" — this Pine engine doesn't support it yet`, call.line);
+    }
+  });
+}

@@ -14,7 +14,7 @@ import { useReplayStore } from "@/stores/replay";
 import { useDemoStore, demoValuePerPrice, type DemoSide, type DemoStatus, type DemoKind } from "@/stores/demo";
 import { useIndicatorsStore, sessionKindAt, nextBoundaryAfter, boundaryEpoch, CHAIN_NEXT, tzOffsetMin, inSession, localMinutesOfDay, type SessionDef, type CustomSession } from "@/stores/indicators";
 import { usePineStore } from "@/stores/pine";
-import { compile, type PineVM, type PineInputDecl } from "@/pine";
+import { compile, PineError, type PineVM, type PineInputDecl } from "@/pine";
 import { PineTailError } from "@/chart/chartAdapter";
 import PineEditor from "./PineEditor.vue";
 import DemoPanel from "./DemoPanel.vue";
@@ -588,7 +588,22 @@ function pushPineData(full: boolean, force = false): void {
       entry.vm.reset();
       entry.lastObjRunTime = lastTime;
     }
-    const ran = entry.vm.run(candles);
+    let ran: boolean;
+    try {
+      ran = entry.vm.run(candles);
+      pine.setRuntimeError(id, null);
+    } catch (err) {
+      // A script the VM cannot execute must not abort the whole chart commit
+      // (that used to trip the "commit failed" rebuild path and blank the
+      // indicator with no explanation). Keep the chart healthy, clear this
+      // script's series, and surface line + message in the legend + editor.
+      const line = err instanceof PineError ? err.line : 1;
+      const message = err instanceof Error ? err.message : String(err);
+      entry.vm.reset();
+      for (const plot of entry.vm.currentPlots()) adapter.setPineData(plot.id, []);
+      pine.setRuntimeError(id, { line, message });
+      continue;
+    }
     if (!ran && !full && !force && !entry.usesObjects) continue;
     for (const plot of entry.vm.currentPlots()) {
       if (full || entry.usesObjects) {
@@ -6477,6 +6492,15 @@ onBeforeUnmount(() => {
       <!-- Pine Script user indicators: same legend controls as the built-ins
            (eye / inputs / remove) plus the script editor pencil. -->
       <div v-for="pid in pine.currentAdded()" :key="pid" class="legend-row">
+        <button
+          v-if="pine.runtimeErrors[pid]"
+          class="ind-legend-btn"
+          type="button"
+          style="color: var(--offline); font-size: 12px; font-weight: 800; line-height: 1"
+          :title="`Script error, line ${pine.runtimeErrors[pid]!.line}: ${pine.runtimeErrors[pid]!.message} — click to edit`"
+          aria-label="Script error — open the editor"
+          @click.stop="pine.openEditor(pid)"
+        >!</button>
         <span class="ind-legend-name pine-legend-name" :class="{ off: !pine.isVisible(market.instrument, pid) }">
           <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" style="opacity:0.75"><text x="3" y="17" font-size="13" font-weight="700" font-family="Georgia, serif" font-style="italic" fill="currentColor">ƒx</text></svg>
           {{ pineScriptName(pid) }}

@@ -22,6 +22,9 @@ const name = ref("");
 const code = ref("");
 const error = ref<PineCompileError | null>(null);
 const savedFlash = ref(false);
+/** Execution failure reported by the chart for the script being edited —
+ *  compilation happens here, but the script RUNS on the chart. */
+const runtimeError = computed(() => (pine.editingId ? pine.runtimeErrors[pine.editingId] ?? null : null));
 const inputsPanelOpen = ref(true);
 
 watch(
@@ -404,6 +407,9 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <button v-if="runtimeError && !error" class="pe-error" type="button" @click="gotoLine(runtimeError.line)">
+      <span class="pe-error-line">Line {{ runtimeError.line }}</span> {{ runtimeError.message }}
+    </button>
     <div v-if="!code.trim()" class="pe-hint">Write your script, or press <b>Example</b> to start from a sample.</div>
     <button v-else-if="error" class="pe-error" type="button" @click="gotoLine(error.line)">
       <span class="pe-error-line">Line {{ error.line }}</span> {{ error.message }}
