@@ -102,7 +102,7 @@ export function binanceIntervalPlan(tf: Timeframe): { interval: string; factor: 
   if (sec < 60) return { interval: "1s", factor: sec }; // only 1s is native sub-minute
   const map: Record<number, string> = {
     60: "1m", 300: "5m", 900: "15m", 1800: "30m",
-    3600: "1h", 14400: "4h", 86400: "1d", 604800: "1w", 2592000: "1M",
+    3600: "1h", 7200: "2h", 14400: "4h", 86400: "1d", 604800: "1w", 2592000: "1M",
   };
   return { interval: map[sec] ?? "1m", factor: 1 };
 }
@@ -110,13 +110,13 @@ export function binanceIntervalPlan(tf: Timeframe): { interval: string; factor: 
 /** HTX (Huobi) period strings per native Binance interval. */
 const HTX_PERIODS: Record<string, string> = {
   "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min",
-  "1h": "60min", "4h": "4hour", "1d": "1day", "1w": "1week", "1M": "1mon",
+  "1h": "60min", "2h": "60min", "4h": "4hour", "1d": "1day", "1w": "1week", "1M": "1mon",
 };
 
 /** Gate intervals per Binance interval; 1w/1M derive from 1d rows. */
 const GATE_INTERVALS: Record<string, string> = {
   "10s": "10s", "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-  "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1d", "1M": "1d",
+  "1h": "1h", "2h": "1h", "4h": "4h", "1d": "1d", "1w": "1d", "1M": "1d",
 };
 
 /** BTCUSDT → BTC_USDT (all supported Binance symbols end in USDT). */
@@ -131,6 +131,15 @@ function gateIntervalFor(tf: Timeframe): string | null {
   const sec = TIMEFRAME_SECONDS[tf];
   if (sec < 60) return sec === 10 || sec === 30 ? "10s" : null;
   return GATE_INTERVALS[binanceIntervalPlan(tf).interval] ?? null;
+}
+
+/** Bar length, in seconds, of a source interval label ("10s", "1h", …). */
+const INTERVAL_SECONDS: Record<string, number> = {
+  "10s": 10, "1m": 60, "5m": 300, "15m": 900, "30m": 1800,
+  "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400, "1w": 604800, "1M": 2592000,
+};
+function intervalSeconds(interval: string): number | null {
+  return INTERVAL_SECONDS[interval] ?? null;
 }
 
 type RawKline = [number, string, string, string, string, ...unknown[]];
@@ -465,23 +474,26 @@ export async function fetchBinanceCandles(
           // HTX serves the latest window only — cursor queries need a source
           // with `to` support (Gate), otherwise the window would be wrong.
           if (toMs !== undefined) continue;
-          rows = await fetchHtxCandles(instrument, interval, count, vols);
-          sourceSec = tfSec;
+          const htxSec = intervalSeconds(interval) ?? tfSec;
+          const htxNeeded = htxSec < tfSec ? Math.ceil((count * tfSec) / htxSec) : count;
+          rows = await fetchHtxCandles(instrument, interval, Math.min(htxNeeded, HTX_MAX_SIZE), vols);
+          sourceSec = htxSec;
           break;
         }
         case "gate": {
           const gate = gateIntervalFor(timeframe);
           if (!gate) continue; // timeframe finer than Gate's 10s (5s/15s/1s)
+          const gateSec = intervalSeconds(gate) ?? tfSec;
           const gateNeeded =
-            gate === "10s"
-              ? count * (tfSec / 10) // 10s source rows → 30s target
-              : tfSec === 604800
-                ? count * 7 // 1d source rows → weekly target
-                : tfSec === 2592000
-                  ? count * 31 // 1d source rows → monthly target
+            tfSec === 604800
+              ? count * 7 // 1d source rows → weekly target
+              : tfSec === 2592000
+                ? count * 31 // 1d source rows → monthly target
+                : gateSec < tfSec
+                  ? Math.ceil((count * tfSec) / gateSec) // 10s→30s, 1h→2h
                   : count;
           rows = await fetchGateCandles(instrument, gate, Math.min(gateNeeded, cap), toSec, vols);
-          sourceSec = gate === "10s" ? 10 : tfSec === 604800 || tfSec === 2592000 ? 86400 : tfSec;
+          sourceSec = gateSec;
           break;
         }
       }
@@ -621,7 +633,11 @@ export class BinanceDirectStream {
     const cur = this.current;
     if (!cur) return;
     const tfSec = TIMEFRAME_SECONDS[cur.timeframe];
-    if (tfSec === 604800 || tfSec === 2592000) {
+    // Gate serves 1d rows for 1w/1M and 1h rows for 2h — those merge into the
+    // target bucket, so the seed primes the merge bucket as well.
+    const gate = gateIntervalFor(cur.timeframe);
+    const gateSec = gate ? intervalSeconds(gate) : null;
+    if (gateSec !== null && gateSec < tfSec) {
       this.merged = { ...candle, time: binanceBucketStart(candle.time * 1000, tfSec) / 1000 };
     }
   }
@@ -864,9 +880,10 @@ export class BinanceDirectStream {
 
     if (channel === "spot.candlesticks" && tfSec >= 60) {
       const rows = Array.isArray(msg.result) ? msg.result : [msg.result];
-      // 1w/1M subscribe to 1d and merge into the calendar bucket; native
-      // timeframes receive their own interval directly.
-      const sourceSec = tfSec === 604800 || tfSec === 2592000 ? 86400 : tfSec;
+      // 1w/1M subscribe to 1d and 2h to 1h, merging those rows into the
+      // target bucket; native timeframes receive their own interval directly.
+      const gate = gateIntervalFor(cur.timeframe);
+      const sourceSec = (gate !== null ? intervalSeconds(gate) : null) ?? tfSec;
       for (const row of rows) {
         const c = parseGateWsCandle(row);
         if (!c) continue;

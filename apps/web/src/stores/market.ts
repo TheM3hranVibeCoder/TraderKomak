@@ -493,6 +493,46 @@ export const useMarketStore = defineStore("market", () => {
     }
   }
 
+  /** Replay forward refill: a TF/symbol switch in replay loads only the
+   *  window around the cut, so forward stepping used to stop at that window's
+   *  end instead of reaching the live market. Fetch the next chunk of history
+   *  that follows the replay-loaded window (capped at "now") and append it;
+   *  the replay boundary then advances through it. Returns true when the
+   *  replay window grew (or was opened up at the live edge). */
+  async function extendReplayForward(): Promise<boolean> {
+    const replay = useReplayStore();
+    if (!replay.active || replay.dataEnd === null) return false;
+    const end = replay.dataEnd;
+    const wantInstrument = instrument.value;
+    const wantTimeframe = timeframe.value;
+    const barSec = TIMEFRAME_SECONDS[wantTimeframe as keyof typeof TIMEFRAME_SECONDS] ?? 60;
+    const now = Math.floor(Date.now() / 1000);
+    // Already at the live edge: drop the forward limit so the streamed
+    // candles continue the replay without another fetch.
+    if (end >= now - barSec) {
+      replay.setDataEnd(null);
+      return true;
+    }
+    const to = Math.min(end + HISTORY_COUNT * barSec, now);
+    let data: Candle[] | null = null;
+    try {
+      data = await fetchCandles(wantInstrument, wantTimeframe, HISTORY_COUNT, to);
+    } catch {
+      return false;
+    }
+    if (!replay.active || replay.dataEnd === null) return false;
+    if (wantInstrument !== instrument.value || wantTimeframe !== timeframe.value) return false;
+    const fresh = data.filter((c) => c.time > end);
+    if (fresh.length === 0) return false;
+    candles.value = mergeCandles(candles.value, fresh);
+    rebuildTimeIndex();
+    const last = fresh[fresh.length - 1]!;
+    // Reached "now": leave the window open so live-stream candles continue
+    // the replay seamlessly.
+    replay.setDataEnd(last.time >= now - 2 * barSec ? null : last.time);
+    return true;
+  }
+
   async function setInstrument(next: string): Promise<void> {
     if (next === instrument.value) return;
     loadSeq++; // invalidate any in-flight history for the old symbol
@@ -628,5 +668,6 @@ export const useMarketStore = defineStore("market", () => {
     setTimeframe,
     loadHistory,
     loadMore,
+    extendReplayForward,
   };
 });

@@ -105,6 +105,19 @@ export function validateUsername(raw: string): string | null {
   return null;
 }
 
+/** Local-dev shortcut: with VITE_DEV_FAKE_AUTH=1 in apps/web/.env.local the
+ *  app signs in as a local test user instead of doing the Google round-trip,
+ *  so replay/chart work can be verified without an OAuth account.
+ *  import.meta.env.DEV is compiled in, so a production bundle can never
+ *  enable this even if the variable leaks into a build environment. */
+const DEV_FAKE_AUTH =
+  import.meta.env.DEV && import.meta.env.VITE_DEV_FAKE_AUTH === "1";
+export const devFakeAuthActive = DEV_FAKE_AUTH;
+const DEV_FAKE_USER = {
+  id: "00000000-0000-4000-8000-000000000001",
+  email: "dev@traderkomak.local",
+  username: "devuser",
+};
 export const useAuthStore = defineStore("auth", () => {
   const status = ref<AuthStatus>(supabaseReady ? "loading" : "guest");
   const userId = ref<string | null>(null);
@@ -121,6 +134,15 @@ export const useAuthStore = defineStore("auth", () => {
   const signedIn = computed(() => status.value === "ready");
 
   async function init(): Promise<void> {
+    if (DEV_FAKE_AUTH) {
+      // Local dev only: enter the app as a test user, no OAuth redirect.
+      userId.value = DEV_FAKE_USER.id;
+      email.value = DEV_FAKE_USER.email;
+      profile.value = { username: DEV_FAKE_USER.username, avatarUrl: null, isAdmin: false };
+      status.value = "ready";
+      setWasAuth(true);
+      return;
+    }
     if (!supabaseReady) return;
     const sb = supabase();
     // Sliding 7-day window: read the PREVIOUS visit stamp first, then
@@ -248,6 +270,11 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   function signInWithGoogle(): void {
+    if (DEV_FAKE_AUTH) {
+      // Local dev only: the landing button re-enters as the test user.
+      void init();
+      return;
+    }
     if (!supabaseReady) return;
     try { sessionStorage.setItem(INFLIGHT_KEY, "1"); } catch {}
     void supabase().auth.signInWithOAuth({

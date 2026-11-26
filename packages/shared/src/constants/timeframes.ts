@@ -5,7 +5,7 @@
  * Historical data availability per timeframe is documented in the market
  * server's history-resolution logic (see apps/market-server/src/routes/candles.ts).
  */
-export const TIMEFRAMES = ["5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1M"] as const;
+export const TIMEFRAMES = ["5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d", "1w", "1M"] as const;
 
 export type Timeframe = (typeof TIMEFRAMES)[number];
 
@@ -22,6 +22,7 @@ export const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
   "15m": 900,
   "30m": 1800,
   "1h": 3600,
+  "2h": 7200,
   "4h": 14400,
   "1d": 86400,
   "1w": 604800,
@@ -35,12 +36,24 @@ export const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
  *
  * Note `10s`/`30s` are exact multiples of `S5`, so their history is
  * derived by aggregating S5 candles with the same engine used live.
- * `5m`+ are native, no derivation needed.
+ * `2h` has no native source on any provider used here, so its history is
+ * aggregated from native H1 candles with the same engine used live.
+ * `5m`+ (except `2h`) are native, no derivation needed.
  */
-export const NATIVE_HISTORY_GRANULARITY: Record<
-  Timeframe,
-  "S5" | "M1" | "M5" | "M15" | "M30" | "H1" | "H4" | "D" | "W" | "M" | null
-> = {
+/** Upstream-native bar granularity a history fetch can use. */
+export type NativeGranularity =
+  | "S5"
+  | "M1"
+  | "M5"
+  | "M15"
+  | "M30"
+  | "H1"
+  | "H4"
+  | "D"
+  | "W"
+  | "M";
+
+export const NATIVE_HISTORY_GRANULARITY: Record<Timeframe, NativeGranularity | null> = {
   "5s": "S5",
   "10s": "S5",
   "15s": "S5",
@@ -50,6 +63,7 @@ export const NATIVE_HISTORY_GRANULARITY: Record<
   "15m": "M15",
   "30m": "M30",
   "1h": "H1",
+  "2h": "H1",
   "4h": "H4",
   "1d": "D",
   "1w": "W",
@@ -67,20 +81,54 @@ export const TIMEFRAME_LABELS: Record<Timeframe, string> = {
   "15m": "15m",
   "30m": "30m",
   "1h": "1h",
+  "2h": "2h",
   "4h": "4h",
   "1d": "D",
   "1w": "W",
   "1M": "M",
 };
 
+/** Bar length (seconds) of each native granularity. `null` for calendar bars
+ *  (D/W/M), whose length varies and which are therefore never derived. */
+const GRANULARITY_SECONDS: Record<NativeGranularity, number | null> = {
+  S5: 5,
+  M1: 60,
+  M5: 300,
+  M15: 900,
+  M30: 1800,
+  H1: 3600,
+  H4: 14400,
+  D: null,
+  W: null,
+  M: null,
+};
+
+/** Native source bar length for a timeframe (null when calendar-native, or
+ *  when the timeframe has no history source at all). */
+export function nativeGranularitySeconds(timeframe: Timeframe): number | null {
+  const g = NATIVE_HISTORY_GRANULARITY[timeframe];
+  if (!g) return null;
+  return GRANULARITY_SECONDS[g];
+}
+
+/** True when a timeframe's history must be aggregated from a FINER native
+ *  granularity (5s-derived sub-minute bars, and 2h from native H1 bars).
+ *  Native 1:1 and calendar timeframes pass through untouched — re-bucketing
+ *  daily candles to UTC midnight would corrupt OANDA's 5pm-NY alignment. */
+export function needsHistoryAggregation(timeframe: Timeframe): boolean {
+  const native = nativeGranularitySeconds(timeframe);
+  if (native === null) return false;
+  return native < TIMEFRAME_SECONDS[timeframe];
+}
+
 /** How many native-granularity candles are needed to build N tf-candles. */
 export function nativeCandlesNeeded(timeframe: Timeframe, count: number): number {
-  const g = NATIVE_HISTORY_GRANULARITY[timeframe];
-  if (g === null) return 0;
-  // Native timeframes (M1/M5/…) map 1:1
-  if (g !== "S5") return count;
-  const multiplier = TIMEFRAME_SECONDS[timeframe] / TIMEFRAME_SECONDS["5s"];
-  return Math.ceil(count * multiplier);
+  if (NATIVE_HISTORY_GRANULARITY[timeframe] === null) return 0;
+  const native = nativeGranularitySeconds(timeframe);
+  if (native === null) return count; // calendar-native → 1:1
+  const tfSec = TIMEFRAME_SECONDS[timeframe];
+  if (native >= tfSec) return count; // native or coarser → 1:1
+  return Math.ceil((count * tfSec) / native);
 }
 
 /** Ordered list small→big — used for dropdown. Already sorted via TIMEFRAMES. */

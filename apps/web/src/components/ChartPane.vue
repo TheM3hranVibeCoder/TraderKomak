@@ -1698,23 +1698,92 @@ let holdTimer: ReturnType<typeof setInterval> | null = null;
 let holdTimeout: ReturnType<typeof setTimeout> | null = null;
 let pickingMove: ((ev: MouseEvent) => void) | null = null;
 
+let replayRefillPending = false;
+/** Window edge a background forward prefetch was already started for (one
+ *  attempt per edge, so a failing fetch cannot re-fire on every tick). */
+let replayPrefetchFor: number | null = null;
+/** Start the next forward chunk this many candles before the window edge,
+ *  leaving time for the ~1-2s provider round trip to finish first. */
+const REPLAY_PREFETCH_CANDLES = 120;
+
+/** Replay playback is bounded by the history loaded around the cut: a
+ *  timeframe/symbol switch in replay fetches only a window around the
+ *  boundary, so stepping used to park at that window's ends — forward
+ *  playback never reached the live market and backward never loaded older
+ *  candles. Whenever the boundary reaches such an edge, pull the next chunk
+ *  from the store (forward: the following candles toward "now"; backward:
+ *  older history) and continue from where it stopped. */
+function refillForward(): void {
+  if (replayRefillPending) return;
+  replayRefillPending = true;
+  void market
+    .extendReplayForward()
+    .then((extended) => {
+      if (!extended) {
+        // No candles ahead (live edge / market closed / fetch failed):
+        // park playback on the newest available candle, never spin.
+        replay.playing = false;
+        return;
+      }
+      replayStep(1);
+    })
+    .finally(() => {
+      replayRefillPending = false;
+    });
+}
+
+/** Fetch the next forward chunk while playback is still inside the current
+ *  window, so reaching its edge does not stall on the provider round trip
+ *  (measured ~1s per 1500-candle OANDA request). The boundary is untouched:
+ *  the chunk merges behind the replay cutoff and playback keeps stepping. */
+function prefetchForward(): void {
+  if (replayRefillPending || replay.dataEnd === null) return;
+  if (replayPrefetchFor === replay.dataEnd) return;
+  replayPrefetchFor = replay.dataEnd;
+  replayRefillPending = true;
+  void market.extendReplayForward().finally(() => {
+    replayRefillPending = false;
+  });
+}
+
+function refillBackward(): void {
+  if (replayRefillPending || market.isLoading || market.isLoadingMore || !market.hasMore) return;
+  replayRefillPending = true;
+  void market
+    .loadMore()
+    .then((loaded) => {
+      if (loaded) replayStep(-1);
+    })
+    .finally(() => {
+      replayRefillPending = false;
+    });
+}
+
 /** Advance the replay boundary to the next / previous candle. */
 function replayStep(dir: 1 | -1): void {
   const arr = props.candles;
   if (!arr.length || replay.cutoff === null) return;
   if (dir === 1) {
     const next = arr.find((c) => c.time > replay.cutoff!);
-    if (!next) {
-      replay.playing = false; // reached the newest candle
-      return;
-    }
     // Never step across a data discontinuity: after a TF/symbol switch in
     // replay the loaded history ENDS at the boundary — the next candle in
     // the full array is a live-stream candle from after the fetch window,
-    // and revealing it would draw one huge candle across the gap.
-    if (replay.dataEnd !== null && next.time > replay.dataEnd) {
-      replay.playing = false;
+    // and revealing it would draw one huge candle across the gap. Extend
+    // the window instead, then continue from where playback stopped.
+    if (replay.dataEnd !== null && (!next || next.time > replay.dataEnd)) {
+      refillForward();
       return;
+    }
+    if (!next) {
+      replay.playing = false; // reached the live edge
+      return;
+    }
+    // Refill before the edge, not at it: the chunk then lands while the
+    // remaining candles play out and the forward step never freezes.
+    const barSec =
+      (TIMEFRAME_SECONDS as Record<string, number>)[market.timeframe] ?? 60;
+    if (replay.dataEnd !== null && replay.dataEnd - replay.cutoff! <= REPLAY_PREFETCH_CANDLES * barSec) {
+      prefetchForward();
     }
     replay.stepTo(next.time);
   } else {
@@ -1724,6 +1793,7 @@ function replayStep(dir: 1 | -1): void {
       else break;
     }
     if (prev) replay.stepTo(prev.time);
+    else refillBackward();
   }
 }
 
@@ -1824,6 +1894,7 @@ watch(
       clearInterval(replayTimer);
       replayTimer = null;
     }
+    if (!replay.active) replayPrefetchFor = null; // new session, new edges
     if (replay.active && replay.playing && !replay.picking) {
       replayTimer = setInterval(() => replayStep(1), 1000 / replay.speed);
     }
@@ -2341,8 +2412,8 @@ function updateCountdown() {
     const mm = Math.floor((total % 3600) / 60);
     const ss = total % 60;
     countdown.value = `${dd}d ${pad2(hh)}:${pad2(mm)}:${pad2(ss)}`;
-  } else if (sec >= 14400) {
-    // 4h / daily candles → HH:MM:SS
+  } else if (sec >= 7200) {
+    // 2h / 4h / daily candles → HH:MM:SS
     const total = Math.floor(rem / 1000);
     const hh = Math.floor(total / 3600);
     const mm = Math.floor((total % 3600) / 60);

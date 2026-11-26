@@ -48,6 +48,7 @@ const TF_TO_PERIOD: Partial<Record<Timeframe, number>> = {
   "15m": PERIOD.M15,
   "30m": PERIOD.M30,
   "1h": PERIOD.H1,
+  "2h": PERIOD.H1, // no native H2 — callers aggregate these H1 rows into 2h
   "4h": PERIOD.H4,
   "1d": PERIOD.D1,
   "1w": PERIOD.W1,

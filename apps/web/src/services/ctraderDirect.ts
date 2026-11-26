@@ -769,7 +769,7 @@ async function fetchTrendbars(
   timeframe: Timeframe,
   count: number,
   toSec?: number
-): Promise<Candle[]> {
+): Promise<{ candles: Candle[]; vols: Map<number, number> }> {
   const period = TF_TO_PERIOD[timeframe]!;
   let remaining = count;
   let toMs = toSec !== undefined ? toSec * 1000 : Date.now();
@@ -814,8 +814,7 @@ async function fetchTrendbars(
     const v = vols.get(c.time);
     if (v !== undefined) nativeVols.set(c.time, v);
   }
-  recordVolumes("US30", timeframe, nativeVols);
-  return native;
+  return { candles: native, vols: nativeVols };
 }
 
 /**
@@ -905,8 +904,24 @@ export async function fetchCtraderCandles(
   const info = await client.symbolInfo();
   const accountId = num(client.sessionAccountId());
   const needed = nativeCandlesNeeded(timeframe as Timeframe, count);
+  if (timeframe === "2h") {
+    // cTrader has no native H2 trendbar: build 2h from native H1 rows with
+    // the shared aggregation engine and mirror the aggregation into the
+    // Volume Profile sidecar (tick counts sum into the 2h buckets).
+    const tfSec = TIMEFRAME_SECONDS["2h"];
+    const { candles, vols } = await fetchTrendbars(info, accountId, "1h", needed, toSec);
+    const summed = new Map<number, number>();
+    for (const [t, v] of vols) {
+      const bucket = Math.floor(t / tfSec) * tfSec;
+      summed.set(bucket, (summed.get(bucket) ?? 0) + v);
+    }
+    recordVolumes("US30", "2h", summed);
+    return aggregateCandles(candles, tfSec).slice(-count);
+  }
   if (TF_TO_PERIOD[timeframe as Timeframe] !== undefined) {
-    return fetchTrendbars(info, accountId, timeframe as Timeframe, needed, toSec);
+    const { candles, vols } = await fetchTrendbars(info, accountId, timeframe as Timeframe, needed, toSec);
+    recordVolumes("US30", timeframe as Timeframe, vols);
+    return candles;
   }
   if (SUB_MINUTE.has(timeframe)) {
     // 5s/10s/15s/30s derive from tick-built S5 candles with the shared

@@ -14,7 +14,7 @@
  */
 import type { FastifyInstance, FastifyReply } from "fastify";
 import {
-  NATIVE_HISTORY_GRANULARITY,
+  needsHistoryAggregation,
   TIMEFRAME_SECONDS,
   isInstrument,
   isTimeframe,
@@ -199,13 +199,10 @@ async function resolveHistory(
     toIso
   );
 
-  // 10s/30s derive their larger buckets from native S5 data using the
-  // exact same bucket rules as the live engine.
+  // Derived timeframes (10s/15s/30s from S5, 2h from H1) build their larger
+  // buckets with the exact same bucket rules as the live engine.
   const seconds = TIMEFRAME_SECONDS[timeframe];
-  if (
-    NATIVE_HISTORY_GRANULARITY[timeframe] === "S5" &&
-    seconds > TIMEFRAME_SECONDS["5s"]
-  ) {
+  if (needsHistoryAggregation(timeframe)) {
     candles = aggregateCandles(candles, seconds);
   }
 

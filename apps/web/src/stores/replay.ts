@@ -36,7 +36,9 @@ export const useReplayStore = defineStore("replay", () => {
     cutoff.value = t;
   }
 
-  function setDataEnd(t: number): void {
+  /** Set (or clear, with null) the forward limit of the loaded replay
+   *  history — null means unrestricted (the window reaches the live edge). */
+  function setDataEnd(t: number | null): void {
     dataEnd.value = t;
   }
 

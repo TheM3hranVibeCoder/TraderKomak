@@ -29,6 +29,7 @@ import {
   CandleAggregator,
   aggregateCandles,
   nativeCandlesNeeded,
+  needsHistoryAggregation,
   oandaAlignedBucketStart,
   type Candle,
   type MarketTick,
@@ -350,13 +351,14 @@ export async function fetchOandaCandles(
   // Volume Profile sidecar: keep only the volumes that survived the dedup
   // (same keep-last rule as the candles), then mirror the aggregation —
   // native granularities pass through 1:1; S5 sources sum into the
-  // epoch-floor target bucket (same rule as aggregateCandles).
+  // epoch-floor target bucket (same rule as aggregateCandles). Finer native
+  // sources (S5 → 10s/15s/30s, H1 → 2h) are always aggregated.
   const nativeVols = new Map<number, number>();
   for (const c of native) {
     const v = vols.get(c.time);
     if (v !== undefined) nativeVols.set(c.time, v);
   }
-  if (granularity === "S5" && tfSec > 5) {
+  if (needsHistoryAggregation(timeframe)) {
     const summed = new Map<number, number>();
     for (const [t, v] of nativeVols) {
       const bucket = Math.floor(t / tfSec) * tfSec;

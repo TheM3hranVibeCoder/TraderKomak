@@ -7,7 +7,7 @@ import { ref, watch } from "vue";
 import { isInstrument, isTimeframe } from "@traderkomak/shared";
 import type { Timeframe } from "@traderkomak/shared";
 import { supabase, supabaseReady, SUPABASE_URL, SUPABASE_ANON_KEY, getAccessTokenSync } from "./supabase";
-import { useAuthStore } from "@/stores/auth";
+import { useAuthStore, devFakeAuthActive } from "@/stores/auth";
 import { useWatchlistStore } from "@/stores/watchlist";
 import { usePineStore } from "@/stores/pine";
 import { useDrawingsStore } from "@/stores/drawings";
@@ -512,7 +512,9 @@ function applyLocal(cloud: CloudData, localBefore?: LocalDrawingsSnapshot): numb
 
 /** Wire cloud sync once; reacts to auth status changes (login/logout). */
 export function startCloudSync(): void {
-  if (started || !supabaseReady) return;
+  // The local dev test user has no Supabase session — skip the cloud row
+  // fetch/push (RLS would reject it) and keep the local cache authoritative.
+  if (started || !supabaseReady || devFakeAuthActive) return;
   started = true;
   const auth = useAuthStore();
 

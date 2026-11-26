@@ -6,6 +6,11 @@ export type Theme = "dark" | "light";
 
 const STORAGE_KEY = "tk-theme";
 const FAV_KEY = "tk-fav-timeframes";
+/** Timeframes that existed when the saved favorite list was written. A
+ *  missing key means a list saved before `2h` was added (the only later
+ *  addition so far), so only that one gets starred retroactively. */
+const FAV_KNOWN_KEY = "tk-fav-timeframes-known";
+const FAV_KNOWN_DEFAULT = TIMEFRAMES.filter((tf) => tf !== "2h");
 
 function getInitialTheme(): Theme {
   const saved = localStorage.getItem(STORAGE_KEY) as Theme | null;
@@ -25,7 +30,20 @@ export const useThemeStore = defineStore("theme", () => {
       const raw = localStorage.getItem(FAV_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) initial = parsed.filter((x) => typeof x === "string");
+        if (Array.isArray(parsed)) {
+          initial = parsed.filter((x) => typeof x === "string");
+          // Star timeframes added to the app AFTER this list was saved — the
+          // user never had the chance to un-star them.
+          let known: string[] = [...FAV_KNOWN_DEFAULT];
+          const rawKnown = localStorage.getItem(FAV_KNOWN_KEY);
+          if (rawKnown) {
+            const parsedKnown = JSON.parse(rawKnown);
+            if (Array.isArray(parsedKnown)) known = parsedKnown.filter((x) => typeof x === "string");
+          }
+          for (const tf of TIMEFRAMES) {
+            if (!known.includes(tf) && !initial.includes(tf)) initial.push(tf);
+          }
+        }
       }
     } catch {}
     initial.sort((a, b) => {
@@ -78,7 +96,12 @@ export const useThemeStore = defineStore("theme", () => {
   watch(
     favTimeframes,
     (v) => {
-      localStorage.setItem(FAV_KEY, JSON.stringify(v));
+      try {
+        localStorage.setItem(FAV_KEY, JSON.stringify(v));
+        localStorage.setItem(FAV_KNOWN_KEY, JSON.stringify([...TIMEFRAMES]));
+      } catch {
+        // storage blocked/full — favorites stay valid in memory
+      }
     },
     { deep: true }
   );

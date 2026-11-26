@@ -15,6 +15,7 @@
 import { EventEmitter } from "node:events";
 import {
   NATIVE_HISTORY_GRANULARITY,
+  needsHistoryAggregation,
   TIMEFRAME_SECONDS,
   binanceBucketStart,
   bucketStart,
@@ -339,10 +340,10 @@ export class CandleFeed extends EventEmitter {
 
       let seedSource = native;
       // Only aggregate when the native granularity is finer than the target
-      // (S5-derived TFs). 1:1 native TFs (M1/M5/…/D) must pass through —
-      // re-bucketing daily candles to UTC midnight corrupts OANDA's
-      // 5pm-NY daily alignment.
-      if (NATIVE_HISTORY_GRANULARITY[session.timeframe] === "S5" && native.length > 0) {
+      // (S5-derived TFs, and 2h from H1). 1:1 native TFs (M1/M5/…/D) must
+      // pass through — re-bucketing daily candles to UTC midnight corrupts
+      // OANDA's 5pm-NY daily alignment.
+      if (needsHistoryAggregation(session.timeframe) && native.length > 0) {
         seedSource = aggregateCandles(native, seconds);
       }
 
@@ -490,10 +491,7 @@ export class CandleFeed extends EventEmitter {
         );
 
         let auth: Candle | undefined;
-        if (
-          NATIVE_HISTORY_GRANULARITY[session.timeframe] === "S5" &&
-          tfSec > TIMEFRAME_SECONDS["5s"]
-        ) {
+        if (needsHistoryAggregation(session.timeframe)) {
           auth = aggregateCandles(native, tfSec).at(-1);
         } else {
           auth = native.at(-1);
@@ -635,10 +633,7 @@ export class CandleFeed extends EventEmitter {
       toIso
     );
     let fill: Candle[] = native;
-    if (
-      NATIVE_HISTORY_GRANULARITY[session.timeframe] === "S5" &&
-      tfSec > TIMEFRAME_SECONDS["5s"]
-    ) {
+    if (needsHistoryAggregation(session.timeframe)) {
       fill = aggregateCandles(native, tfSec);
     }
     // OANDA omits zero-tick buckets — forward-fill them like their chart

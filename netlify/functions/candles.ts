@@ -23,7 +23,7 @@ const ALLOWED_INSTRUMENTS = new Set([
   "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT",
 ]);
 
-const ALLOWED_TIMEFRAMES = new Set(["1s", "5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "1d"]);
+const ALLOWED_TIMEFRAMES = new Set(["1s", "5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"]);
 
 const BINANCE_SET = new Set(["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT"]);
 

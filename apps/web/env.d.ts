@@ -10,6 +10,9 @@ interface ImportMetaEnv {
   readonly VITE_BINANCE_WS_URL?: string;
   /** Geo-block fallback: cloudflare-worker binance-proxy deployment. */
   readonly VITE_BINANCE_PROXY_URL?: string;
+  /** DEV ONLY: skip the Google round-trip and sign in as a local test user
+   *  (set in apps/web/.env.local — ignored by production builds). */
+  readonly VITE_DEV_FAKE_AUTH?: string;
   /** oanda-proxy Cloudflare Worker base URL (holds the OANDA token). */
   readonly VITE_OANDA_PROXY_URL?: string;
   /** Dedicated news-proxy base; defaults to VITE_OANDA_PROXY_URL (the
