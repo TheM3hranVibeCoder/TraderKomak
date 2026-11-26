@@ -28,6 +28,17 @@ export const SUPPORTED_INSTRUMENTS = [
   "NAS100_USD",
   "BTC_USD",
   "ETH_USD",
+  // Added user-requested symbols for watchlist search
+  "AUD_CHF",
+  "EUR_AUD",
+  "EUR_CAD",
+  "GBP_AUD",
+  "GBP_CAD",
+  "GBP_NZD",
+  "NZD_CAD",
+  "NZD_JPY",
+  "CHF_JPY",
+  "CAD_JPY",
 ] as const;
 
 /** Binance spot symbols (canonical = concatenated, e.g. BTCUSDT).
