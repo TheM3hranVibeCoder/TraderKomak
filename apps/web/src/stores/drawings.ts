@@ -451,6 +451,11 @@ export const useDrawingsStore = defineStore("drawings", () => {
     };
   }
 
+  /** Bumped whenever a snapshot is restored (undo / redo) so the chart can
+   *  re-project the overlays in the SAME tick instead of waiting for the next
+   *  pan/zoom/tick — that delay made undo feel laggy. */
+  const historyRevision = ref(0);
+
   /** Restore a snapshot into the store for one symbol. */
   function restoreSnapshot(symbol: string, snap: DrawingSnapshot): void {
     drawings.value[symbol] = snap.drawings;
@@ -460,6 +465,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
     for (const kind of ["hline", "hray", "vline"] as SingleKind[]) {
       singles.value[kind][symbol] = snap.singles[kind];
     }
+    historyRevision.value += 1;
     persist();
     persistLines();
     persistPolys();
@@ -1052,6 +1058,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
     selectedSingle,
     activeSymbol,
     clearRequest,
+    historyRevision,
     countFor,
     canUndo,
     canRedo,

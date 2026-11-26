@@ -5350,6 +5350,43 @@ watch(
   }
 );
 
+// Undo / redo swapped the store state: re-project the overlay in the SAME tick
+// so the drawing snaps back instantly instead of waiting for the next data
+// tick or pan/zoom (which made undo feel delayed by up to ~1s).
+watch(
+  () => drawingsStore.historyRevision,
+  () => {
+    // The restored snapshot may not contain the drawing whose edit panel is
+    // open — drop those stale panels so they don't float over nothing.
+    if (selectedRect.value && !drawingsStore.getFor(market.instrument).some((r) => r.id === selectedRect.value!.id)) {
+      selectedRect.value = null;
+      editPanelPos.value = null;
+      rectMenu.value = null;
+    }
+    if (selectedLine.value && !drawingsStore.getLinesFor(market.instrument).some((l) => l.id === selectedLine.value!.id)) {
+      selectedLine.value = null;
+      linePanelPos.value = null;
+      linePaletteOpen.value = false;
+      lineResize.value = null;
+    }
+    if (selectedPoly.value && !drawingsStore.getPolysFor(market.instrument).some((p) => p.id === selectedPoly.value!.id)) {
+      selectedPoly.value = null;
+      polyPanelPos.value = null;
+      polyPaletteOpen.value = false;
+    }
+    if (selectedPos.value && !drawingsStore.getPositionsFor(market.instrument).some((p) => p.id === selectedPos.value!.id)) {
+      selectedPos.value = null;
+      posPanelPos.value = null;
+    }
+    const ss = drawingsStore.selectedSingle;
+    if (ss && !drawingsStore.getSingles(ss.kind, market.instrument).some((i) => i.id === ss.id)) {
+      drawingsStore.selectedSingle = null;
+      singlePanelPos.value = null;
+    }
+    recalcRectsNow();
+  }
+);
+
 function setSingleColor(color: string): void {
   const sel = drawingsStore.selectedSingle;
   if (!sel) return;
