@@ -17,8 +17,8 @@ const ICONS: Record<string, string> = {
   measure: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 16.2L16.2 3.5l4.3 4.3L7.8 20.5a1.6 1.6 0 0 1-2.3 0l-2-2a1.6 1.6 0 0 1 0-2.3z"/><path d="M7.1 12.6l1.6 1.6M10.4 9.3l1.6 1.6M13.7 6l1.6 1.6" stroke-width="1.4"/></svg>`,
   magnet: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h4v8a2 2 0 0 0 4 0V3h4v8a6 6 0 0 1-12 0V3z"/><path d="M6 3h4v4.5H6z" fill="currentColor" stroke="none"/><path d="M14 3h4v4.5h-4z" fill="currentColor" stroke="none"/><path d="M9.5 20.5l2.5-2 2.5 2" stroke-width="1.4"/></svg>`,
   trash: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6.5h16"/><path d="M9.5 6.5V4.8c0-.7.6-1.3 1.3-1.3h2.4c.7 0 1.3.6 1.3 1.3v1.7"/><path d="M6.3 6.5l.8 13c.05.85.75 1.5 1.6 1.5h6.6c.85 0 1.55-.65 1.6-1.5l.8-13"/><path d="M10 10.5v6M14 10.5v6"/></svg>`,
-  undo: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"/></svg>`,
-  redo: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5v0A5.5 5.5 0 0 0 9.5 20H13"/></svg>`,
+  undo: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4 4 8l4 4"/><path d="M4 8h9a6 6 0 0 1 0 12h-5"/></svg>`,
+  redo: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 4l4 4-4 4"/><path d="M20 8h-9a6 6 0 0 0 0 12h5"/></svg>`,
 };
 
 const tools: Array<{ id: string; title: string }> = [
@@ -393,21 +393,30 @@ onBeforeUnmount(() => {
   gap: 4px;
   flex-shrink: 0;
 }
-/* Undo / Redo: stacked directly on top of the trash at the rail's foot (the
-   rail is 42px wide — a side-by-side pair would overflow and be clipped). */
+/* Undo / Redo: one row split in half (undo left, redo right) sitting right
+   on top of the trash. Both halves share the rail's width. */
 .toolbar-undo-redo {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 2px;
   align-items: center;
   justify-content: center;
+  width: 100%;
+  padding: 0 2px;
+  box-sizing: border-box;
   margin: 2px 0;
   flex-shrink: 0;
 }
 .toolbar-undo-redo .tool-btn {
-  width: 30px;
-  height: 30px;
-  font-size: 15px;
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  height: 28px;
+  border-radius: 7px;
+}
+.toolbar-undo-redo .tool-ic svg {
+  width: 16px;
+  height: 16px;
 }
 .toolbar-undo-redo .tool-btn:disabled {
   opacity: 0.35;
