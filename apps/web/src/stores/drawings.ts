@@ -423,13 +423,18 @@ export const useDrawingsStore = defineStore("drawings", () => {
 
   /* ── Undo / Redo history (TradingView-style) ────────────────────────── */
   const MAX_HISTORY = 50;
-  const PUSH_THROTTLE_MS = 200;
+  /** A burst of mutations with gaps shorter than this belongs to ONE gesture
+   *  (a drag, a resize, a slider sweep …) and therefore ONE undo step. */
+  const GESTURE_IDLE_MS = 500;
   /** Undo stack per symbol: oldest → newest. */
   const undoStacks = ref<Record<string, DrawingSnapshot[]>>({});
   /** Redo stack per symbol: oldest → newest. */
   const redoStacks = ref<Record<string, DrawingSnapshot[]>>({});
-  /** Last push timestamp per symbol — throttles rapid-fire changes (drags). */
-  const lastPushAt = ref<Record<string, number>>({});
+  /** Gesture currently being recorded. Its pre-gesture snapshot has already
+   *  been pushed, so further mutations must NOT push again — otherwise a long
+   *  drag records intermediate positions and one undo jumps to the middle of
+   *  the gesture instead of returning to where it started. */
+  let openGesture: { symbol: string; pushed: DrawingSnapshot; timer: number } | null = null;
 
   /** Deep-clone the current drawing state for one symbol. */
   function snapshot(symbol: string): DrawingSnapshot {
@@ -462,28 +467,67 @@ export const useDrawingsStore = defineStore("drawings", () => {
     persistSingles();
   }
 
-  /** Capture current state as an undo point (throttled per symbol so rapid
-   *  drag events coalesce into a single step). Call before a mutation. */
+  /** Capture current state as an undo point. The FIRST mutation of a gesture
+   *  snapshots the pre-gesture state; the rest of that gesture only extends
+   *  the idle window, so the whole drag/resize/color change is a single
+   *  undo step that returns exactly to where it started. */
   function pushUndo(symbol: string): void {
     if (!symbol) return;
-    const now = Date.now();
-    const last = lastPushAt.value[symbol] ?? 0;
-    if (now - last < PUSH_THROTTLE_MS) return;
-    lastPushAt.value[symbol] = now;
+    if (openGesture) {
+      if (openGesture.symbol === symbol) {
+        // Same gesture still in progress — keep the snapshot taken at its start.
+        armGestureTimer();
+        return;
+      }
+      // A gesture on another symbol finished the moment this one began.
+      commitGesture();
+    }
 
     const stacks = undoStacks.value;
     if (!stacks[symbol]) stacks[symbol] = [];
-    stacks[symbol].push(snapshot(symbol));
+    const snap = snapshot(symbol);
+    stacks[symbol].push(snap);
     if (stacks[symbol].length > MAX_HISTORY) stacks[symbol].shift();
 
     // A new action invalidates the redo stack.
-    const r = redoStacks.value;
-    r[symbol] = [];
+    redoStacks.value[symbol] = [];
+
+    openGesture = { symbol, pushed: snap, timer: 0 };
+    armGestureTimer();
+  }
+
+  function armGestureTimer(): void {
+    if (!openGesture) return;
+    if (openGesture.timer) clearTimeout(openGesture.timer);
+    openGesture.timer = window.setTimeout(commitGesture, GESTURE_IDLE_MS);
+  }
+
+  /** Close the open gesture once the pointer/interaction has settled. */
+  function commitGesture(): void {
+    const g = openGesture;
+    if (!g) return;
+    if (g.timer) clearTimeout(g.timer);
+    openGesture = null;
+    // Nothing actually changed (e.g. the same color re-picked): drop the step
+    // so it doesn't cost the user a meaningless undo.
+    if (JSON.stringify(snapshot(g.symbol)) === JSON.stringify(g.pushed)) {
+      const stack = undoStacks.value[g.symbol];
+      if (stack && stack[stack.length - 1] === g.pushed) stack.pop();
+    }
+  }
+
+  // Releasing the pointer ends a gesture immediately — deferred by a tick so
+  // the chart's own pointerup handlers can write their final position first.
+  if (typeof window !== "undefined") {
+    const endOnRelease = () => window.setTimeout(commitGesture, 0);
+    window.addEventListener("pointerup", endOnRelease, true);
+    window.addEventListener("pointercancel", endOnRelease, true);
   }
 
   /** Undo one step for a symbol. Returns true if something was undone. */
   function undo(symbol: string): boolean {
     if (!symbol) return false;
+    commitGesture();
     const stack = undoStacks.value[symbol];
     if (!stack || stack.length === 0) return false;
 
@@ -500,6 +544,7 @@ export const useDrawingsStore = defineStore("drawings", () => {
   /** Redo one step for a symbol. Returns true if something was redone. */
   function redo(symbol: string): boolean {
     if (!symbol) return false;
+    commitGesture();
     const stack = redoStacks.value[symbol];
     if (!stack || stack.length === 0) return false;
 
@@ -530,9 +575,12 @@ export const useDrawingsStore = defineStore("drawings", () => {
   /** Clear both stacks for a symbol (called on clear-all / symbol switch). */
   function clearHistory(symbol: string): void {
     if (!symbol) return;
+    if (openGesture?.symbol === symbol) {
+      if (openGesture.timer) clearTimeout(openGesture.timer);
+      openGesture = null;
+    }
     undoStacks.value[symbol] = [];
     redoStacks.value[symbol] = [];
-    lastPushAt.value[symbol] = 0;
   }
 
   function persist() {
