@@ -318,7 +318,36 @@ function seedNewSymbols(): void {
   void Promise.all(pending.map(seedSymbol));
 }
 
-let seedRetryTimer: ReturnType<typeof setInterval> | null = null;
+/** Seed retries BACK OFF instead of repeating every 8s forever. A provider
+ *  outage used to turn every open tab into a request storm (2 candle calls per
+ *  un-seeded symbol per retry), which is exactly what drains a metered data
+ *  relay — the retry now stretches 8s → 5 min and resets once a seed lands. */
+const SEED_RETRY_BASE_MS = 8_000;
+const SEED_RETRY_MAX_MS = 5 * 60_000;
+/** After this many failed rounds the tab STOPS retrying: a provider outage
+ *  must not keep a tab fetching forever (it resumes on the next visit or when
+ *  a symbol is added). */
+const SEED_RETRY_MAX_ATTEMPTS = 8;
+let seedRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let seedRetryDelay = SEED_RETRY_BASE_MS;
+let seedRetryAttempts = 0;
+
+function scheduleSeedRetry(): void {
+  if (seedRetryTimer || seedRetryAttempts >= SEED_RETRY_MAX_ATTEMPTS) return;
+  seedRetryTimer = setTimeout(() => {
+    seedRetryTimer = null;
+    const pending = watchlist.instruments.filter((i) => !seeded.has(i));
+    if (pending.length === 0) {
+      seedRetryDelay = SEED_RETRY_BASE_MS;
+      seedRetryAttempts = 0;
+      return;
+    }
+    seedRetryAttempts++;
+    seedRetryDelay = Math.min(SEED_RETRY_MAX_MS, seedRetryDelay * 2);
+    seedNewSymbols();
+    scheduleSeedRetry();
+  }, seedRetryDelay);
+}
 
 onMounted(() => {
   watchWs = new WatchWsClient((tick) => {
@@ -337,15 +366,9 @@ onMounted(() => {
   // Seed price + % for all watchlist symbols in parallel (works while closed)
   seedNewSymbols();
 
-  // Retry any symbol that failed to seed (e.g. cold server / transient error)
-  seedRetryTimer = setInterval(() => {
-    const pending = watchlist.instruments.filter((i) => !seeded.has(i));
-    if (pending.length === 0) {
-      if (seedRetryTimer) clearInterval(seedRetryTimer);
-      return;
-    }
-    seedNewSymbols();
-  }, 8000);
+  // Retry any symbol that failed to seed (e.g. cold server / transient error),
+  // with exponential backoff so an outage never becomes a request storm.
+  scheduleSeedRetry();
 
   watch(
     () => watchlist.instruments.join(","),
@@ -357,13 +380,15 @@ onMounted(() => {
       watchWs?.setInstruments(serverWatchList());
       syncCtraderWatch();
       // Seed only the newly added symbol(s) — instant % for new rows
+      seedRetryAttempts = 0;
       seedNewSymbols();
+      scheduleSeedRetry();
     }
   );
 });
 
 onBeforeUnmount(() => {
-  if (seedRetryTimer) clearInterval(seedRetryTimer);
+  if (seedRetryTimer) clearTimeout(seedRetryTimer);
   watchWs?.disconnect();
   if (offCtraderTick) {
     offCtraderTick();

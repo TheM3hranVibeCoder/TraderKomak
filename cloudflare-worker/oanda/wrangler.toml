@@ -7,6 +7,17 @@ routes = [
   { pattern = "oanda.traderkomak.ir", custom_domain = true }
 ]
 
+# Per-IP throttle (Workers Rate Limiting binding — available on the Free plan
+# and charged as a normal Worker request). This relay is metered at 100k
+# requests/DAY for the whole account, so one client must not be able to burn
+# it: 120 requests per minute per IP is far above a real tab (one stream + a
+# handful of history calls) and far below a scraper.
+[[unsafe.bindings]]
+name = "RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 120, period = 60 }
+
 # Non-secret config (practice vs live). Secrets go in via
 #   npx wrangler secret put OANDA_API_TOKEN / OANDA_ACCOUNT_ID
 # [vars]

@@ -38,6 +38,7 @@ import {
 import type { WsHandlers } from "./wsClient";
 import { recordVolumes } from "./volumeFeed";
 import { cooldownOandaAccount, currentOandaAccount, oandaPoolState, rotateOandaAccount, type OandaAccount } from "./oandaAccounts";
+import { classifyRelayFailure, noteRelayFailure, noteRelaySuccess, proxyRelayParked } from "./proxyBudget";
 
 const OANDA_MAX_COUNT = 5000;
 
@@ -77,10 +78,19 @@ export function oandaProxyConfigured(): boolean {
   return !!currentOandaAccount() || !!workerBase();
 }
 
-/** Worker relay base (now the FALLBACK path; may be unset). */
+/** Worker relay base (now the FALLBACK path; may be unset). Returns null
+ *  while the relay is parked (daily Workers quota gone / repeated failures)
+ *  so every caller goes straight to the visitor's direct practice account. */
 function workerBase(): string | null {
+  if (proxyRelayParked()) return null;
   const raw = (import.meta.env.VITE_OANDA_PROXY_URL as string | undefined)?.trim();
   return raw ? raw.replace(/\/+$/, "") : null;
+}
+
+/** True for the relay target (the direct target carries an Authorization
+ *  header, the relay never does). */
+function isRelayTarget(target: { headers: Record<string, string> }): boolean {
+  return !target.headers.Authorization;
 }
 
 /** A candle source: the visitor's direct practice account, or the worker. */
@@ -215,24 +225,33 @@ async function fetchBatch(
   toIso?: string,
   vols?: Map<number, number>
 ): Promise<Candle[]> {
-  const res = await fetch(candlesUrl(target, instrument, granularity, count, toIso), {
-    headers:
-      target.kind === "direct"
-        ? {
-            // Practice account: the token travels with the request (CORS
-            // preflight verified to allow it) so the visitor's own internet
-            // reaches OANDA directly — no relay in between.
-            Authorization: `Bearer ${target.account.token}`,
-            "Accept-Datetime-Format": "RFC3339",
-            Accept: "application/json",
-          }
-        : { Accept: "application/json" },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
+  let res: Response;
+  try {
+    res = await fetch(candlesUrl(target, instrument, granularity, count, toIso), {
+      headers:
+        target.kind === "direct"
+          ? {
+              // Practice account: the token travels with the request (CORS
+              // preflight verified to allow it) so the visitor's own internet
+              // reaches OANDA directly — no relay in between.
+              Authorization: `Bearer ${target.account.token}`,
+              "Accept-Datetime-Format": "RFC3339",
+              Accept: "application/json",
+            }
+          : { Accept: "application/json" },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (target.kind === "worker") noteRelayFailure("network");
+    throw err;
+  }
   if (!res.ok) {
+    // Read as TEXT: Cloudflare's daily-limit page is HTML, not JSON.
+    const text = await res.text().catch(() => "");
+    if (target.kind === "worker") noteRelayFailure(classifyRelayFailure(res.status, text));
     let message = `OANDA proxy error (HTTP ${res.status})`;
     try {
-      const body = (await res.json()) as RawOandaErrorBody;
+      const body = JSON.parse(text) as RawOandaErrorBody;
       if (body.error?.message) message = body.error.message;
     } catch {
       // keep the generic message
@@ -240,6 +259,7 @@ async function fetchBatch(
     const ra = Number(res.headers.get("retry-after"));
     throw new OandaHttpError(message, res.status, Number.isFinite(ra) && ra > 0 ? ra * 1000 : undefined);
   }
+  if (target.kind === "worker") noteRelaySuccess();
   let body: RawOandaCandlesResponse;
   try {
     body = (await res.json()) as RawOandaCandlesResponse;
@@ -513,7 +533,9 @@ export class OandaDirectStream {
   private streamTargets(cur: { instrument: string; timeframe: Timeframe }): StreamTarget[] {
     const list: StreamTarget[] = [];
     const account = currentOandaAccount();
-    if (account && !streamViaWorker) {
+    // A parked relay also un-sticks the "worker only" preference: the direct
+    // path is free and the relay may be out of daily quota.
+    if (account && (!streamViaWorker || proxyRelayParked())) {
       list.push({
         url:
           `${OANDA_DIRECT_STREAM}/accounts/${encodeURIComponent(account.id)}/pricing/stream` +
@@ -574,17 +596,26 @@ export class OandaDirectStream {
     target: StreamTarget,
     controller: AbortController
   ): Promise<void> {
-    const res = await fetch(target.url, { headers: target.headers, signal: controller.signal });
+    let res: Response;
+    try {
+      res = await fetch(target.url, { headers: target.headers, signal: controller.signal });
+    } catch (err) {
+      if (isRelayTarget(target)) noteRelayFailure("network");
+      throw err;
+    }
     if (!res.ok || !res.body) {
+      const text = await res.text().catch(() => "");
+      if (isRelayTarget(target)) noteRelayFailure(classifyRelayFailure(res.status, text));
       let message = `OANDA stream error (HTTP ${res.status})`;
       try {
-        const b = (await res.json()) as RawOandaErrorBody;
+        const b = JSON.parse(text) as RawOandaErrorBody;
         if (b.error?.message) message = b.error.message;
       } catch {
         // keep the generic message
       }
       throw new Error(message);
     }
+    if (isRelayTarget(target)) noteRelaySuccess();
 
     this.handlers.onStatus("connected");
     this.attempt = 0;

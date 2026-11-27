@@ -16,6 +16,7 @@
 import { isTimeframe, providerOf, type Candle } from "@traderkomak/shared";
 import { fetchBinanceCandles } from "./binanceDirect";
 import { fetchOandaCandles, oandaProxyConfigured } from "./oandaDirect";
+import { proxyRelayParked, proxyParkedUntil } from "./proxyBudget";
 import { oandaPoolState } from "./oandaAccounts";
 import { fetchCtraderCandles, ctraderDirectConfigured } from "./ctraderDirect";
 import { httpBase } from "./httpUrl";
@@ -62,7 +63,11 @@ export async function fetchCandles(
       if (oandaProxyConfigured()) return fetchOandaCandles(instrument, timeframe, count, to);
       // OANDA without its proxy config: no server fallback — the market
       // server's metered bandwidth must never serve OANDA data.
-      throw new Error("OANDA data unavailable — proxy not configured");
+      throw new Error(
+        proxyRelayParked()
+          ? `OANDA relay out of daily quota — data resumes after ${new Date(proxyParkedUntil()).toISOString().slice(11, 16)} UTC`
+          : "OANDA data unavailable — proxy not configured"
+      );
     }
     if (provider === "ctrader") {
       // Browser-direct primary (cTrader's JSON WebSocket — the visitor's

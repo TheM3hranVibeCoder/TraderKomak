@@ -7,6 +7,12 @@ const OPEN_KEY = "tk-news-open";
  *  has news — even offline, blocked upstream or server restart. */
 const CACHE_KEY = "tk-news-cache";
 const ALARM_WINDOW_MS = 15 * 60_000; // red alarm when a High is ≤ 15 min away
+/** Client-side feed TTL. The weekly calendar changes a few times a day, so
+ *  re-asking more often than this only burns the relay's metered Workers
+ *  request budget (the old 2-minute poll cost 720 relay requests per open
+ *  tab per day — 100k/day disappears after ~139 tab-days). */
+const FEED_TTL_MS = 10 * 60_000;
+const FEED_POLL_MS = 10 * 60_000;
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -54,7 +60,10 @@ export const useNewsStore = defineStore("news", () => {
     } catch {}
   }
 
-  async function refresh(): Promise<void> {
+  async function refresh(force = false): Promise<void> {
+    // Fresh local copy → no network at all (this is what keeps page loads off
+    // the relay: the panel opens from the cached week instantly).
+    if (!force && fetchedAt.value > 0 && Date.now() - fetchedAt.value < FEED_TTL_MS) return;
     const sentAt = Date.now();
     try {
       const feed = await fetchNews();
@@ -93,17 +102,24 @@ export const useNewsStore = defineStore("news", () => {
     }
   }
 
-  // Periodic background refresh — hits OUR cached endpoint (never FF).
+  // Periodic background refresh — hits OUR cached endpoint (never FF), skips
+  // hidden tabs entirely and only re-asks once the local copy is stale.
   async function pollLoop(): Promise<void> {
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       try {
-        await refresh();
+        if (typeof document === "undefined" || !document.hidden) await refresh();
       } catch {}
-      await new Promise((s) => setTimeout(s, 120_000));
+      await new Promise((s) => setTimeout(s, FEED_POLL_MS));
     }
   }
   void pollLoop();
+
+  // Coming back to the tab: one catch-up fetch, never a burst.
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) void refresh();
+    });
+  }
 
   /** Days covered by the feed (local dates), oldest → newest. */
   const days = computed<Array<{ key: string; start: number; label: string }>>(() => {

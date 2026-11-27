@@ -25,6 +25,7 @@ import {
   BinanceDirectStream,
 } from "@/services/binanceDirect";
 import { OandaDirectStream, oandaProxyConfigured } from "@/services/oandaDirect";
+import { proxyRelayParked } from "@/services/proxyBudget";
 import { oandaPoolState } from "@/services/oandaAccounts";
 import { CtraderDirectStream, ctraderDirectConfigured } from "@/services/ctraderDirect";
 
@@ -225,7 +226,9 @@ export const useMarketStore = defineStore("market", () => {
       const message = providerOf(instrument.value) === "oanda"
         ? oandaPoolState() === "cooldown"
           ? "OANDA rate-limited — retrying shortly"
-          : "OANDA data unavailable — proxy not configured"
+          : proxyRelayParked()
+            ? "OANDA relay out of daily quota — retrying after 00:00 UTC"
+            : "OANDA data unavailable — proxy not configured"
         : "Dukascopy data is not served by this deployment";
       return (ws = offlineStream(message));
     }

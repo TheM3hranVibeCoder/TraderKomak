@@ -6,6 +6,8 @@
  * IPs that hit it rapidly, so one shared egress (worker or server) fetches
  * and caches for everyone.
  */
+import { proxyRelayParked } from "./proxyBudget";
+
 export interface NewsItem {
   title: string;
   country: string;
@@ -67,7 +69,9 @@ function parseFeed(d: RawFeed): NewsFeed {
 }
 
 export async function fetchNews(): Promise<NewsFeed> {
-  const proxy = newsProxyBase();
+  // A parked relay (Workers daily quota gone) must not be dialed — the
+  // market server's cached /api/news answers instead.
+  const proxy = proxyRelayParked() ? null : newsProxyBase();
   if (proxy) {
     try {
       const res = await fetch(`${proxy}/news`, { signal: AbortSignal.timeout(12000) });
