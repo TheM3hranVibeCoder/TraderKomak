@@ -148,6 +148,11 @@ const OANDA_PAIR_RE = /^[A-Z]{3}_[A-Z]{3}$/;
 /** Quote assets that make a concatenated code a Binance spot symbol. */
 const BINANCE_QUOTES = ["USDT", "USDC", "FDUSD", "TUSD", "BTC", "ETH", "BNB", "EUR", "TRY", "BRL"] as const;
 
+/** How many symbols one watchlist may hold. The client cap and the market
+ *  server plus its watch-frame validation read this same number, so they
+ *  cannot drift apart. */
+export const MAX_WATCH_INSTRUMENTS = 60;
+
 /** Every symbol the app accepts, any provider. */
 export const SEARCHABLE_INSTRUMENTS: readonly string[] = [
   ...SUPPORTED_INSTRUMENTS,

@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
-import { isSearchableInstrument, displayInstrument, normalizeInstrument } from "@traderkomak/shared";
+import { MAX_WATCH_INSTRUMENTS, isSearchableInstrument, displayInstrument, normalizeInstrument } from "@traderkomak/shared";
 import { useAuthStore } from "@/stores/auth";
 
 const STORAGE_KEY = "tk-watchlist";
@@ -28,7 +28,7 @@ const INDEX_DEFAULTS = ["SPX500_USD", "NAS100_USD", "US30_USD"];
  *  before the cloud row replaced the list, so signed-in users never saw the
  *  new rows — the "SPX500/NAS100 missing from my watchlist" report). */
 const MIGRATION_VERSION = "v3";
-const WATCH_CAP = 25;
+const WATCH_CAP = MAX_WATCH_INSTRUMENTS;
 
 function migrationFlagKey(owner: string | null): string {
   return owner ? `tk-watchlist-migrated:${MIGRATION_VERSION}:${owner}` : `tk-watchlist-migrated:${MIGRATION_VERSION}`;

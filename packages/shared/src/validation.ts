@@ -1,4 +1,5 @@
 import {
+  MAX_WATCH_INSTRUMENTS,
   isSearchableInstrument,
   normalizeInstrument,
 } from "./constants/instruments.js";
@@ -87,14 +88,13 @@ function parseWatch(
   if (!Array.isArray(raw)) {
     return { ok: false, error: "watch requires instruments array" };
   }
-  // 25 (was 20): the default-watchlist index migration adds SPX500_USD /
-  // NAS100_USD / US30 to existing lists that may already hold 20 symbols —
-  // rejecting the watch frame would silence ALL live watchlist prices.
-  if (raw.length > 25) {
-    return { ok: false, error: "too many instruments (max 25)" };
-  }
+  // An over-cap frame is TRIMMED, never rejected: rejecting it would silence
+  // every live watchlist price, including on a server deployed before the cap
+  // was raised. Oldest symbols are kept.
+  const wanted =
+    raw.length > MAX_WATCH_INSTRUMENTS ? raw.slice(0, MAX_WATCH_INSTRUMENTS) : raw;
   const instruments: string[] = [];
-  for (const v of raw) {
+  for (const v of wanted) {
     if (!isInstrument(v)) {
       return { ok: false, error: `Unknown instrument: ${String(v)}` };
     }
