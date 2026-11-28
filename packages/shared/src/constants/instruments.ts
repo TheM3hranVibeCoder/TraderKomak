@@ -128,6 +128,26 @@ export const SUPPORTED_CTRADER = [
   "US30",
 ] as const;
 
+/** Fiat and metal codes OANDA quotes against each other. Any well-formed
+ *  pair of these is a valid instrument (AUD_CAD, EUR_CHF, GBP_CHF, \u2026),
+ *  which is what lets search accept minor pairs without a code change. */
+export const OANDA_CURRENCIES = [
+  "USD", "EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "NZD",
+  "SGD", "HKD", "CNH", "MXN", "NOK", "SEK", "DKK", "PLN",
+  "CZK", "HUF", "TRY", "ZAR", "THB", "INR", "RUB", "BRL",
+  "ILS", "SAR", "AED",
+  "XAU", "XAG", "XPT", "XPD",
+] as const;
+
+const CURRENCY_SET: ReadonlySet<string> = new Set(OANDA_CURRENCIES);
+const METAL_CODES: ReadonlySet<string> = new Set(["XAU", "XAG", "XPT", "XPD"]);
+const FIAT_SET: ReadonlySet<string> = new Set(
+  OANDA_CURRENCIES.filter((c) => !METAL_CODES.has(c))
+);
+const OANDA_PAIR_RE = /^[A-Z]{3}_[A-Z]{3}$/;
+/** Quote assets that make a concatenated code a Binance spot symbol. */
+const BINANCE_QUOTES = ["USDT", "USDC", "FDUSD", "TUSD", "BTC", "ETH", "BNB", "EUR", "TRY", "BRL"] as const;
+
 /** Every symbol the app accepts, any provider. */
 export const SEARCHABLE_INSTRUMENTS: readonly string[] = [
   ...SUPPORTED_INSTRUMENTS,
@@ -135,6 +155,32 @@ export const SEARCHABLE_INSTRUMENTS: readonly string[] = [
   ...SUPPORTED_DUKASCOPY,
   ...SUPPORTED_CTRADER,
 ];
+
+const SEARCHABLE_SET: ReadonlySet<string> = new Set(SEARCHABLE_INSTRUMENTS);
+
+/** True for any OANDA pair of quoted currencies: AUD_CAD, EUR_CHF, XAU_EUR \u2026 */
+export function isOandaPair(raw: string): boolean {
+  const norm = normalizeInstrument(raw);
+  return (
+    OANDA_PAIR_RE.test(norm) &&
+    CURRENCY_SET.has(norm.slice(0, 3)) &&
+    CURRENCY_SET.has(norm.slice(4))
+  );
+}
+
+/** True for a Binance spot symbol (SUIUSDT, PEPEUSDT, \u2026). */
+export function isBinancePair(raw: string): boolean {
+  const norm = normalizeInstrument(raw);
+  if (norm.includes("_") || !/^[A-Z0-9]{4,24}$/.test(norm)) return false;
+  return BINANCE_QUOTES.some((q) => norm.length > q.length && norm.endsWith(q));
+}
+
+/** Catalogue symbol, or any valid OANDA pair / Binance symbol the providers
+ *  can quote on demand. This is the single gate for adding and validating. */
+export function isSearchableInstrument(raw: string): boolean {
+  const norm = normalizeInstrument(raw);
+  return SEARCHABLE_SET.has(norm) || isOandaPair(norm) || isBinancePair(norm);
+}
 
 export type Instrument = (typeof SUPPORTED_INSTRUMENTS)[number];
 export type BinanceSymbol = (typeof SUPPORTED_BINANCE)[number];
@@ -155,6 +201,7 @@ export function providerOf(instrument: string): ProviderId {
   if (BINANCE_SET.has(norm)) return "binance";
   if (DUKASCOPY_SET.has(norm)) return "dukascopy";
   if (CTRADER_SET.has(norm)) return "ctrader";
+  if (isBinancePair(norm)) return "binance";
   return "oanda";
 }
 
@@ -212,17 +259,19 @@ export function instrumentPrecision(instrument: string): number {
   const norm = normalizeInstrument(instrument).replace(/^D_/, "");
   const override = OANDA_CRYPTO_PRECISION[norm];
   if (override !== undefined) return override;
-  if (JPY_QUOTE.has(norm)) return 3;
-  if (METAL.has(norm)) return 2;
+  if (JPY_QUOTE.has(norm) || norm.endsWith("_JPY")) return 3;
+  if (METAL.has(norm) || norm.startsWith("XAU_") || norm.startsWith("XAG_")) return 2;
   if (INDEX.has(norm)) return 2;
   if (CRYPTO_MAJOR.has(norm)) return 2;
   if (CRYPTO_MICRO.has(norm)) return 8;
   if (CRYPTO_MINOR.has(norm)) return 4;
+  if (isBinancePair(norm)) return 4;
   return 5;
 }
 
 function isFinitePricePrecisionJpy(instrument: string): boolean {
-  return JPY_QUOTE.has(normalizeInstrument(instrument));
+  const norm = normalizeInstrument(instrument);
+  return JPY_QUOTE.has(norm) || norm.endsWith("_JPY");
 }
 
 /**
@@ -232,23 +281,28 @@ function isFinitePricePrecisionJpy(instrument: string): boolean {
  */
 export function instrumentPipSize(instrument: string): number {
   const norm = normalizeInstrument(instrument).replace(/^D_/, "");
-  if (JPY_QUOTE.has(norm)) return 0.01;
+  if (JPY_QUOTE.has(norm) || norm.endsWith("_JPY")) return 0.01;
   if (METAL.has(norm)) return 0.01;
   if (norm === "BTC_USD" || norm === "ETH_USD" || CRYPTO_MAJOR.has(norm) || CRYPTO_MINOR.has(norm) || CRYPTO_MICRO.has(norm)) return 1;
   if (INDEX.has(norm) || norm === "BCO_USD") return 1;
+  if (isBinancePair(norm)) return 1;
   return 0.0001;
 }
 
 /** Instruments with a real pip convention (forex pairs only). Gold, silver,
  *  crypto and indices quote in price points — a measure tool on them must
  *  show the raw price difference, not a (huge, meaningless) pip count. */
-const PIP_INSTRUMENTS: ReadonlySet<string> = new Set([
-  "EUR_USD", "GBP_USD", "USD_JPY", "USD_CHF", "AUD_USD", "USD_CAD",
-  "NZD_USD", "EUR_GBP", "GBP_JPY", "EUR_JPY", "AUD_JPY",
-]);
+/** Two fiat currencies against each other (any pair, not a fixed list). */
+function isFiatPair(norm: string): boolean {
+  return (
+    OANDA_PAIR_RE.test(norm) &&
+    FIAT_SET.has(norm.slice(0, 3)) &&
+    FIAT_SET.has(norm.slice(4))
+  );
+}
 
 export function usesPips(instrument: string): boolean {
-  return PIP_INSTRUMENTS.has(normalizeInstrument(instrument).replace(/^D_/, ""));
+  return isFiatPair(normalizeInstrument(instrument).replace(/^D_/, ""));
 }
 
 /** MT5-style pip unit for measurement readouts: forex uses the classic pip
@@ -257,7 +311,7 @@ export function usesPips(instrument: string): boolean {
  *  the raw instrument precision (gold 0.01) for trading math. */
 export function instrumentPipUnit(instrument: string): number {
   const norm = normalizeInstrument(instrument).replace(/^D_/, "");
-  if (PIP_INSTRUMENTS.has(norm)) return instrumentPipSize(norm);
+  if (isFiatPair(norm)) return instrumentPipSize(norm);
   if (norm === "XAU_USD") return 0.1;
   if (norm === "XAG_USD") return 0.01;
   return 1;

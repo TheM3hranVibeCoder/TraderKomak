@@ -1,5 +1,5 @@
 import {
-  SEARCHABLE_INSTRUMENTS,
+  isSearchableInstrument,
   normalizeInstrument,
 } from "./constants/instruments.js";
 import { TIMEFRAMES, type Timeframe } from "./constants/timeframes.js";
@@ -13,13 +13,10 @@ import type {
   WatchMessage,
 } from "./types/protocol.js";
 
-const INSTRUMENT_SET: ReadonlySet<string> = new Set(
-  SEARCHABLE_INSTRUMENTS.map(normalizeInstrument)
-);
-
-/** True when `raw` (any common notation) maps to a supported instrument. */
+/** True when `raw` (any common notation) maps to an instrument the app can
+ *  quote: a catalogue symbol, any OANDA pair or any Binance spot symbol. */
 export function isInstrument(raw: unknown): raw is string {
-  return typeof raw === "string" && INSTRUMENT_SET.has(normalizeInstrument(raw));
+  return typeof raw === "string" && isSearchableInstrument(raw);
 }
 
 export function isTimeframe(value: unknown): value is Timeframe {

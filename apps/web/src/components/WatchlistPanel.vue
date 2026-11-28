@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, watch, TransitionGroup } from "vue";
-import { SEARCHABLE_INSTRUMENTS, providerOf, normalizeInstrument, instrumentPrecision, type Candle } from "@traderkomak/shared";
+import { SEARCHABLE_INSTRUMENTS, isSearchableInstrument, providerOf, normalizeInstrument, instrumentPrecision, type Candle } from "@traderkomak/shared";
 import { useWatchlistStore } from "@/stores/watchlist";
 import { useMarketStore } from "@/stores/market";
 import { WatchWsClient } from "@/services/watchWs";
@@ -42,7 +42,10 @@ function onSearchEnter() {
   const exact =
     SEARCHABLE_INSTRUMENTS.find((s) => normalizeInstrument(s) === `${norm}_USD`) ??
     SEARCHABLE_INSTRUMENTS.find((s) => normalizeInstrument(s) === norm);
-  if (exact && watchlist.add(exact)) {
+  // Any valid pair/symbol is addable even when it is not in the catalogue,
+  // so a minor pair like AUD/CAD needs no code change: "audcad" \u2192 AUD_CAD.
+  const candidate = exact ?? (isSearchableInstrument(norm) ? norm : null);
+  if (candidate && watchlist.add(candidate)) {
     search.value = "";
     return;
   }

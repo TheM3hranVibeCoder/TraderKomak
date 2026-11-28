@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, watch } from "vue";
-import { SEARCHABLE_INSTRUMENTS, displayInstrument, normalizeInstrument } from "@traderkomak/shared";
+import { isSearchableInstrument, displayInstrument, normalizeInstrument } from "@traderkomak/shared";
 import { useAuthStore } from "@/stores/auth";
 
 const STORAGE_KEY = "tk-watchlist";
@@ -121,7 +121,7 @@ export const useWatchlistStore = defineStore("watchlist", () => {
 
   function add(instrument: string) {
     const norm = normalizeInstrument(instrument);
-    if (!SEARCHABLE_INSTRUMENTS.includes(norm as never)) return false;
+    if (!isSearchableInstrument(norm)) return false;
     if (instruments.value.includes(norm)) return false;
     if (instruments.value.length >= WATCH_CAP) return false;
     instruments.value = [...instruments.value, norm];

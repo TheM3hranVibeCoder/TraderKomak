@@ -23,6 +23,34 @@ const ALLOWED_INSTRUMENTS = new Set([
   "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT",
 ]);
 
+/** Fiat/metal codes OANDA quotes against each other (mirrors packages/shared). */
+const OANDA_CURRENCIES = new Set([
+  "USD", "EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "NZD", "SGD", "HKD",
+  "CNH", "MXN", "NOK", "SEK", "DKK", "PLN", "CZK", "HUF", "TRY", "ZAR",
+  "THB", "INR", "RUB", "BRL", "ILS", "SAR", "AED",
+  "XAU", "XAG", "XPT", "XPD",
+]);
+
+const BINANCE_QUOTES = ["USDT", "USDC", "FDUSD", "TUSD", "BTC", "ETH", "BNB", "EUR", "TRY", "BRL"];
+
+/** Catalogue symbols plus any well-formed OANDA pair (AUD_CAD, EUR_CHF, \u2026)
+ *  or Binance spot symbol. Mirrors packages/shared isSearchableInstrument. */
+function isAllowedInstrument(norm: string): boolean {
+  if (ALLOWED_INSTRUMENTS.has(norm)) return true;
+  if (
+    norm.length === 7 &&
+    norm[3] === "_" &&
+    OANDA_CURRENCIES.has(norm.slice(0, 3)) &&
+    OANDA_CURRENCIES.has(norm.slice(4))
+  ) {
+    return true;
+  }
+  if (!norm.includes("_") && /^[A-Z0-9]{4,24}$/.test(norm)) {
+    return BINANCE_QUOTES.some((q) => norm.length > q.length && norm.endsWith(q));
+  }
+  return false;
+}
+
 const ALLOWED_TIMEFRAMES = new Set(["1s", "5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"]);
 
 const BINANCE_SET = new Set(["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT"]);
@@ -73,7 +101,7 @@ export const handler: Handler = async (event) => {
   const rawTo = params.to;
 
   const instrument = normalizeInstrument(rawInstrument);
-  if (!ALLOWED_INSTRUMENTS.has(instrument)) {
+  if (!isAllowedInstrument(instrument)) {
     return {
       statusCode: 400,
       headers: { "Content-Type": "application/json" },
